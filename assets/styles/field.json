@@ -1551,7 +1551,15 @@
     ]
    ],
    "paint": {
-    "line-color": "#5c5247",
+    "line-color": [
+     "step",
+     [
+      "zoom"
+     ],
+     "#8a7f72",
+     13,
+     "#5c5247"
+    ],
     "line-gap-width": [
      "interpolate",
      [

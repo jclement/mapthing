@@ -133,7 +133,8 @@ export default {
   },
   colors: {
     minor: "#ffffff",
-    minor_casing: c.minorCasing,
+    // residential/unclassified: a lighter casing up to z12 so suburbs are not a dark lattice
+    minor_casing: ["step", ["zoom"], "#8a7f72", 13, c.minorCasing],
     service: "#ffffff",
     service_casing: c.minorCasing,
     track: "#5a3a1e",

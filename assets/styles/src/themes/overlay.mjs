@@ -128,8 +128,8 @@ export default {
     ...base.roads,
     minorWidth: [11, 0.4, 12, 0.9, 14, 2, 15, 2.6, 18, 11],
     minorCasingWidth: [11, 0.3, 12, 0.6, 14, 0.75, 18, 1.2],
-    // lease and service roads: a white-cored road from z13, never a single grey line (which
-    // would read as one more survey-grid line)
+    // lease and service roads: at z13 one solid warm-grey line (a hue survey grids never use;
+    // a 1 px core does not resolve as cored there), from z14 a white-cored road
     serviceWidth: [13, 1, 14, 1.5, 15, 2, 18, 8],
     serviceCasingWidth: [13, 0.6, 15, 0.75, 18, 1],
   },
@@ -164,6 +164,13 @@ export default {
     });
     setPaint(layers, HIGHWAY_FILLS, { "line-width": highwayWidth });
     setPaint(layers, HIGHWAY_CASINGS, { "line-gap-width": highwayWidth });
+    const service = layers.find((l) => l.id === "roads_minor_service");
+    service.minzoom = 12.5;
+    Object.assign(service.paint, {
+      "line-color": ["step", ["zoom"], "#b9b2a8", 14, "#ffffff"],
+      "line-opacity": ["interpolate", ["linear"], ["zoom"], 12.5, 0, 13, 1],
+    });
+    setPaint(layers, ["roads_minor_service_casing"], { "line-opacity": ["step", ["zoom"], 0, 14, 1] });
     thinShields(layers);
     streams(layers, "#a7b8c4", ex([12, 1, 15, 2, 18, 4]));
     return layers;
