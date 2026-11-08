@@ -1,9 +1,13 @@
 // End-to-end click-through of the admin UI against a REAL mapthing server (no mocks).
 // Usage: MAPTHING_URL=http://127.0.0.1:8080 ADMIN_USER=… ADMIN_PASSWORD=… node scripts/e2e.mjs [outDir]
+// With E2E_BUILD=1 (a fresh data dir, network): catalog search → add Delaware and build → watch
+// progress over SSE → generation live → route with elevation profile → raster png/jpg/webp.
 // Exits non-zero when a step fails or the page logs errors / gets 5xx responses.
 import { mkdirSync } from "node:fs";
 import { chromium } from "playwright";
 
+const BUILD = process.env.E2E_BUILD === "1";
+const BUILD_REGION = process.env.E2E_REGION ?? "Delaware";
 const base = (process.env.MAPTHING_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
 const user = process.env.ADMIN_USER ?? "admin";
 const pass = process.env.ADMIN_PASSWORD ?? "";
@@ -68,15 +72,16 @@ await step("login", async () => {
   await page.getByLabel("Username").fill(user);
   await page.getByLabel("Password").fill(pass);
   await page.getByRole("button", { name: /sign in/i }).click();
-  await page.locator(".maplibregl-canvas").waitFor({ timeout: 15000 });
+  await page.getByRole("link", { name: "Map", exact: true }).first().waitFor({ timeout: 15000 });
   await page.waitForTimeout(2500); // tiles, glyphs, sprites
   await shot("01-map");
 });
 
-await step("map style loads tiles", async () => {
-  if (!seen.style || !seen.tiles)
-    throw new Error(`style ${seen.style}, basemap tiles ${seen.tiles}`);
-});
+if (!BUILD)
+  await step("map style loads tiles", async () => {
+    if (!seen.style || !seen.tiles)
+      throw new Error(`style ${seen.style}, basemap tiles ${seen.tiles}`);
+  });
 
 let created = "";
 const label = `e2e key ${Date.now()}`;
@@ -108,6 +113,8 @@ await step("keys: revoke", async () => {
   if (r.status !== 401) throw new Error(`revoked key answered ${r.status}`);
 });
 
+if (BUILD) await buildFlow();
+
 await step("regions: add a custom box", async () => {
   await nav("Regions");
   await page.goto(`${base}/admin/regions?add=1`, { waitUntil: "networkidle" });
@@ -120,22 +127,23 @@ await step("regions: add a custom box", async () => {
   await shot("03-regions");
 });
 
-await step("regions: catalog search", async () => {
-  const probe = await fetch(`${base}/admin/api/catalog`, { headers: { cookie: await cookie() } });
-  if (probe.status === 503) {
-    expected.push("503 GET /admin/api/catalog (catalog not wired in this build)");
-    return;
-  }
-  await page.goto(`${base}/admin/regions?add=1`, { waitUntil: "networkidle" });
-  const dlg = page.getByRole("dialog", { name: "Add a region" });
-  await dlg.getByLabel("Search regions").fill("dela", { timeout: 20000 });
-  await dlg
-    .getByRole("button", { name: /^Delaware/ })
-    .first()
-    .waitFor({ timeout: 20000 });
-  await shot("04-catalog");
-  await page.keyboard.press("Escape");
-});
+if (!BUILD)
+  await step("regions: catalog search", async () => {
+    const probe = await fetch(`${base}/admin/api/catalog`, { headers: { cookie: await cookie() } });
+    if (probe.status === 503) {
+      expected.push("503 GET /admin/api/catalog (catalog not wired in this build)");
+      return;
+    }
+    await page.goto(`${base}/admin/regions?add=1`, { waitUntil: "networkidle" });
+    const dlg = page.getByRole("dialog", { name: "Add a region" });
+    await dlg.getByLabel("Search regions").fill("dela", { timeout: 20000 });
+    await dlg
+      .getByRole("button", { name: /^Delaware/ })
+      .first()
+      .waitFor({ timeout: 20000 });
+    await shot("04-catalog");
+    await page.keyboard.press("Escape");
+  });
 
 await step("schedule: change and save", async () => {
   await nav("Schedule");
@@ -176,6 +184,171 @@ await step("map: back to the map with a different style", async () => {
   await page.waitForTimeout(2000);
   await shot("09-map-again");
 });
+
+async function api(method, path, body) {
+  const r = await fetch(`${base}${path}`, {
+    method,
+    headers: { cookie: await cookie(), origin: base, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return r;
+}
+
+async function buildFlow() {
+  await step("build: SSE subscription in the page", async () => {
+    await page.evaluate(() => {
+      window.__ev = { job: 0, log: 0, generation: 0 };
+      const es = new EventSource("/admin/api/events");
+      for (const t of ["job", "log", "generation"]) es.addEventListener(t, () => window.__ev[t]++);
+    });
+  });
+
+  await step(`build: catalog search → add ${BUILD_REGION} → build`, async () => {
+    await page.goto(`${base}/admin/regions?add=1`, { waitUntil: "networkidle" });
+    const dlg = page.getByRole("dialog", { name: "Add a region" });
+    await dlg
+      .getByLabel("Search regions")
+      .fill(BUILD_REGION.slice(0, 4).toLowerCase(), { timeout: 60000 });
+    await dlg
+      .getByRole("button", { name: new RegExp(`^${BUILD_REGION}`) })
+      .first()
+      .click();
+    await dlg.getByTestId("estimate").waitFor();
+    await shot("10-catalog-estimate");
+    await dlg.getByRole("button", { name: "Add and build" }).click();
+    await page.getByRole("heading", { name: "Builds" }).waitFor();
+    await page.getByText("Current build").waitFor({ timeout: 30000 });
+    await shot("11-build-running");
+  });
+
+  const t0 = Date.now();
+  let job;
+  await step("build: progress until the generation is live (SSE)", async () => {
+    const deadline = Date.now() + Number(process.env.E2E_BUILD_TIMEOUT_S ?? 2400) * 1000;
+    let lastStage = "";
+    for (;;) {
+      const jobs = (await (await api("GET", "/admin/api/jobs")).json()).jobs;
+      job = jobs[0];
+      const running = job?.stages?.find((s) => s.status === "running")?.name ?? "";
+      if (running && running !== lastStage) {
+        console.log(
+          `  ${Math.round((Date.now() - t0) / 1000)}s stage ${running} (${Math.round(job.progress * 100)}%)`,
+        );
+        lastStage = running;
+        await shot(`12-build-${running}`);
+      }
+      if (
+        job &&
+        (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled")
+      )
+        break;
+      if (Date.now() > deadline) throw new Error(`timed out in stage ${running}`);
+      await page.waitForTimeout(5000);
+    }
+    if (job.status !== "succeeded") {
+      const detail = await (await api("GET", `/admin/api/jobs/${job.id}`)).json();
+      console.log(
+        detail.log
+          .slice(-30)
+          .map((l) => `    ${l.msg}`)
+          .join("\n"),
+      );
+      throw new Error(`build ${job.status}: ${job.error}`);
+    }
+    const ev = await page.evaluate(() => window.__ev);
+    console.log(`  build took ${Math.round((Date.now() - t0) / 1000)}s; SSE events`, ev);
+    if (ev.job < 5 || ev.log < 5) throw new Error(`too few SSE events ${JSON.stringify(ev)}`);
+    if (!job.generation_id) throw new Error("job has no generation_id");
+    const gens = (await (await api("GET", "/admin/api/generations")).json()).generations;
+    if (gens[0]?.status !== "live" || gens[0].id !== job.generation_id)
+      throw new Error(`live generation ${gens[0]?.id} != ${job.generation_id}`);
+    await page.getByText(/Idle/).waitFor({ timeout: 30000 });
+    await shot("13-build-done");
+  });
+
+  await step("build: region installed, system ready", async () => {
+    const regions = (await (await api("GET", "/admin/api/regions")).json()).regions;
+    if (!regions.some((r) => r.status === "installed")) throw new Error(JSON.stringify(regions));
+    for (let i = 0; i < 24; i++) {
+      const sys = await (await api("GET", "/admin/api/system")).json();
+      if (sys.ready) return;
+      await page.waitForTimeout(5000);
+    }
+    const sys = await (await api("GET", "/admin/api/system")).json();
+    throw new Error(`not ready: ${JSON.stringify(sys.readiness)}`);
+  });
+
+  await step("map: style and basemap tiles", async () => {
+    await page.goto(`${base}/admin/`, { waitUntil: "networkidle" });
+    await page.locator(".maplibregl-canvas").waitFor({ timeout: 15000 });
+    await page.waitForTimeout(3000);
+    await shot("14-map-live");
+    if (!seen.style || !seen.tiles)
+      throw new Error(`style ${seen.style}, basemap tiles ${seen.tiles}`);
+  });
+
+  await step("map: route with elevation profile", async () => {
+    await page.getByRole("radio", { name: /Route/ }).click();
+    const box = await page.locator(".maplibregl-canvas").boundingBox();
+    const routed = page.waitForResponse((r) => r.url().endsWith("/api/v1/route"), {
+      timeout: 30000,
+    });
+    for (const [fx, fy] of [
+      [0.47, 0.45],
+      [0.53, 0.58],
+    ]) {
+      await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
+      await page.waitForTimeout(800);
+    }
+    const r = await routed;
+    if (r.status() !== 200) throw new Error(`route ${r.status()}: ${await r.text()}`);
+    await page.getByRole("img", { name: /Elevation profile/ }).waitFor({ timeout: 30000 });
+    await page.waitForTimeout(1500);
+    await shot("15-route-profile");
+  });
+
+  await step("raster: png, jpg, webp through the real renderer", async () => {
+    const created = await (await api("POST", "/admin/api/keys", { label: "e2e raster" })).json();
+    const key = created.secret;
+    const regions = (await (await api("GET", "/admin/api/regions")).json()).regions;
+    const b = regions.find((r) => r.status === "installed").bbox;
+    const [lon, lat] = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+    const z = 12;
+    const n = 2 ** z;
+    const x = Math.floor(((lon + 180) / 360) * n);
+    const rad = (lat * Math.PI) / 180;
+    const y = Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n);
+    const magic = {
+      "image/png": [0x89, 0x50],
+      "image/jpeg": [0xff, 0xd8],
+      "image/webp": [0x52, 0x49],
+    };
+    const cases = [
+      [`/styles/outdoors/512/${z}/${x}/${y}@2x.png`, "image/png"],
+      [`/styles/outdoors/256/${z}/${x}/${y}.jpg`, "image/jpeg"],
+      [`/styles/outdoors-dark/512/${z}/${x}/${y}.webp`, "image/webp"],
+      [`/styles/v1/u/satellite/tiles/512/${z}/${x}/${y}@2x`, "image/jpeg"],
+      [`/styles/v1/u/outdoors/tiles/256/${z}/${x}/${y}`, "image/png"],
+    ];
+    for (const [path, ct] of cases) {
+      const t = Date.now();
+      const r = await fetch(`${base}${path}?key=${key}`);
+      const body = Buffer.from(await r.arrayBuffer());
+      const ok =
+        r.status === 200 &&
+        r.headers.get("content-type") === ct &&
+        body[0] === magic[ct][0] &&
+        body[1] === magic[ct][1];
+      console.log(
+        `  ${path} → ${r.status} ${r.headers.get("content-type")} ${body.length} B ${Date.now() - t} ms${r.headers.get("x-mapthing-degraded") ? " (degraded)" : ""}`,
+      );
+      if (!ok)
+        throw new Error(
+          `${path}: ${r.status} ${r.headers.get("content-type")} ${body.subarray(0, 120).toString()}`,
+        );
+    }
+  });
+}
 
 async function cookie() {
   return (await ctx.cookies(base)).map((c) => `${c.name}=${c.value}`).join("; ");
