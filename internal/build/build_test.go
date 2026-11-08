@@ -737,8 +737,18 @@ func TestDiskGuardItemised(t *testing.T) {
 	if est.NeedBytes != want || est.Factor != 1 {
 		t.Errorf("need %d, want %d (factor %v)", est.NeedBytes, want, est.Factor)
 	}
-	if est.NeedBytes > 1<<30 {
+	// Small input: the scratch floor (3 GiB) plus the Natural Earth unpack (1 GiB) apply.
+	if est.WorkBytes != minWorkBytes+naturalEarthUnpackBytes {
+		t.Errorf("work %s, want floor 3 GiB + 1 GiB unpack", humanBytes(est.WorkBytes))
+	}
+	if est.NeedBytes > 6<<30 {
 		t.Errorf("five small Texas boxes need %s; the old guard said ~22 GiB", humanBytes(est.NeedBytes))
+	}
+	// A big input scales past the floor: 1 GiB extract → 6 GiB scratch.
+	big := e.region
+	big.SizeHint = 1 << 30
+	if w := e.b.Estimate([]catalog.Region{big}).WorkBytes; w != 6<<30+naturalEarthUnpackBytes {
+		t.Errorf("work for 1 GiB input %s, want 6 GiB + 1 GiB", humanBytes(w))
 	}
 
 	t.Setenv("MAPTHING_DISK_GUARD_FACTOR", "0.5")
@@ -760,11 +770,22 @@ func TestDiskGuardSourcesAndReuse(t *testing.T) {
 	if est.SourcesBytes != (900+800)<<20 {
 		t.Errorf("sources %s, want water+land", humanBytes(est.SourcesBytes))
 	}
-	// osmdata known down → the Natural Earth fallback will be used: no reservation.
+	// osmdata known down → the Natural Earth fallback will be used: no reservation, and a fresh
+	// process (restart, new image) on the same data volume knows it too.
 	e.b.markHostFailed("osmdata.openstreetmap.de")
-	est = e.b.Estimate([]catalog.Region{e.region})
-	if est.SourcesBytes != 0 || !strings.Contains(strings.Join(est.Items, "\n"), "Natural Earth fallback") {
-		t.Errorf("sources %s items %v", humanBytes(est.SourcesBytes), est.Items)
+	for _, b := range []*Builder{e.b, {DataDir: e.b.DataDir}} {
+		est = b.Estimate([]catalog.Region{e.region})
+		if est.SourcesBytes != 0 || !strings.Contains(strings.Join(est.Items, "\n"), "Natural Earth fallback") {
+			t.Errorf("sources %s items %v", humanBytes(est.SourcesBytes), est.Items)
+		}
+	}
+	e.b.clearHostFailed("osmdata.openstreetmap.de")
+	if _, down := (&Builder{DataDir: e.b.DataDir}).hostFailedAt("osmdata.openstreetmap.de"); down {
+		t.Error("marker not cleared")
+	}
+	// Cached again, so the builds below never reach the network.
+	for _, f := range []string{"water-polygons-split-3857.zip", "land-polygons-split-3857.zip"} {
+		_ = os.WriteFile(filepath.Join(e.b.sourcesDir(), f), []byte("cached"), 0o644)
 	}
 	// An extract already on disk costs nothing to download unless refreshing.
 	if _, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}}); err != nil {

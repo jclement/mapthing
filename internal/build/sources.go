@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jclement/mapthing/internal/catalog"
@@ -103,6 +104,9 @@ func (s *state) downloadRetry(ctx context.Context, rawURL, path, name string, bu
 	for attempt := 0; ; attempt++ {
 		s.logf("sources: downloading %s from %s", name, rawURL)
 		if err = s.downloadFile(ctx, rawURL, path, name); err == nil {
+			if budget > 0 {
+				s.b.clearHostFailed(host)
+			}
 			return nil
 		}
 		if attempt >= len(sourceBackoff) || ctx.Err() != nil {
@@ -132,10 +136,22 @@ func hostOf(rawURL string) string {
 	return rawURL
 }
 
+// The failed-host marker is kept in memory and in the data volume (cache/planetiler/
+// .host-down-<host>), so a restarted server or a new image knows too: the disk guard then skips the
+// ocean polygons and builds go straight to the fallback instead of retrying.
+func (b *Builder) hostMarker(host string) string {
+	return filepath.Join(b.sourcesDir(), ".host-down-"+strings.ReplaceAll(host, ":", "_"))
+}
+
 func (b *Builder) hostFailedAt(host string) (time.Time, bool) {
 	b.hostMu.Lock()
-	defer b.hostMu.Unlock()
 	at, ok := b.failedHosts[host]
+	b.hostMu.Unlock()
+	if !ok {
+		if st, err := os.Stat(b.hostMarker(host)); err == nil {
+			at, ok = st.ModTime(), true
+		}
+	}
 	if !ok || time.Since(at) > failedHostTTL {
 		return time.Time{}, false
 	}
@@ -144,11 +160,22 @@ func (b *Builder) hostFailedAt(host string) (time.Time, bool) {
 
 func (b *Builder) markHostFailed(host string) {
 	b.hostMu.Lock()
-	defer b.hostMu.Unlock()
 	if b.failedHosts == nil {
 		b.failedHosts = map[string]time.Time{}
 	}
 	b.failedHosts[host] = time.Now()
+	b.hostMu.Unlock()
+	if err := os.MkdirAll(b.sourcesDir(), 0o755); err == nil {
+		_ = os.WriteFile(b.hostMarker(host), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+	}
+}
+
+// clearHostFailed forgets a host after a successful download from it.
+func (b *Builder) clearHostFailed(host string) {
+	b.hostMu.Lock()
+	delete(b.failedHosts, host)
+	b.hostMu.Unlock()
+	_ = os.Remove(b.hostMarker(host))
 }
 
 func (s *state) downloadFile(ctx context.Context, rawURL, path, name string) error {

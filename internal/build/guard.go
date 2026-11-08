@@ -17,8 +17,17 @@ import (
 const unknownPBFBytes = 512 << 20
 
 // workFactor is the scratch and output a build needs per byte of merged OSM input: Planetiler's
-// temporary store and the basemap, Valhalla's loose tiles and tar.
-const workFactor = 4
+// temporary feature store (its sort spills to --tmpdir even with storage=ram) and the basemap,
+// Valhalla's loose tiles and tar. minWorkBytes is the floor for small inputs: a 190 MiB input
+// measured ≥ 2.5 GB of Planetiler temp files alone.
+const (
+	workFactor   = 6
+	minWorkBytes = 3 << 30
+)
+
+// naturalEarthUnpackBytes is the Natural Earth GeoPackage Planetiler unpacks into its temp
+// directory on every build (~0.85 GB measured).
+const naturalEarthUnpackBytes = 1 << 30
 
 // DiskEstimate is what a build is expected to need on the data volume, itemised.
 type DiskEstimate struct {
@@ -118,8 +127,11 @@ func (b *Builder) EstimateFor(opt Options) DiskEstimate {
 		e.MergeBytes = e.InputBytes
 		item("merged input: %s", humanBytes(e.MergeBytes))
 	}
-	e.WorkBytes = e.InputBytes * workFactor
-	item("build scratch and outputs: %s (input %s × %d)", humanBytes(e.WorkBytes), humanBytes(e.InputBytes), workFactor)
+	e.WorkBytes = max(e.InputBytes*workFactor, minWorkBytes)
+	item("build scratch and outputs: %s (max(input %s × %d, %s))", humanBytes(e.WorkBytes),
+		humanBytes(e.InputBytes), workFactor, humanBytes(minWorkBytes))
+	e.WorkBytes += naturalEarthUnpackBytes
+	item("planetiler Natural Earth unpack: %s", humanBytes(naturalEarthUnpackBytes))
 	if f := hooks.terrainEstimate(); f != nil {
 		e.TerrainBytes = f(opt.Regions)
 		item("terrain: %s", humanBytes(e.TerrainBytes))
