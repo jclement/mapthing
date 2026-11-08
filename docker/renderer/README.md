@@ -1,11 +1,11 @@
 # mapthing renderer
 
-Renders mapthing's GL styles to PNG raster tiles with MapLibre Native
+Renders mapthing's GL styles to PNG, JPEG or WebP raster tiles with MapLibre Native
 (`@maplibre/maplibre-gl-native` 6.4.1) and `sharp`. mapthing supervises it and proxies
-`/styles/{name}/{size}/{z}/{x}/{y}[@2x].png` to it.
+`/styles/{name}/{size}/{z}/{x}/{y}[@2x].{png,jpg,webp}` to it.
 
 ```
-GET  /render/{style}/{size}/{z}/{x}/{y}[@2x].png   size 256|512; @2x = pixel ratio 2 (512/1024 px)
+GET  /render/{style}/{size}/{z}/{x}/{y}[@2x].{png|jpg|webp}   size 256|512; @2x = pixel ratio 2 (512/1024 px); jpg/webp quality 80
 GET  /healthz                                       {"ok":true,"runtime":...,"rendered":n,"pools":[...]}
 POST /reload                                        drop cached styles and renderers (after a generation swap)
 ```

@@ -171,7 +171,7 @@ func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Name: CookieName, Value: tok, Path: "/", Expires: exp, MaxAge: int(SessionTTL.Seconds()),
 		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "expires_at": exp.UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"user": body.Username, "expires_at": exp.UTC()})
 }
 
 // HandleLogout clears the session.
@@ -180,7 +180,7 @@ func (a *Auth) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		_ = a.st.DeleteSession(r.Context(), tokenHash(c.Value))
 	}
 	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r)})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // HandleSession reports whether the caller is signed in (open endpoint, for the UI).

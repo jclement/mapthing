@@ -138,7 +138,7 @@ func serve() error {
 	sup.Add(supervisor.Child{
 		Name:      "renderer",
 		Command:   cfg.RendererCmd,
-		HealthURL: getenv("MAPTHING_RENDERER_HEALTH_URL", cfg.RendererURL+"/health"),
+		HealthURL: getenv("MAPTHING_RENDERER_HEALTH_URL", cfg.RendererURL+"/healthz"),
 		Env: []string{
 			"MAPTHING_INTERNAL_TOKEN=" + cfg.InternalToken,
 			"MAPTHING_URL=http://127.0.0.1:" + port,

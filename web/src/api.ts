@@ -92,14 +92,17 @@ export interface Region {
 
 export type NewRegion = { id: string } | { name: string; bbox: BBox; polygon?: LonLat[] };
 
+// Build stages as the pipeline reports them, in order.
 export type StageName =
+  | "guard"
   | "download"
   | "merge"
   | "basemap"
-  | "routing"
-  | "elevation"
+  | "valhalla"
+  | "terrain"
   | "verify"
-  | "swap";
+  | "swap"
+  | "retention";
 export type StageStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface Stage {
@@ -251,6 +254,14 @@ export interface RouteResult {
   legs: { distance_m: number; duration_s: number; maneuvers?: RouteManeuver[] }[];
 }
 
+/** POST /api/v1/route response: a GeoJSON Feature whose properties are the route summary. */
+export interface RouteFeature {
+  type: "Feature";
+  bbox?: BBox;
+  geometry: LineString;
+  properties: Omit<RouteResult, "geometry">;
+}
+
 export interface ElevationSample {
   lon: number;
   lat: number;
@@ -308,7 +319,12 @@ export const api = {
 
   styles: () => request<StyleInfo[]>("GET", "/styles"),
 
-  route: (r: RouteRequest) => request<RouteResult>("POST", "/api/v1/route", r),
+  // The server answers a GeoJSON Feature (geometry + properties, plus bbox and optional
+  // alternates); the UI works with the flattened RouteResult.
+  route: (r: RouteRequest) =>
+    request<RouteFeature>("POST", "/api/v1/route", r).then(
+      (f): RouteResult => ({ ...f.properties, geometry: f.geometry }),
+    ),
   elevation: (points: LonLat[]) =>
     request<{ results: ElevationSample[] }>("POST", "/api/v1/elevation", { points }),
   profile: (path: LonLat[], interval_m?: number) =>

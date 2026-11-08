@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -113,6 +114,19 @@ func (s *Scheduler) Set(ctx context.Context, expr string, enabled bool) error {
 	return s.apply(expr, enabled)
 }
 
+const refreshSetting = "schedule.refresh_downloads"
+
+// RefreshDownloads reports whether scheduled builds re-download extracts (default true).
+func (s *Scheduler) RefreshDownloads(ctx context.Context) bool {
+	v, err := s.st.Setting(ctx, refreshSetting)
+	return err != nil || v != "false"
+}
+
+// SetRefreshDownloads stores whether scheduled builds re-download extracts.
+func (s *Scheduler) SetRefreshDownloads(ctx context.Context, on bool) error {
+	return s.st.SetSetting(ctx, refreshSetting, strconv.FormatBool(on))
+}
+
 // fire is the cron callback.
 func (s *Scheduler) fire() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -122,7 +136,7 @@ func (s *Scheduler) fire() {
 	s.lastRun = &now
 	s.mu.Unlock()
 	h := store.HistoryEntry{Kind: "schedule", At: now}
-	row, err := s.q.Enqueue(ctx, BuildJob, map[string]any{"refresh": true}, jobs.EnqueueOptions{Trigger: "schedule", Unique: true})
+	row, err := s.q.Enqueue(ctx, BuildJob, map[string]any{"refresh": s.RefreshDownloads(ctx)}, jobs.EnqueueOptions{Trigger: "schedule", Unique: true})
 	switch {
 	case errors.Is(err, jobs.ErrBusy):
 		h.OK, h.Message = true, "scheduled refresh skipped: a build is already queued or running"

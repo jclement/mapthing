@@ -499,37 +499,40 @@ function AddRegion({
         />
       </div>
 
-      {catalogError && <ErrorNote error={catalogError} />}
-      {!catalog && !catalogError && <Spinner label="Loading catalog" />}
+      {/* A custom box does not need the catalog (it only refines the estimate), so only the
+          catalog tab waits for it or shows its error. */}
+      {tab === "catalog" && catalogError && <ErrorNote error={catalogError} />}
+      {tab === "catalog" && !catalog && !catalogError && <Spinner label="Loading catalog" />}
 
-      {catalog &&
-        (tab === "catalog" ? (
+      {tab === "catalog" ? (
+        catalog && (
           <CatalogTree
             catalog={catalog}
             installed={installedIds}
             selected={sel?.kind === "catalog" ? sel.entry.id : null}
             onSelect={(entry) => setSel({ kind: "catalog", entry })}
           />
-        ) : (
-          <div className="space-y-3">
-            <Field label="Name" hint="Shown in the region list, e.g. “Permian core”">
-              {(id) => (
-                <Input
-                  id={id}
-                  value={boxName}
-                  onChange={(e) => setBoxName(e.target.value)}
-                  placeholder="My area"
-                />
-              )}
-            </Field>
-            <div className="h-72">
-              <Suspense fallback={<Spinner label="Loading map" />}>
-                <DrawBox onChange={setBox} hasData={hasData} />
-              </Suspense>
-            </div>
-            <BBoxInputs value={box} onChange={setBox} />
+        )
+      ) : (
+        <div className="space-y-3">
+          <Field label="Name" hint="Shown in the region list, e.g. “Permian core”">
+            {(id) => (
+              <Input
+                id={id}
+                value={boxName}
+                onChange={(e) => setBoxName(e.target.value)}
+                placeholder="My area"
+              />
+            )}
+          </Field>
+          <div className="h-72">
+            <Suspense fallback={<Spinner label="Loading map" />}>
+              <DrawBox onChange={setBox} hasData={hasData} />
+            </Suspense>
           </div>
-        ))}
+          <BBoxInputs value={box} onChange={setBox} />
+        </div>
+      )}
 
       {sel && summary && (
         <div className="mt-4 rounded-xl border border-line bg-sunken p-4" data-testid="estimate">

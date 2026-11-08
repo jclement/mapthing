@@ -65,7 +65,7 @@ UI's own map needs no key. `/healthz` and `/readyz` are open.
 | GET | `/tiles/basemap.pmtiles` | the whole archive, HTTP Range supported (206), for clients that read PMTiles directly |
 | GET | `/tiles/terrain/{z}/{x}/{y}.png` | Terrarium-encoded elevation tiles (hillshade / 3D) |
 | GET | `/tiles/imagery/{z}/{x}/{y}.jpg` | satellite imagery, proxied from the configured open source and cached |
-| GET | `/styles/{name}/{tilesize}/{z}/{x}/{y}[@2x].png` | **raster** tiles rendered from a style (`tilesize` 256 or 512). Mirrors the Mapbox Static Tiles URL shape so swapping is a host change. |
+| GET | `/styles/{name}/{tilesize}/{z}/{x}/{y}[@2x].{png\|jpg\|webp}` | **raster** tiles rendered from a style (`tilesize` 256 or 512; any style listed by `GET /styles`). Also the Mapbox Static Tiles shape `/styles/v1/{user}/{name}/tiles/[{tilesize}/]{z}/{x}/{y}[@2x][.{ext}]`, so swapping is a host change: without an extension it answers **jpg for `satellite`, png otherwise** (as Mapbox does). jpg/webp are encoded at quality 80 (a satellite 512@2x tile is 2–2.5 MB as PNG). Cached on disk per generation, style, size, scale and format. |
 | GET | `/packs/extract.pmtiles?bbox=w,s,e,n&minzoom=&maxzoom=` | offline pack (PMTiles subset of the basemap); `format=mbtiles` also |
 | POST | `/api/v1/route` | `{"locations":[{"lat":..,"lon":..,"radius_m":..},..],"profile":"auto\|truck","avoid_unpaved":false,"avoid_highways","avoid_tolls","avoid_ferries","shortest","alternates":n}` → GeoJSON Feature (LineString) with properties `distance_m`, `duration_s`, `legs[]` (maneuvers), `surface_breakdown` (metres by `paved`/`gravel`/`dirt`/`unknown`), `alternates[]`. Errors: `{"error":{"code":"no_road\|no_route\|limit\|bad_request\|unavailable","message","location_index"}}` (404 for no_road/no_route) |
 | GET/POST | `/api/v1/valhalla/{action}` | pass-through to Valhalla; allowlisted actions: `route`, `optimized_route`, `sources_to_targets`, `isochrone`, `trace_route`, `trace_attributes`, `locate`, `height`, `expansion`, `centroid`, `status` |
@@ -220,19 +220,16 @@ every font in the stack answer 404.
 `MAPTHING_PACK_MAX_TILES` (2000000), `MAPTHING_INTERNAL_TOKEN`, `MAPTHING_IMAGERY_URL`,
 `MAPTHING_DEBUG`. Caches live in `/data/raster-cache`, `/data/imagery-cache`, `/data/pack-cache`.
 
-**Admin API additions.** `GET /admin/api/session` (open; `{authenticated}`),
-`PATCH /admin/api/keys/{id}` (label, limits), `DELETE /admin/api/keys/{id}` revokes (the row
-stays for history), `POST /admin/api/jobs/{id}/cancel`, `GET /admin/api/history?kind=`,
-`PATCH /admin/api/regions/{id}` (`{refresh}`), `POST /admin/api/system/restart/{name}`.
-Region ids may contain `/` (`us/texas`). Keyed errors are JSON `{"error":{"code","message"}}`,
-except under `/maps/api/` (Google Elevation shape), `/directions/v2` (Google RPC shape) and
-`/ors/` (ORS shape). An API key is also accepted as `?api_key=` (ORS GET style).
+**Errors.** Keyed and admin errors are JSON `{"error":{"code","message"}}`, except under
+`/maps/api/` (Google Elevation shape), `/directions/v2` (Google RPC shape) and `/ors/` (ORS
+shape). An API key is also accepted as `?api_key=` (ORS GET style). Admin shapes: next section.
 ## Renderer and internal requests
 
 The renderer (`docker/renderer/`, Node 24 + MapLibre Native on a private Xvfb display; Bun cannot
 load the addon, see its README) listens on `127.0.0.1:8081`:
-`GET /render/{style}/{size}/{z}/{x}/{y}[@2x].png`, `GET /healthz`, `POST /reload`. mapthing
-proxies `/styles/{name}/{size}/{z}/{x}/{y}[@2x].png` to it.
+`GET /render/{style}/{size}/{z}/{x}/{y}[@2x].{png|jpg|webp}` (encoded with sharp; jpeg and webp
+quality 80), `GET /healthz` (the supervisor's health probe), `POST /reload`. mapthing proxies
+the raster endpoints to it.
 
 The renderer reads styles, tiles, glyphs and sprites from mapthing itself. Those requests come
 from localhost with the header `X-Mapthing-Internal: $MAPTHING_INTERNAL_TOKEN` and need no API
@@ -246,31 +243,45 @@ Styles are generated from themes (`assets/styles/src/`, `mise run styles`); see 
 Imagery sources and licences: `docs/imagery.md`.
 ## Admin UI and admin API shapes
 
-The admin UI is served at **`/admin/`** (Vite `base: "/admin/"`, React Router basename `/admin`).
-The Go server serves `web/dist` there and falls back to `web/dist/index.html` for any unknown path
-under `/admin/` that is not `/admin/api/…` (client-side routes such as `/admin/keys`); `/` may
-redirect to `/admin/`. The UI probes the session with `GET /admin/api/system` (401 → login form)
-and lists map styles with `GET /styles` (`[{id,name,description,dark}]`). Style thumbnails are one
-256 px raster tile: `/styles/{id}/256/{z}/{x}/{y}.png`.
+The admin UI is served at **`/admin/`** (Vite `base: "/admin/"`, React Router basename `/admin`)
+from the embedded `web/dist`: files as they are (`/admin/assets/…` hashed, `Cache-Control:
+public, max-age=31536000, immutable`), and `index.html` (`no-cache`) for any other extension-less
+path under `/admin/` (client routes such as `/admin/keys`); `/admin/api/…` is the API. `/` and
+`/admin` redirect (302) to `/admin/`. The UI probes the session with `GET /admin/api/system`
+(401 → login form) and lists map styles with `GET /styles`. Style thumbnails are one raster tile:
+`/styles/{id}/256/{z}/{x}/{y}.png`.
 
-`web/src/api.ts` is the typed client and the reference for these JSON shapes. Summary:
+`web/src/api.ts` is the typed client; this list and it must agree. Ids of keys and jobs are
+strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore unknown fields.
 
-- Errors: non-2xx with `{"error":{"code":"…","message":"…"}}` (a plain string `error` is accepted too).
-- `POST /admin/api/login` `{username,password}` → `{user}`; 401 on bad credentials. `POST /admin/api/logout` → 204.
-- `GET /admin/api/catalog` → `{entries:[{id,name,parent,bbox:[w,s,e,n],extract_bytes,elevation_sources:[id…]}], elevation_sources:[{id,name,resolution_m,license,attribution}]}`.
-  Grouping nodes (continent, country without its own extract) have `extract_bytes: 0`.
-- `GET /admin/api/regions` → `{regions:[{id,name,catalog_id|null,bbox,polygon?,status:"pending"|"installed"|"failed",extract_bytes,disk_bytes,data_date|null,downloaded_at|null,elevation_sources:[id…]}]}`;
-  `POST` `{id}` or `{name,bbox|polygon}` → 201 region (409 if already installed); `DELETE /{id}` → 204 (ids contain `/`, URL-encoded).
-- `POST /admin/api/build` `{refresh_downloads}` → 202 job.
-- Job: `{id,status:"queued"|"running"|"succeeded"|"failed"|"cancelled",trigger:"manual"|"schedule",refresh_downloads,created_at,started_at?,finished_at?,progress:0..1,stages:[{name,status:"pending"|"running"|"done"|"failed"|"skipped",progress,detail?,started_at?,finished_at?}],error?,generation_id?}`;
-  stage names `download, merge, basemap, routing, elevation, verify, swap`.
-  `GET /admin/api/jobs` → `{jobs:[…]}` newest first; `GET /admin/api/jobs/{id}` → job + `log:[{job_id,t,level,msg}]` (tail).
-- `GET /admin/api/events` (SSE): named events `job` (data: job), `log` (data: log line), `generation` (data: `{id}` when a generation goes live).
-- `GET /admin/api/generations` → `{generations:[{id,created_at,status:"live"|"kept",manifest:{regions:[{id,name,data_date}],sizes:{basemap,terrain,routing,total},timings:{stage:seconds},checks:[{name,ok,detail?}]}}]}`.
-- `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,refresh_downloads,regions:[{id,enabled}]}` (cron is 5-field, UTC).
-- `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}`;
-  `POST` `{label,rpm?,rpd?,origins?}` → 201 `{key,secret}`; `DELETE /{id}` → 204.
-- `GET /admin/api/stats` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state,pid|null,uptime_s,restarts,rss_bytes}]}`.
-- `GET /admin/api/system` → `{version,commit,build_date,components:[{name,version}],ready,readiness:[{name,ok,detail?}],disk:{free_bytes,total_bytes},current_generation|null,attribution:[{name,license,url?,note?}],imagery_source:{name,attribution,url?}|null}`.
-- Keyed endpoints as the UI calls them: `POST /api/v1/route` returns `geometry` as a GeoJSON LineString plus `surface_breakdown_m` (`paved|gravel|dirt|unknown` → metres);
-  route errors use codes `no_road` / `no_route`. `POST /api/v1/elevation` → `{results:[sample]}`; `POST /api/v1/elevation/profile` → the `elevation.Profile` JSON.
+- Errors: non-2xx with `{"error":{"code":"…","message":"…"}}`.
+- `POST /admin/api/login` `{username,password}` → `{user,expires_at}` + HttpOnly session cookie;
+  401 bad credentials, 429 after 5 failures in 5 min, 403 cross-origin. `POST /admin/api/logout` → 204.
+  `GET /admin/api/session` (open) → `{authenticated}`.
+- `GET /admin/api/catalog` → `{entries:[{id,name,parent,bbox:[w,s,e,n],extract_bytes,elevation_sources:[id…]}], elevation_sources:[{id,name,resolution_m,license,attribution}]}`
+  (pipeline's catalog; 503 when not wired). Grouping nodes have `extract_bytes: 0`.
+- `GET /admin/api/regions` → `{regions:[region]}`; region = `{id,name,catalog_id|null,bbox,polygon?:[[lon,lat]…],status:"pending"|"installed"|"failed",extract_bytes,disk_bytes,data_date|null,downloaded_at|null,elevation_sources:[id…]}` + *extra* `parent,refresh,added_at`.
+  `status`: installed = in the live generation's manifest; failed = not live and the latest finished build failed; else pending.
+  `data_date`/`downloaded_at`/`disk_bytes` come from `downloads/<id>/meta.json` and the download size; `extract_bytes`/`elevation_sources` from the catalog at add time.
+  `POST` `{id}` (catalog extract) or `{name,bbox}` / `{name,polygon:[[lon,lat]…]}` (custom; id `custom/<slug>`) → 201 region; 409 if the id exists.
+  `GET`/`PATCH {refresh}`/`DELETE` `/admin/api/regions/{id}` (ids contain `/`, may be URL-encoded) → region / region / 204.
+- `POST /admin/api/build` `{refresh_downloads}` → 202 job; 409 if a build is queued or running; 503 if the build job is not registered.
+- Job: `{id,name,status:"queued"|"running"|"succeeded"|"failed"|"cancelled",trigger:"manual"|"schedule",refresh_downloads,created_at,started_at?,finished_at?,progress:0..1,stages:[{name,status:"pending"|"running"|"done"|"failed"|"skipped",progress,detail?,started_at?,finished_at?}],error?,generation_id?}`.
+  Stages are the pipeline's, all listed from the moment a build is queued: `guard, download, merge, basemap, valhalla, terrain, verify, swap, retention`;
+  stages never reached in a successful build end `skipped`. `progress` is the mean over stages.
+  `GET /admin/api/jobs` → `{jobs:[…]}` newest first; `GET /admin/api/jobs/{id}` → job + `log:[{job_id,t,level:"debug"|"info"|"warn"|"error",msg}]` (tail, `?tail=n`);
+  `POST /admin/api/jobs/{id}/cancel` → 204 (409 if not queued/running).
+- `GET /admin/api/events` (SSE): named events `job` (data: job), `log` (data: log line), `generation` (data: `{id,previous}` when a generation goes live). The current job is sent on connect.
+- `GET /admin/api/generations` → `{generations:[{id,created_at,status:"live"|"kept",manifest:{regions:[{id,name,data_date,bbox}],sizes:{basemap,terrain,routing,total},timings:{stage:seconds},checks:[{name,ok,detail?}],raw}}]}`
+  (generations on disk; `manifest` is normalised from the pipeline's `manifest.json`, which is in `raw`; sizes are measured on disk).
+- `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,refresh_downloads,regions:[{id,enabled}]}` (cron 5-field, UTC; PUT fields optional, 400 `bad_cron`)
+  + *extra* `next_run,last_run,upcoming:[5 times],default_cron,timezone,history`.
+- `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}` (revoked keys left out; `?revoked=1` includes them with `revoked_at`).
+  `POST` `{label,rpm?,rpd?,origins?}` (null = unlimited) → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` (same fields) `/admin/api/keys/{id}` → key; `DELETE` → 204 (revoked at once).
+- `GET /admin/api/stats?days=30` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state:"running"|"starting"|"restarting"|"stopped",pid|null,uptime_s,restarts,rss_bytes}]}`
+  (+ *extra* disk `raster_cache_bytes,pack_cache_bytes,database_bytes`, process `detail,healthy`). Usage kinds map to buckets: tile→tiles, raster→raster, pack→packs, elevation→elevation, everything else (route, matrix, snap, isochrone, valhalla, compat)→routes; `raster-internal` is not shown. `key_id` "0" is the admin UI.
+- `GET /admin/api/system` → `{version,commit,build_date,components:[{name,version}],ready,readiness:[{name,ok,detail?}],disk:{free_bytes,total_bytes},current_generation|null,attribution:[{name,license,url?,note?}],imagery_source:{name,attribution}|null}`
+  + *extra* `styles:[{id,name,description,dark}],elevation_sources,platform,data_dir,process`.
+- `GET /admin/api/history?kind=&limit=` → `{history:[{id,at,kind,ok,message,job_id?,generation?,details?}]}`; `POST /admin/api/system/restart/{name}` → 204.
+- Keyed endpoints as the UI calls them: `POST /api/v1/route` → GeoJSON Feature (`geometry` LineString, `properties` = `{distance_m,duration_s,surface_breakdown_m,legs}`); the client flattens it.
+  Route errors use codes `no_road` / `no_route`. `POST /api/v1/elevation` → `{results:[sample]}`; `POST /api/v1/elevation/profile` → the `elevation.Profile` JSON.

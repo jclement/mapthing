@@ -2,11 +2,13 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/store"
+	"github.com/jclement/mapthing/internal/supervisor"
 	"github.com/jclement/mapthing/internal/tiles"
 )
 
@@ -127,34 +130,122 @@ func (s *Server) process() map[string]any {
 	}
 }
 
-type dayRow struct {
-	Day    string           `json:"day"`
-	Total  int64            `json:"total"`
-	ByKind map[string]int64 `json:"by_kind"`
+// uiKind maps a usage kind to the admin UI's request bucket ("" = not shown).
+func uiKind(kind string) string {
+	switch {
+	case kind == "tile":
+		return "tiles"
+	case kind == "raster":
+		return "raster"
+	case kind == "pack":
+		return "packs"
+	case strings.HasPrefix(kind, "elevation"):
+		return "elevation"
+	case kind == "raster-internal":
+		return ""
+	default: // route, matrix, snap, isochrone, valhalla, compat
+		return "routes"
+	}
 }
 
-type keyRow struct {
-	KeyID  int64            `json:"key_id"`
-	Label  string           `json:"label"`
-	Prefix string           `json:"prefix,omitempty"`
-	Total  int64            `json:"total"`
-	ByKind map[string]int64 `json:"by_kind"`
+var uiKinds = []string{"tiles", "raster", "routes", "elevation", "packs"}
+
+// memInfo reads total and used system memory from /proc/meminfo (Linux).
+func memInfo() (used, total int64) {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0, 0
+	}
+	defer func() { _ = f.Close() }()
+	vals := map[string]int64{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		k, rest, ok := strings.Cut(sc.Text(), ":")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) > 0 {
+			n, _ := strconv.ParseInt(fields[0], 10, 64)
+			vals[k] = n * 1024
+		}
+	}
+	return vals["MemTotal"] - vals["MemAvailable"], vals["MemTotal"]
 }
 
-type cacheRow struct {
-	Hits    int64   `json:"hits"`
-	Misses  int64   `json:"misses"`
-	HitRate float64 `json:"hit_rate"`
-	Bytes   int64   `json:"bytes"`
+func pidRSS(pid int) int64 {
+	if pid <= 0 {
+		return 0
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(line, "VmRSS:"); ok {
+			if f := strings.Fields(rest); len(f) > 0 {
+				kb, _ := strconv.ParseInt(f[0], 10, 64)
+				return kb * 1024
+			}
+		}
+	}
+	return 0
 }
 
-// stats: GET /admin/api/stats?days=30
+type processJSON struct {
+	Name     string `json:"name"`
+	State    string `json:"state"` // running | starting | restarting | stopped
+	Detail   string `json:"detail,omitempty"`
+	PID      *int   `json:"pid"`
+	UptimeS  int64  `json:"uptime_s"`
+	Restarts int    `json:"restarts"`
+	RSSBytes int64  `json:"rss_bytes"`
+	Healthy  bool   `json:"healthy"`
+}
+
+func (s *Server) processes() []processJSON {
+	out := []processJSON{}
+	if s.d.Supervisor == nil {
+		return out
+	}
+	for _, c := range s.d.Supervisor.Statuses() {
+		p := processJSON{Name: c.Name, Restarts: c.Restarts, Detail: c.Message, Healthy: c.Healthy}
+		switch c.State {
+		case supervisor.StateRunning, supervisor.StateUnhealthy:
+			p.State = "running"
+		case supervisor.StateStarting:
+			p.State = "starting"
+		case supervisor.StateBackoff:
+			p.State = "restarting"
+		default: // stopped, unavailable, waiting
+			p.State = "stopped"
+			if p.Detail == "" {
+				p.Detail = c.State
+			} else {
+				p.Detail = c.State + ": " + p.Detail
+			}
+		}
+		if c.PID > 0 {
+			pid := c.PID
+			p.PID = &pid
+			p.RSSBytes = pidRSS(pid)
+			if c.StartedAt != nil {
+				p.UptimeS = int64(time.Since(*c.StartedAt).Seconds())
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// stats: GET /admin/api/stats?days=30 (shape: docs/architecture.md, Admin API shapes).
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
 	if days <= 0 || days > 366 {
 		days = 30
 	}
-	since := time.Now().UTC().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
+	now := time.Now().UTC()
+	since := now.AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	usage, err := s.d.Store.UsageSince(r.Context(), since)
 	if err != nil {
 		storeError(w, r, err)
@@ -177,114 +268,129 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
-	labels := map[int64]*store.APIKey{}
+	labels := map[int64]string{}
 	for _, k := range keyList {
-		labels[k.ID] = k
+		labels[k.ID] = k.Label
 	}
 
-	byDay := map[string]*dayRow{}
-	byKey := map[int64]*keyRow{}
-	byKind := map[string]int64{}
-	var total int64
+	daily := make([]map[string]any, days)
+	dayIdx := map[string]int{}
+	for i := range days {
+		d := now.AddDate(0, 0, -(days - 1 - i)).Format("2006-01-02")
+		dayIdx[d] = i
+		row := map[string]any{"date": d}
+		for _, k := range uiKinds {
+			row[k] = int64(0)
+		}
+		daily[i] = row
+	}
+	byKey := map[int64]int64{}
 	for _, u := range usage {
-		if u.Day < since {
+		bucket := uiKind(u.Kind)
+		if bucket == "" {
 			continue
 		}
-		d := byDay[u.Day]
-		if d == nil {
-			d = &dayRow{Day: u.Day, ByKind: map[string]int64{}}
-			byDay[u.Day] = d
-		}
-		d.Total += u.Count
-		d.ByKind[u.Kind] += u.Count
-		k := byKey[u.KeyID]
-		if k == nil {
-			k = &keyRow{KeyID: u.KeyID, ByKind: map[string]int64{}, Label: "admin session"}
-			if ak := labels[u.KeyID]; ak != nil {
-				k.Label, k.Prefix = ak.Label, ak.Prefix
-			} else if u.KeyID != 0 {
-				k.Label = "deleted key"
-			}
-			byKey[u.KeyID] = k
-		}
-		k.Total += u.Count
-		k.ByKind[u.Kind] += u.Count
-		byKind[u.Kind] += u.Count
-		total += u.Count
-	}
-	// a dense day series (zeros included) is easier to chart
-	dayList := make([]*dayRow, 0, days)
-	for i := days - 1; i >= 0; i-- {
-		day := time.Now().UTC().AddDate(0, 0, -i).Format("2006-01-02")
-		if d := byDay[day]; d != nil {
-			dayList = append(dayList, d)
-		} else {
-			dayList = append(dayList, &dayRow{Day: day, ByKind: map[string]int64{}})
+		if i, ok := dayIdx[u.Day]; ok {
+			daily[i][bucket] = daily[i][bucket].(int64) + u.Count
+			byKey[u.KeyID] += u.Count
 		}
 	}
-	keyRows := make([]*keyRow, 0, len(byKey))
-	for _, k := range byKey {
-		keyRows = append(keyRows, k)
+	type keyRow struct {
+		KeyID    string `json:"key_id"`
+		Label    string `json:"label"`
+		Requests int64  `json:"requests"`
 	}
-	sort.Slice(keyRows, func(i, j int) bool { return keyRows[i].Total > keyRows[j].Total })
+	keyRows := []keyRow{}
+	for id, n := range byKey {
+		label, ok := labels[id]
+		switch {
+		case id == 0:
+			label = "Admin UI"
+		case !ok:
+			label = "deleted key"
+		}
+		keyRows = append(keyRows, keyRow{KeyID: strconv.FormatInt(id, 10), Label: label, Requests: n})
+	}
+	sort.Slice(keyRows, func(i, j int) bool { return keyRows[i].Requests > keyRows[j].Requests })
 
-	cacheOut := map[string]*cacheRow{}
-	for _, name := range []string{"raster", "imagery", "pack"} {
-		cacheOut[name] = &cacheRow{}
-	}
-	for _, c := range caches {
-		if c.Day < since {
-			continue
-		}
-		cr := cacheOut[c.Cache]
-		if cr == nil {
-			cr = &cacheRow{}
-			cacheOut[c.Cache] = cr
-		}
-		cr.Hits += c.Hits
-		cr.Misses += c.Misses
+	type cacheRow struct {
+		Name      string `json:"name"`
+		Hits      int64  `json:"hits"`
+		Misses    int64  `json:"misses"`
+		SizeBytes int64  `json:"size_bytes"`
 	}
 	var sizes map[string]int64
 	if s.d.Tiles != nil {
 		sizes = s.d.Tiles.CacheSizes()
 	}
-	for name, cr := range cacheOut {
-		if n := cr.Hits + cr.Misses; n > 0 {
-			cr.HitRate = float64(cr.Hits) / float64(n)
+	cacheMap := map[string]*cacheRow{}
+	for _, name := range []string{"raster", "imagery", "pack"} {
+		cacheMap[name] = &cacheRow{Name: name, SizeBytes: sizes[name]}
+	}
+	for _, c := range caches {
+		cr := cacheMap[c.Cache]
+		if cr == nil {
+			cr = &cacheRow{Name: c.Cache, SizeBytes: sizes[c.Cache]}
+			cacheMap[c.Cache] = cr
 		}
-		cr.Bytes = sizes[name]
+		cr.Hits += c.Hits
+		cr.Misses += c.Misses
 	}
-	sinceStart, _ := s.d.Stats.Totals()
-	resp := map[string]any{
-		"days":          days,
-		"since":         since,
-		"total":         total,
-		"by_day":        dayList,
-		"by_key":        keyRows,
-		"by_kind":       byKind,
-		"since_start":   sinceStart,
-		"cache":         cacheOut,
-		"disk":          s.diskCtl.get(),
-		"process":       s.process(),
-		"subprocesses":  s.children(),
-		"generation":    s.generation(),
-		"sse_listeners": s.d.Jobs.Hub().Subscribers(),
+	cacheRows := []cacheRow{}
+	for _, cr := range cacheMap {
+		cacheRows = append(cacheRows, *cr)
 	}
-	writeJSON(w, http.StatusOK, resp)
-}
+	sort.Slice(cacheRows, func(i, j int) bool { return cacheRows[i].Name < cacheRows[j].Name })
 
-func (s *Server) children() any {
-	if s.d.Supervisor == nil {
-		return []any{}
+	disk := s.diskCtl.get()
+	type idBytes struct {
+		ID    string `json:"id"`
+		Name  string `json:"name,omitempty"`
+		Bytes int64  `json:"bytes"`
 	}
-	return s.d.Supervisor.Statuses()
-}
+	gens := []idBytes{}
+	for id, n := range disk.Generations {
+		gens = append(gens, idBytes{ID: id, Bytes: n})
+	}
+	sort.Slice(gens, func(i, j int) bool { return gens[i].ID > gens[j].ID })
+	names := map[string]string{}
+	if rs, err := s.d.Store.Regions(r.Context()); err == nil {
+		for _, rg := range rs {
+			names[rg.ID] = rg.Name
+		}
+	}
+	regions := []idBytes{}
+	var downloads int64
+	for id, n := range disk.Downloads {
+		downloads += n
+		name := names[id]
+		if name == "" {
+			name = id
+		}
+		regions = append(regions, idBytes{ID: id, Name: name, Bytes: n})
+	}
+	sort.Slice(regions, func(i, j int) bool { return regions[i].Bytes > regions[j].Bytes })
+	used, total := memInfo()
 
-func (s *Server) generation() string {
-	if s.d.Tiles == nil {
-		return ""
-	}
-	return s.d.Tiles.Generation()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"daily":  daily,
+		"by_key": keyRows,
+		"cache":  cacheRows,
+		"disk": map[string]any{
+			"generations":           gens,
+			"regions":               regions,
+			"downloads_bytes":       downloads,
+			"elevation_cache_bytes": disk.Elevation,
+			"imagery_cache_bytes":   sizes["imagery"],
+			"raster_cache_bytes":    sizes["raster"],
+			"pack_cache_bytes":      sizes["pack"],
+			"database_bytes":        disk.Database,
+			"free_bytes":            disk.FreeBytes,
+			"total_bytes":           disk.TotalBytes,
+		},
+		"memory":    map[string]any{"process_rss_bytes": rssBytes(), "system_used_bytes": used, "system_total_bytes": total},
+		"processes": s.processes(),
+	})
 }
 
 // Attribution is the data attribution shown in the UI footer and the README.
@@ -294,28 +400,134 @@ var Attribution = []map[string]string{
 	{"name": "Natural Resources Canada", "license": "Open Government Licence – Canada", "url": "https://open.canada.ca/en/open-government-licence-canada"},
 	{"name": "Province of British Columbia", "license": "Open Government Licence – British Columbia", "url": "https://www2.gov.bc.ca/gov/content/data/open-data/open-government-licence-bc"},
 	{"name": "Government of Alberta", "license": "Open Government Licence – Alberta", "url": "https://open.alberta.ca/licence"},
-	{"name": "Copernicus DEM © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018", "license": "Copernicus DEM licence", "url": "https://spacedata.copernicus.eu/"},
+	{"name": "Copernicus DEM", "license": "Copernicus DEM licence", "url": "https://spacedata.copernicus.eu/", "note": "© DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018"},
 }
 
-// system: GET /admin/api/system
+// Commit and BuildDate are set at build time with -ldflags -X (else read from the Go build info).
+var (
+	Commit    = ""
+	BuildDate = ""
+)
+
+func buildInfo() (commit, date string) {
+	commit, date = Commit, BuildDate
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, st := range bi.Settings {
+			switch st.Key {
+			case "vcs.revision":
+				if commit == "" {
+					commit = st.Value
+				}
+			case "vcs.time":
+				if date == "" {
+					date = st.Value
+				}
+			}
+		}
+	}
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
+	return commit, date
+}
+
+type readinessJSON struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// readiness evaluates the same checks as /readyz.
+func (s *Server) readiness(ctx context.Context) (bool, []readinessJSON) {
+	out := []readinessJSON{}
+	ready := true
+	if s.d.Tiles != nil {
+		gen := s.d.Tiles.Generation()
+		ok := s.d.Tiles.Ready()
+		detail := "live generation " + gen
+		if !ok {
+			detail = "no map data has been built yet"
+		}
+		out = append(out, readinessJSON{Name: "map data", OK: ok, Detail: detail})
+		ready = ready && ok
+	}
+	if s.d.Supervisor != nil {
+		for _, c := range s.d.Supervisor.Statuses() {
+			ok := c.State == supervisor.StateRunning && c.Healthy
+			detail := c.State
+			if c.Message != "" {
+				detail += ": " + c.Message
+			}
+			if c.State != supervisor.StateUnavailable {
+				ready = ready && ok
+			}
+			out = append(out, readinessJSON{Name: c.Name, OK: ok, Detail: detail})
+		}
+	}
+	names := make([]string, 0, len(s.d.ReadyChecks))
+	for n := range s.d.ReadyChecks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for _, n := range names {
+		ok := s.d.ReadyChecks[n](cctx)
+		ready = ready && ok
+		out = append(out, readinessJSON{Name: n, OK: ok})
+	}
+	return ready, out
+}
+
+// system: GET /admin/api/system (also the UI's session probe).
 func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 	disk := s.diskCtl.get()
+	commit, date := buildInfo()
+	ready, readiness := s.readiness(r.Context())
+	components := []map[string]string{
+		{"name": "mapthing", "version": Version},
+		{"name": "Go", "version": runtime.Version()},
+	}
+	for _, c := range s.processes() {
+		components = append(components, map[string]string{"name": c.Name, "version": c.State})
+	}
+	var gen any
+	if g := s.generation(); g != "" {
+		gen = g
+	}
 	resp := map[string]any{
-		"version":      Version,
-		"go_version":   runtime.Version(),
-		"platform":     runtime.GOOS + "/" + runtime.GOARCH,
-		"process":      s.process(),
-		"disk":         map[string]any{"total_bytes": disk.TotalBytes, "free_bytes": disk.FreeBytes},
-		"data_dir":     s.d.DataDir,
-		"generation":   s.generation(),
-		"subprocesses": s.children(),
-		"styles":       tiles.Styles(s.d.Assets),
-		"attribution":  Attribution,
-		"imagery":      map[string]any{"attribution": tiles.ImageryAttribution()},
-		"build_job":    s.d.Jobs.Registered("build"),
+		"version":            Version,
+		"commit":             commit,
+		"build_date":         date,
+		"components":         components,
+		"ready":              ready,
+		"readiness":          readiness,
+		"disk":               map[string]any{"free_bytes": disk.FreeBytes, "total_bytes": disk.TotalBytes},
+		"current_generation": gen,
+		"attribution":        Attribution,
+		"imagery_source":     map[string]any{"name": s.imageryName(), "attribution": tiles.ImageryAttribution()},
+		// extras
+		"styles":   tiles.Styles(s.d.Assets),
+		"platform": runtime.GOOS + "/" + runtime.GOARCH,
+		"data_dir": s.d.DataDir,
+		"process":  s.process(),
 	}
 	if s.d.ElevationSources != nil {
 		resp["elevation_sources"] = s.d.ElevationSources()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) imageryName() string {
+	if os.Getenv("MAPTHING_IMAGERY_URL") != "" {
+		return "Custom imagery"
+	}
+	return "USGS The National Map / Sentinel-2 cloudless"
+}
+
+func (s *Server) generation() string {
+	if s.d.Tiles == nil {
+		return ""
+	}
+	return s.d.Tiles.Generation()
 }

@@ -29,14 +29,17 @@ import * as fmt from "../lib/format";
 import { useApi } from "../lib/useApi";
 
 const STAGE_LABEL: Record<StageName, string> = {
+  guard: "Preflight checks",
   download: "Download extracts",
   merge: "Merge",
   basemap: "Vector basemap",
-  routing: "Routing graph",
-  elevation: "Elevation tiles",
+  valhalla: "Routing graph",
+  terrain: "Elevation tiles",
   verify: "Verify",
   swap: "Go live",
+  retention: "Clean up old builds",
 };
+const stageLabel = (n: string) => STAGE_LABEL[n as StageName] ?? n;
 
 function secs(a?: string, b?: string) {
   if (!a) return undefined;
@@ -79,7 +82,7 @@ function Stages({ job }: { job: Job }) {
             <div className="min-w-0">
               <div className="flex items-center justify-between gap-2 text-[13px]">
                 <span className={cx(s.status === "pending" && "text-muted")}>
-                  {STAGE_LABEL[s.name]}
+                  {stageLabel(s.name)}
                 </span>
                 {s.detail && <span className="truncate text-xs text-faint">{s.detail}</span>}
               </div>
@@ -237,7 +240,7 @@ function GenerationCard({ g }: { g: Generation }) {
           {Object.entries(m.timings).map(([k, v], i) => (
             <div
               key={k}
-              title={`${STAGE_LABEL[k as StageName]}: ${fmt.duration(v ?? 0)}`}
+              title={`${stageLabel(k)}: ${fmt.duration(v ?? 0)}`}
               style={{
                 width: `${((v ?? 0) / (totalT || 1)) * 100}%`,
                 background: colors[i % colors.length],

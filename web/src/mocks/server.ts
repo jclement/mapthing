@@ -77,22 +77,26 @@ export function resetMock(opts: MockOptions = {}) {
 }
 
 const STAGES: StageName[] = [
+  "guard",
   "download",
   "merge",
   "basemap",
-  "routing",
-  "elevation",
+  "valhalla",
+  "terrain",
   "verify",
   "swap",
+  "retention",
 ];
 const STAGE_WEIGHT: Record<StageName, number> = {
-  download: 0.12,
+  guard: 0.005,
+  download: 0.115,
   merge: 0.04,
   basemap: 0.24,
-  routing: 0.26,
-  elevation: 0.28,
+  valhalla: 0.26,
+  terrain: 0.28,
   verify: 0.05,
-  swap: 0.01,
+  swap: 0.005,
+  retention: 0.005,
 };
 
 function ago(days: number) {
@@ -137,19 +141,19 @@ function failedJob(id: string, daysAgo: number): Job {
     download: 230,
     merge: 50,
     basemap: 1500,
-    routing: 410,
+    valhalla: 410,
   });
   j.status = "failed";
   j.generation_id = undefined;
-  j.error = "routing: valhalla_build_tiles exited with status 137 (out of memory)";
+  j.error = "valhalla: valhalla_build_tiles exited with status 137 (out of memory)";
   j.stages = j.stages.map((s) =>
-    s.name === "routing"
+    s.name === "valhalla"
       ? { ...s, status: "failed", progress: 0.38, detail: "exit status 137" }
-      : STAGES.indexOf(s.name) > STAGES.indexOf("routing")
+      : STAGES.indexOf(s.name) > STAGES.indexOf("valhalla")
         ? { name: s.name, status: "pending", progress: 0 }
         : s,
   );
-  j.finished_at = j.stages.find((s) => s.name === "routing")?.finished_at;
+  j.finished_at = j.stages.find((s) => s.name === "valhalla")?.finished_at;
   return j;
 }
 
@@ -167,6 +171,10 @@ function log(job: Job, msg: string, level: LogLine["level"] = "info") {
 }
 
 const STAGE_LOGS: Record<StageName, string[]> = {
+  guard: [
+    "guard: 31.4 GB free, estimated need 9.8 GB",
+    "guard: tools ok (osmium, planetiler, valhalla)",
+  ],
   download: [
     "fetching %r.osm.pbf from download.geofabrik.de",
     "%r: 41% (182 MB / 446 MB) 38 MB/s",
@@ -179,19 +187,20 @@ const STAGE_LOGS: Record<StageName, string[]> = {
     "planetiler: [osm_pass2] 61% features: 18M",
     "planetiler: [mbtiles] tiles: 4.2M z15 bytes: 1.3G",
   ],
-  routing: [
+  valhalla: [
     "valhalla_build_tiles: parsing ways",
     "valhalla_build_tiles: building graph (level 2, 214 tiles)",
     "valhalla_build_tiles: adding elevation to edges",
     "valhalla_build_tiles: validating and building shortcuts",
   ],
-  elevation: [
+  terrain: [
     "terrain: sources usgs-3dep-10m (cached), nrcan-hrdem (3 new tiles)",
     "terrain: gdalwarp → EPSG:3857, zoom 13",
     "terrain: encoding terrarium tiles 47%",
   ],
   verify: ["verify: tiles 9/9 ok", "verify: routes 3/3 ok", "verify: elevation 3/3 ok"],
   swap: ["swap: current → generations/%g", "supervisor: restarting valhalla_service, renderer"],
+  retention: ["retention: keeping 2 generations, removed 1"],
 };
 
 function startBuild(refresh: boolean, trigger: Job["trigger"] = "manual"): Job {
@@ -272,8 +281,8 @@ function tick() {
           download: 41,
           merge: 6,
           basemap: 182,
-          routing: 240,
-          elevation: 300,
+          valhalla: 240,
+          terrain: 300,
           verify: 9,
           swap: 1,
         },
@@ -631,16 +640,19 @@ on("POST", /^\/api\/v1\/route$/, (_m, b) => {
   const dist = legs.reduce((s, l) => s + l.distance_m, 0);
   const unpaved = req.avoid_unpaved ? 0.04 : 0.27;
   return {
+    type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
-    distance_m: dist,
-    duration_s: legs.reduce((s, l) => s + l.duration_s, 0),
-    surface_breakdown_m: {
-      paved: dist * (1 - unpaved - 0.03),
-      gravel: dist * unpaved * 0.7,
-      dirt: dist * unpaved * 0.3,
-      unknown: dist * 0.03,
+    properties: {
+      distance_m: dist,
+      duration_s: legs.reduce((s, l) => s + l.duration_s, 0),
+      surface_breakdown_m: {
+        paved: dist * (1 - unpaved - 0.03),
+        gravel: dist * unpaved * 0.7,
+        dirt: dist * unpaved * 0.3,
+        unknown: dist * 0.03,
+      },
+      legs,
     },
-    legs,
   };
 });
 on("POST", /^\/api\/v1\/elevation$/, (_m, b) => ({

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -52,6 +53,7 @@ var testAssets = fstest.MapFS{
 "sources":{"protomaps":{"type":"vector","url":"{{BASE_URL}}/tiles/basemap.json{{KEY_QS}}"},"imagery":{"type":"raster","tiles":["{{BASE_URL}}/tiles/imagery/{z}/{x}/{y}.jpg{{KEY_QS}}"],"attribution":"built-in"}},
 "layers":[{"id":"satellite","type":"raster","source":"imagery","layout":{"visibility":"none"}}]}`)},
 	"styles/outdoors-dark.json":         {Data: []byte(`{"version":8,"layers":[]}`)},
+	"styles/satellite.json":             {Data: []byte(`{"version":8,"layers":[]}`)},
 	"fonts/Noto Sans Regular/0-255.pbf": {Data: []byte("glyphs")},
 	"sprites/outdoors@2x.png":           {Data: []byte("\x89PNG")},
 	"sprites/outdoors.json":             {Data: []byte(`{}`)},
@@ -129,7 +131,7 @@ func newEnv(t *testing.T, withGeneration bool) *env {
 			t.Fatal(err)
 		}
 		writeFixture(t, filepath.Join(gdir, "basemap.pmtiles"))
-		if err := os.WriteFile(filepath.Join(gdir, "manifest.json"), []byte(`{"regions":["us/delaware"]}`), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(gdir, "manifest.json"), []byte(`{"generation":"g1","ok":true,"regions":[{"id":"us/delaware","name":"Delaware","bbox":[-75.8,38.4,-75.0,39.9],"source_timestamp":"2026-11-07T20:21:02Z"}],"stages":[{"name":"basemap","duration_s":12.5}],"checks":[{"name":"tile","region":"us/delaware","ok":true}]}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(filepath.Join("generations", "g1"), filepath.Join(dir, "current")); err != nil {
@@ -159,7 +161,7 @@ func newEnv(t *testing.T, withGeneration bool) *env {
 	}
 	sup := supervisor.New("")
 	srv := New(Deps{DataDir: dir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner, Scheduler: sched,
-		Supervisor: sup, Tiles: ts, Assets: testAssets, UI: fstest.MapFS{"index.html": {Data: []byte("<html>ui</html>")}}})
+		Supervisor: sup, Tiles: ts, Assets: testAssets, UI: fstest.MapFS{"index.html": {Data: []byte("<html>ui</html>")}, "assets/app-123.js": {Data: []byte("js")}}})
 	if err := runner.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -218,12 +220,13 @@ func (e *env) createKey(c *http.Client, body map[string]any) (int64, string) {
 	}
 	var out struct {
 		Key struct {
-			ID int64 `json:"id"`
+			ID string `json:"id"`
 		} `json:"key"`
 		Secret string `json:"secret"`
 	}
 	_ = json.Unmarshal(b, &out)
-	return out.Key.ID, out.Secret
+	id, _ := strconv.ParseInt(out.Key.ID, 10, 64)
+	return id, out.Secret
 }
 
 func TestHealth(t *testing.T) {
@@ -360,8 +363,14 @@ func TestKeysLifecycle(t *testing.T) {
 		t.Fatalf("edit: %d %s", r.StatusCode, b)
 	}
 	// revoke
-	if r, _ := e.do(c, "DELETE", fmt.Sprintf("/admin/api/keys/%d", id), nil, map[string]string{"Origin": e.ts.URL}); r.StatusCode != 200 {
+	if r, _ := e.do(c, "DELETE", fmt.Sprintf("/admin/api/keys/%d", id), nil, map[string]string{"Origin": e.ts.URL}); r.StatusCode != 204 {
 		t.Fatalf("revoke: %d", r.StatusCode)
+	}
+	if _, b := e.do(c, "GET", "/admin/api/keys", nil, nil); strings.Contains(string(b), "renamed") {
+		t.Fatalf("revoked key still listed: %s", b)
+	}
+	if _, b := e.do(c, "GET", "/admin/api/keys?revoked=1", nil, nil); !strings.Contains(string(b), `"revoked_at"`) {
+		t.Fatalf("revoked=1: %s", b)
 	}
 	if r, _ := e.do(nil, "GET", "/tiles/basemap.json?key="+secret, nil, nil); r.StatusCode != 401 {
 		t.Fatalf("revoked key: %d", r.StatusCode)
@@ -371,7 +380,7 @@ func TestKeysLifecycle(t *testing.T) {
 func TestKeyLimits(t *testing.T) {
 	e := newEnv(t, true)
 	c := e.login()
-	_, secret := e.createKey(c, map[string]any{"label": "rpm", "limits": map[string]any{"rpm": 3}})
+	_, secret := e.createKey(c, map[string]any{"label": "rpm", "rpm": 3})
 	for i := range 3 {
 		if r, _ := e.do(nil, "GET", "/tiles/basemap.json?key="+secret, nil, nil); r.StatusCode != 200 {
 			t.Fatalf("request %d: %d", i, r.StatusCode)
@@ -382,14 +391,14 @@ func TestKeyLimits(t *testing.T) {
 		t.Fatalf("rpm exceeded: %d %s", r.StatusCode, b)
 	}
 
-	_, daily := e.createKey(c, map[string]any{"label": "rpd", "limits": map[string]any{"rpd": 2}})
+	_, daily := e.createKey(c, map[string]any{"label": "rpd", "rpd": 2, "rpm": nil})
 	e.do(nil, "GET", "/tiles/basemap.json?key="+daily, nil, nil)
 	e.do(nil, "GET", "/tiles/basemap.json?key="+daily, nil, nil)
 	if r, _ := e.do(nil, "GET", "/tiles/basemap.json?key="+daily, nil, nil); r.StatusCode != 429 {
 		t.Fatalf("rpd exceeded: %d", r.StatusCode)
 	}
 
-	_, origin := e.createKey(c, map[string]any{"label": "web", "limits": map[string]any{"allowed_origins": []string{"https://app.example.com", "*.example.org"}}})
+	_, origin := e.createKey(c, map[string]any{"label": "web", "origins": []string{"https://app.example.com", "*.example.org"}})
 	cases := []struct {
 		hdr  map[string]string
 		want int
@@ -571,7 +580,7 @@ func TestStylesAndAssets(t *testing.T) {
 	_, lb := e.do(nil, "GET", "/styles"+q, nil, nil)
 	var list []tiles.StyleInfo
 	_ = json.Unmarshal(lb, &list)
-	if len(list) != 2 || list[0].ID != "outdoors" || list[0].Description != "Topo" || !list[1].Dark {
+	if len(list) != 3 || list[0].ID != "outdoors" || list[0].Description != "Topo" || !list[1].Dark || list[2].ID != "satellite" {
 		t.Fatalf("style list: %s", lb)
 	}
 	// admin system lists them too
@@ -606,14 +615,23 @@ func TestStylesAndAssets(t *testing.T) {
 
 func TestRasterProxyAndCache(t *testing.T) {
 	calls := 0
+	var paths []string
 	renderer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.URL.Path != "/render/outdoors/512/3/2/1@2x.png" {
+		paths = append(paths, r.URL.Path)
+		switch {
+		case r.URL.Path == "/render/outdoors/512/3/2/1@2x.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("\x89PNG fake"))
+		case strings.HasSuffix(r.URL.Path, ".jpg"):
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte("\xff\xd8\xff fake"))
+		case strings.HasSuffix(r.URL.Path, ".webp"):
+			w.Header().Set("Content-Type", "image/webp")
+			_, _ = w.Write([]byte("RIFF fake"))
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("\x89PNG fake"))
 	}))
 	defer renderer.Close()
 	e := newEnv(t, true)
@@ -649,13 +667,36 @@ func TestRasterProxyAndCache(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("renderer called %d times, want 1 (cache)", calls)
 	}
+	calls = 0
+	// formats: explicit extension; the Mapbox-shaped URL defaults to jpg for satellite
+	formats := []struct{ path, ct, upstream string }{
+		{"/styles/v1/u/satellite/tiles/512/3/2/1@2x", "image/jpeg", "/render/satellite/512/3/2/1@2x.jpg"},
+		{"/styles/outdoors/256/3/2/1.webp", "image/webp", "/render/outdoors/256/3/2/1.webp"},
+		{"/styles/outdoors/256/3/2/1.jpg", "image/jpeg", "/render/outdoors/256/3/2/1.jpg"},
+		{"/styles/outdoors/256/3/2/1.jpeg", "image/jpeg", "/render/outdoors/256/3/2/1.jpg"},
+	}
+	for _, f := range formats {
+		r, _ := get(f.path)
+		if r.StatusCode != 200 || r.Header.Get("Content-Type") != f.ct || paths[len(paths)-1] != f.upstream {
+			t.Fatalf("%s: %d %s via %v", f.path, r.StatusCode, r.Header.Get("Content-Type"), paths)
+		}
+	}
+	// the png of the same tile is a different cache entry (renderer asked again)
+	before := len(paths)
+	get("/styles/v1/u/satellite/tiles/512/3/2/1@2x.png")
+	if len(paths) != before+1 || !strings.HasSuffix(paths[before], "1@2x.png") {
+		t.Fatalf("png variant: %v", paths)
+	}
+	if r, _ := get("/styles/outdoors/256/3/2/1.gif"); r.StatusCode != 400 {
+		t.Fatalf("bad format: %d", r.StatusCode)
+	}
 	if r, _ := get("/styles/outdoors/300/3/2/1.png"); r.StatusCode != 400 {
 		t.Fatalf("bad size: %d", r.StatusCode)
 	}
 	if r, _ := get("/styles/nope/256/3/2/1.png"); r.StatusCode != 404 {
 		t.Fatalf("unknown style: %d", r.StatusCode)
 	}
-	if _, c := e.stats.Totals(); c["raster"] != [2]int64{2, 1} {
+	if _, c := e.stats.Totals(); c["raster"] != [2]int64{3, 5} {
 		t.Fatalf("raster cache stats %v", c["raster"])
 	}
 }
@@ -722,32 +763,64 @@ func TestStatsFlushAndReport(t *testing.T) {
 	e.do(nil, "GET", "/tiles/basemap/0/0/0.mvt?key="+secret, nil, nil) // unflushed, still reported
 	_, b := e.do(c, "GET", "/admin/api/stats?days=7", nil, nil)
 	var rep struct {
-		Total int64                  `json:"total"`
-		ByDay []struct{ Day string } `json:"by_day"`
+		Daily []map[string]any `json:"daily"`
 		ByKey []struct {
-			KeyID int64 `json:"key_id"`
-			Total int64 `json:"total"`
-			Label string
+			KeyID    string `json:"key_id"`
+			Label    string `json:"label"`
+			Requests int64  `json:"requests"`
 		} `json:"by_key"`
-		Process map[string]any `json:"process"`
-		Disk    struct {
-			Generations map[string]int64 `json:"generations"`
+		Cache []struct {
+			Name string `json:"name"`
+		} `json:"cache"`
+		Memory map[string]int64 `json:"memory"`
+		Disk   struct {
+			Generations []struct {
+				ID    string `json:"id"`
+				Bytes int64  `json:"bytes"`
+			} `json:"generations"`
+			FreeBytes int64 `json:"free_bytes"`
 		} `json:"disk"`
+		Processes []any `json:"processes"`
 	}
 	if err := json.Unmarshal(b, &rep); err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.ByDay) != 7 || rep.Disk.Generations["g1"] == 0 || rep.Process["uptime_seconds"] == nil {
+	last := rep.Daily[len(rep.Daily)-1]
+	if len(rep.Daily) != 7 || last["date"] != day || last["tiles"].(float64) != 5 || last["routes"].(float64) != 0 {
+		t.Fatalf("daily: %v", rep.Daily)
+	}
+	if len(rep.Disk.Generations) != 1 || rep.Disk.Generations[0].ID != "g1" || rep.Disk.FreeBytes == 0 || rep.Memory["process_rss_bytes"] == 0 || len(rep.Cache) != 3 {
 		t.Fatalf("stats: %s", b)
 	}
 	found := false
 	for _, k := range rep.ByKey {
-		if k.KeyID == id && k.Total == 5 && k.Label == "counted" {
+		if k.KeyID == strconv.FormatInt(id, 10) && k.Requests == 5 && k.Label == "counted" {
 			found = true
 		}
 	}
 	if !found {
 		t.Fatalf("by_key: %s", b)
+	}
+	// key list usage
+	_, kb := e.do(c, "GET", "/admin/api/keys", nil, nil)
+	var kl struct {
+		Keys []struct {
+			Label string `json:"label"`
+			Usage struct {
+				Today int64   `json:"today"`
+				Total int64   `json:"total"`
+				Daily []int64 `json:"daily"`
+			} `json:"usage"`
+			Limits struct {
+				RPM     *int     `json:"rpm"`
+				Origins []string `json:"origins"`
+			} `json:"limits"`
+		} `json:"keys"`
+	}
+	_ = json.Unmarshal(kb, &kl)
+	if len(kl.Keys) != 1 || kl.Keys[0].Usage.Today != 5 || kl.Keys[0].Usage.Total != 5 || len(kl.Keys[0].Usage.Daily) != 14 ||
+		kl.Keys[0].Usage.Daily[13] != 5 || kl.Keys[0].Limits.RPM != nil || kl.Keys[0].Limits.Origins == nil {
+		t.Fatalf("keys: %s", kb)
 	}
 }
 
@@ -796,8 +869,8 @@ func TestJobsBuildAndSSE(t *testing.T) {
 		}
 	}()
 
-	r, b := e.do(c, "POST", "/admin/api/build", map[string]any{"refresh": true}, map[string]string{"Origin": e.ts.URL})
-	if r.StatusCode != 202 {
+	r, b := e.do(c, "POST", "/admin/api/build", map[string]any{"refresh_downloads": true}, map[string]string{"Origin": e.ts.URL})
+	if r.StatusCode != 202 || !strings.Contains(string(b), `"refresh_downloads":true`) || !strings.Contains(string(b), `"name":"guard","status":"pending"`) {
 		t.Fatalf("build: %d %s", r.StatusCode, b)
 	}
 	if r, _ := e.do(c, "POST", "/admin/api/build", map[string]any{}, map[string]string{"Origin": e.ts.URL}); r.StatusCode != 409 {
@@ -808,10 +881,10 @@ func TestJobsBuildAndSSE(t *testing.T) {
 	for !sawProgress || !sawLog {
 		select {
 		case ev := <-events:
-			if strings.HasPrefix(ev, "job ") && strings.Contains(ev, `"message":"halfway"`) && strings.Contains(ev, `"stage":"download"`) {
+			if strings.HasPrefix(ev, "job ") && strings.Contains(ev, `"name":"download","status":"running","progress":0.5,"detail":"halfway"`) {
 				sawProgress = true
 			}
-			if strings.HasPrefix(ev, "log ") && strings.Contains(ev, "refresh=true") {
+			if strings.HasPrefix(ev, "log ") && strings.Contains(ev, `"msg":"refresh=true"`) && strings.Contains(ev, `"level":"info"`) {
 				sawLog = true
 			}
 		case <-deadline:
@@ -819,15 +892,33 @@ func TestJobsBuildAndSSE(t *testing.T) {
 		}
 	}
 	close(release)
-	var job store.JobRow
+	var job jobs.JobJSON
 	_ = json.Unmarshal(b, &job)
+	jid, _ := strconv.ParseInt(job.ID, 10, 64)
 	waitFor(t, func() bool {
-		j, err := e.st.Job(context.Background(), job.ID)
+		j, err := e.st.Job(context.Background(), jid)
 		return err == nil && j.Status == jobs.StatusSucceeded
 	})
-	_, jb := e.do(c, "GET", fmt.Sprintf("/admin/api/jobs/%d", job.ID), nil, nil)
-	if !strings.Contains(string(jb), "refresh=true") || !strings.Contains(string(jb), `"succeeded"`) {
+	_, jb := e.do(c, "GET", "/admin/api/jobs/"+job.ID, nil, nil)
+	var detail struct {
+		jobs.JobJSON
+		Log []jobs.LogJSON `json:"log"`
+	}
+	_ = json.Unmarshal(jb, &detail)
+	if detail.Status != "succeeded" || detail.Progress != 1 || len(detail.Log) == 0 {
 		t.Fatalf("job detail: %s", jb)
+	}
+	for _, st := range detail.Stages {
+		want := "skipped"
+		if st.Name == "download" {
+			want = "done"
+		}
+		if st.Status != want {
+			t.Fatalf("stage %s: %s (%s)", st.Name, st.Status, jb)
+		}
+	}
+	if _, lb := e.do(c, "GET", "/admin/api/jobs", nil, nil); !strings.Contains(string(lb), `{"jobs":[{"id":"`+job.ID+`"`) {
+		t.Fatalf("jobs list: %s", lb)
 	}
 	_, hb := e.do(c, "GET", "/admin/api/history", nil, nil)
 	if !strings.Contains(string(hb), "build (manual) succeeded") {
@@ -851,14 +942,14 @@ func TestScheduleAndRegions(t *testing.T) {
 	c := e.login()
 	o := map[string]string{"Origin": e.ts.URL}
 	_, b := e.do(c, "GET", "/admin/api/schedule", nil, nil)
-	if !strings.Contains(string(b), `"cron":"0 3 * * 0"`) || !strings.Contains(string(b), `"next_run":"`) {
+	if !strings.Contains(string(b), `"cron":"0 3 * * 0"`) || !strings.Contains(string(b), `"next_run":"`) || !strings.Contains(string(b), `"refresh_downloads":true`) {
 		t.Fatalf("default schedule: %s", b)
 	}
 	if r, _ := e.do(c, "PUT", "/admin/api/schedule", map[string]any{"cron": "not a cron"}, o); r.StatusCode != 400 {
 		t.Fatalf("bad cron: %d", r.StatusCode)
 	}
-	r, b := e.do(c, "PUT", "/admin/api/schedule", map[string]any{"cron": "30 4 * * *", "enabled": true}, o)
-	if r.StatusCode != 200 || !strings.Contains(string(b), "T04:30:00Z") {
+	r, b := e.do(c, "PUT", "/admin/api/schedule", map[string]any{"cron": "30 4 * * *", "enabled": true, "refresh_downloads": false, "next_run": "ignored"}, o)
+	if r.StatusCode != 200 || !strings.Contains(string(b), "T04:30:00Z") || !strings.Contains(string(b), `"refresh_downloads":false`) {
 		t.Fatalf("set schedule: %d %s", r.StatusCode, b)
 	}
 	r, b = e.do(c, "PUT", "/admin/api/schedule", map[string]any{"enabled": false}, o)
@@ -866,27 +957,53 @@ func TestScheduleAndRegions(t *testing.T) {
 		t.Fatalf("disable: %s", b)
 	}
 	// regions
-	if r, b := e.do(c, "POST", "/admin/api/regions", map[string]any{"id": "us/delaware"}, o); r.StatusCode != 201 {
+	r, b = e.do(c, "POST", "/admin/api/regions", map[string]any{"id": "us/delaware"}, o)
+	if r.StatusCode != 201 || !strings.Contains(string(b), `"catalog_id":"us/delaware"`) || !strings.Contains(string(b), `"status":"installed"`) {
 		t.Fatalf("add region: %d %s", r.StatusCode, b)
 	}
-	if r, b := e.do(c, "POST", "/admin/api/regions", map[string]any{"name": "Permian Core", "bbox": []float64{-104, 31, -101, 33}, "parent": "us/texas"}, o); r.StatusCode != 201 || !strings.Contains(string(b), `"custom/permian-core"`) {
+	if r, _ := e.do(c, "POST", "/admin/api/regions", map[string]any{"id": "us/delaware"}, o); r.StatusCode != 409 {
+		t.Fatalf("duplicate region: %d", r.StatusCode)
+	}
+	r, b = e.do(c, "POST", "/admin/api/regions", map[string]any{"name": "Permian Core", "bbox": []float64{-104, 31, -101, 33}}, o)
+	if r.StatusCode != 201 || !strings.Contains(string(b), `"id":"custom/permian-core"`) || !strings.Contains(string(b), `"catalog_id":null`) || !strings.Contains(string(b), `"status":"pending"`) {
 		t.Fatalf("add custom: %d %s", r.StatusCode, b)
+	}
+	r, b = e.do(c, "POST", "/admin/api/regions", map[string]any{"name": "Lease", "polygon": [][2]float64{{-103, 31}, {-102, 31}, {-102, 32}, {-103, 31}}}, o)
+	if r.StatusCode != 201 || !strings.Contains(string(b), `"bbox":[-103,31,-102,32]`) || !strings.Contains(string(b), `"polygon":[[-103,31]`) {
+		t.Fatalf("add polygon: %d %s", r.StatusCode, b)
 	}
 	if r, _ := e.do(c, "POST", "/admin/api/regions", map[string]any{"id": "../etc"}, o); r.StatusCode != 400 {
 		t.Fatalf("bad id: %d", r.StatusCode)
 	}
-	e.do(c, "PUT", "/admin/api/schedule", map[string]any{"regions": map[string]bool{"us/delaware": false}}, o)
-	if _, b := e.do(c, "GET", "/admin/api/regions/us/delaware", nil, nil); !strings.Contains(string(b), `"refresh":false`) {
-		t.Fatalf("region refresh: %s", b)
+	e.do(c, "PUT", "/admin/api/schedule", map[string]any{"regions": []map[string]any{{"id": "us/delaware", "enabled": false}}}, o)
+	if _, b := e.do(c, "GET", "/admin/api/schedule", nil, nil); !strings.Contains(string(b), `{"id":"us/delaware","enabled":false}`) {
+		t.Fatalf("schedule regions: %s", b)
 	}
-	if r, _ := e.do(c, "DELETE", "/admin/api/regions/us/delaware", nil, o); r.StatusCode != 200 {
-		t.Fatalf("delete region: %d", r.StatusCode)
+	if _, b := e.do(c, "GET", "/admin/api/regions", nil, nil); !strings.HasPrefix(string(b), `{"regions":[`) {
+		t.Fatalf("regions list: %s", b)
+	}
+	if r, _ := e.do(c, "DELETE", "/admin/api/regions/us%2Fdelaware", nil, o); r.StatusCode != 204 {
+		t.Fatalf("delete encoded region: %d", r.StatusCode)
 	}
 	if _, b := e.do(c, "GET", "/admin/api/regions", nil, nil); strings.Contains(string(b), "delaware") {
 		t.Fatalf("region not deleted: %s", b)
 	}
-	// generations reflect the disk
-	if _, b := e.do(c, "GET", "/admin/api/generations", nil, nil); !strings.Contains(string(b), `"id":"g1","live":true`) || !strings.Contains(string(b), "us/delaware") {
+	// generations reflect the disk, normalised for the UI
+	_, b = e.do(c, "GET", "/admin/api/generations", nil, nil)
+	var gl struct {
+		Generations []struct {
+			ID       string `json:"id"`
+			Status   string `json:"status"`
+			Manifest struct {
+				Regions []struct{ ID string } `json:"regions"`
+				Sizes   map[string]int64      `json:"sizes"`
+				Checks  []any                 `json:"checks"`
+			} `json:"manifest"`
+		} `json:"generations"`
+	}
+	_ = json.Unmarshal(b, &gl)
+	if len(gl.Generations) != 1 || gl.Generations[0].Status != "live" || gl.Generations[0].Manifest.Regions[0].ID != "us/delaware" ||
+		gl.Generations[0].Manifest.Sizes["basemap"] == 0 || gl.Generations[0].Manifest.Checks == nil {
 		t.Fatalf("generations: %s", b)
 	}
 }
@@ -916,13 +1033,26 @@ func TestGenerationSwap(t *testing.T) {
 
 func TestUIFallback(t *testing.T) {
 	e := newEnv(t, false)
-	for _, p := range []string{"/", "/keys", "/regions/us"} {
-		if r, b := e.do(nil, "GET", p, nil, nil); r.StatusCode != 200 || string(b) != "<html>ui</html>" {
-			t.Fatalf("%s: %d %s", p, r.StatusCode, b)
+	for _, p := range []string{"/admin/", "/admin/keys", "/admin/regions/us"} {
+		if r, b := e.do(nil, "GET", p, nil, nil); r.StatusCode != 200 || string(b) != "<html>ui</html>" || r.Header.Get("Cache-Control") != "no-cache" {
+			t.Fatalf("%s: %d %s %v", p, r.StatusCode, b, r.Header)
 		}
 	}
-	if r, _ := e.do(nil, "GET", "/missing.js", nil, nil); r.StatusCode != 404 {
+	r, b := e.do(nil, "GET", "/admin/assets/app-123.js", nil, nil)
+	if r.StatusCode != 200 || string(b) != "js" || !strings.Contains(r.Header.Get("Cache-Control"), "immutable") {
+		t.Fatalf("asset: %d %q %v", r.StatusCode, b, r.Header)
+	}
+	if r, _ := e.do(nil, "GET", "/admin/missing.js", nil, nil); r.StatusCode != 404 {
 		t.Fatalf("missing asset: %d", r.StatusCode)
+	}
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, p := range []string{"/", "/admin"} {
+		if r, _ := e.do(noRedirect, "GET", p, nil, nil); r.StatusCode != 302 || r.Header.Get("Location") != "/admin/" {
+			t.Fatalf("%s redirect: %d %q", p, r.StatusCode, r.Header.Get("Location"))
+		}
+	}
+	if r, _ := e.do(nil, "GET", "/nope", nil, nil); r.StatusCode != 404 {
+		t.Fatalf("unknown path: %d", r.StatusCode)
 	}
 	if r, _ := e.do(nil, "GET", "/admin/api/nope", nil, nil); r.StatusCode != 401 {
 		t.Fatalf("unknown admin path unauthenticated: %d", r.StatusCode)

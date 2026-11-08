@@ -49,7 +49,7 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 	//		return nil, false
 	//	}
 	//	d.Catalog = func(ctx context.Context) (any, error) { return cat.List(ctx) }
-	//	d.ValidateRegion = cat.Validate
+	//	d.ValidateRegion = func(ctx context.Context, id string) (server.CatalogRegion, error) { … from cat … }
 	//
 	// Elevation (merge), as given by the elevation worker:
 	//

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -21,6 +22,18 @@ type JobRow struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`
+	Stages     []StageRow `json:"stages"`
+	Generation string     `json:"generation"`
+}
+
+// StageRow is one stage of a job.
+type StageRow struct {
+	Name       string     `json:"name"`
+	Status     string     `json:"status"` // pending | running | done | failed | skipped
+	Progress   float64    `json:"progress"`
+	Detail     string     `json:"detail,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 // LogLine is one persisted job log line.
@@ -31,15 +44,17 @@ type LogLine struct {
 	Line  string    `json:"line"`
 }
 
-const jobCols = `id, name, params, trigger, status, stage, pct, message, error, created_at, started_at, finished_at`
+const jobCols = `id, name, params, trigger, status, stage, pct, message, error, created_at, started_at, finished_at, stages, generation`
 
 func scanJob(sc interface{ Scan(...any) error }) (*JobRow, error) {
 	var j JobRow
 	var created int64
 	var started, finished sql.NullInt64
-	if err := sc.Scan(&j.ID, &j.Name, &j.Params, &j.Trigger, &j.Status, &j.Stage, &j.Pct, &j.Message, &j.Error, &created, &started, &finished); err != nil {
+	var stages string
+	if err := sc.Scan(&j.ID, &j.Name, &j.Params, &j.Trigger, &j.Status, &j.Stage, &j.Pct, &j.Message, &j.Error, &created, &started, &finished, &stages, &j.Generation); err != nil {
 		return nil, err
 	}
+	_ = json.Unmarshal([]byte(stages), &j.Stages)
 	j.CreatedAt = time.Unix(created, 0).UTC()
 	j.StartedAt = nullTime(started)
 	j.FinishedAt = nullTime(finished)
@@ -98,8 +113,12 @@ func (s *Store) queryJobs(ctx context.Context, q string, args ...any) ([]*JobRow
 
 // UpdateJob writes a job's mutable fields.
 func (s *Store) UpdateJob(ctx context.Context, j *JobRow) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE jobs SET status = ?, stage = ?, pct = ?, message = ?, error = ?, started_at = ?, finished_at = ? WHERE id = ?`,
-		j.Status, j.Stage, j.Pct, j.Message, j.Error, unixOrNil(j.StartedAt), unixOrNil(j.FinishedAt), j.ID)
+	stages, _ := json.Marshal(j.Stages)
+	if j.Stages == nil {
+		stages = []byte("[]")
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE jobs SET status = ?, stage = ?, pct = ?, message = ?, error = ?, started_at = ?, finished_at = ?, stages = ?, generation = ? WHERE id = ?`,
+		j.Status, j.Stage, j.Pct, j.Message, j.Error, unixOrNil(j.StartedAt), unixOrNil(j.FinishedAt), string(stages), j.Generation, j.ID)
 	return err
 }
 

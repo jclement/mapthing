@@ -15,11 +15,14 @@ var errUpstream = errors.New("upstream unavailable")
 
 // handleRaster serves raster tiles rendered from a style:
 //
-//	/styles/{name}/{size}/{z}/{x}/{y}[@2x].png
+//	/styles/{name}/{size}/{z}/{x}/{y}[@2x].{png|jpg|webp}   (no extension = png)
 //	/styles/v1/{user}/{name}/tiles/{size}/{z}/{x}/{y}[@2x]   (Mapbox Static Tiles shape)
 //	/styles/v1/{user}/{name}/tiles/{z}/{x}/{y}[@2x]          (Mapbox default 512)
 //
-// Tiles come from the renderer (GET {renderer}/render/{name}/{size}/{z}/{x}/{y}[@2x].png) and
+// The Mapbox-shaped URLs take an optional extension; without one they answer jpg for the
+// satellite style and png otherwise, as Mapbox does.
+//
+// Tiles come from the renderer (GET {renderer}/render/{name}/{size}/{z}/{x}/{y}[@2x].{ext}) and
 // are cached on disk per generation.
 func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
@@ -36,8 +39,21 @@ func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	z, x, y, retina, ext, ok := parseZXY(r.PathValue("z"), r.PathValue("x"), r.PathValue("y"))
-	if !ok || z > 22 || (ext != "" && ext != "png") {
+	if !ok || z > 22 {
 		jsonError(w, r, http.StatusBadRequest, "bad_tile", "invalid tile address")
+		return
+	}
+	switch ext {
+	case "png", "jpg", "webp":
+	case "jpeg":
+		ext = "jpg"
+	case "":
+		ext = "png"
+		if r.PathValue("user") != "" && name == "satellite" { // Mapbox-shaped URL
+			ext = "jpg"
+		}
+	default:
+		jsonError(w, r, http.StatusBadRequest, "bad_format", "format must be png, jpg or webp")
 		return
 	}
 	gen := s.Generation()
@@ -49,7 +65,7 @@ func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
 	if retina {
 		scale = "@2x"
 	}
-	tail := fmt.Sprintf("%s/%s/%d/%d/%d%s.png", name, size, z, x, y, scale)
+	tail := fmt.Sprintf("%s/%s/%d/%d/%d%s.%s", name, size, z, x, y, scale, ext)
 	key := gen + "/" + tail
 	p, hit, err := s.raster.Do(key, func() error {
 		ctx, cancel := detach(r.Context(), 90*time.Second)
@@ -83,8 +99,10 @@ func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, r, http.StatusInternalServerError, "internal", "could not render tile")
 		return
 	}
-	serveCached(w, r, p, "image/png", `"`+key+`"`)
+	serveCached(w, r, p, rasterTypes[ext], `"`+key+`"`)
 }
+
+var rasterTypes = map[string]string{"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
 
 // serveCached sends a cached file with tile cache headers.
 func serveCached(w http.ResponseWriter, r *http.Request, path, contentType, etag string) {

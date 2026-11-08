@@ -47,9 +47,9 @@ type Deps struct {
 
 	// Catalog returns the installable region catalog (pipeline). nil → 503 on /admin/api/catalog.
 	Catalog func(ctx context.Context) (any, error)
-	// ValidateRegion checks a catalog region id and returns its display name and parent
+	// ValidateRegion checks a catalog region id and returns what the catalog knows about it
 	// (pipeline). nil → any well-formed id is accepted.
-	ValidateRegion func(ctx context.Context, id string) (name, parent string, err error)
+	ValidateRegion func(ctx context.Context, id string) (CatalogRegion, error)
 	// ElevationSources lists DEM sources of the live generation (elevation). Optional.
 	ElevationSources func() any
 	// ReadyChecks are extra readiness probes (e.g. routing.Router.Ready). name → probe.
@@ -129,7 +129,17 @@ func (s *Server) routes() {
 		mt.Mount(m, a.Wrap)
 	}
 
-	m.Handle("GET /", s.ui())
+	// Admin UI (Vite base "/admin/"). /admin/api/… is matched by the more specific patterns above.
+	m.Handle("GET /admin/", s.ui())
+	m.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/", http.StatusFound)
+	})
+	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/", http.StatusFound)
+	})
+	m.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, r, http.StatusNotFound, "not_found", "not found")
+	})
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -175,19 +185,20 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]any{"ready": ready, "checks": checks, "children": children})
 }
 
-// ui serves the embedded admin UI with an index.html fallback for client-side routes.
+// ui serves the embedded admin UI under /admin/: files as they are (hashed assets under
+// /admin/assets/ cached forever), and index.html (no-cache) for client-side routes.
 func (s *Server) ui() http.Handler {
 	ui := s.d.UI
 	var files http.Handler
 	if ui != nil {
-		files = http.FileServerFS(ui)
+		files = http.StripPrefix("/admin", http.FileServerFS(ui))
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ui == nil {
 			placeholder(w)
 			return
 		}
-		p := strings.TrimPrefix(r.URL.Path, "/")
+		p := strings.TrimPrefix(r.URL.Path, "/admin/")
 		if p != "" {
 			if fi, err := fs.Stat(ui, p); err == nil && !fi.IsDir() {
 				if strings.HasPrefix(p, "assets/") {
@@ -237,8 +248,8 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, msg st
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	// Unknown fields are ignored: clients may send back read-only fields they were given.
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeError(w, r, http.StatusBadRequest, "bad_request", "invalid JSON body: "+err.Error())
 		return false
@@ -310,7 +321,7 @@ func securityHeaders(h http.Handler) http.Handler {
 		if !strings.HasPrefix(r.URL.Path, "/tiles/") && !strings.HasPrefix(r.URL.Path, "/styles/") {
 			hd.Set("Referrer-Policy", "same-origin")
 		}
-		if r.URL.Path == "/" || !strings.Contains(r.URL.Path[1:], "/") || strings.HasPrefix(r.URL.Path, "/assets/") {
+		if strings.HasPrefix(r.URL.Path, "/admin/") && !strings.HasPrefix(r.URL.Path, "/admin/api/") {
 			hd.Set("X-Frame-Options", "DENY")
 		}
 		h.ServeHTTP(w, r)

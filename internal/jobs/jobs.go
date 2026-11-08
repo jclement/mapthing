@@ -66,15 +66,40 @@ func (j *Job) Decode(v any) error {
 	return json.Unmarshal(j.params, v)
 }
 
-// Stage starts a named stage and resets progress to 0.
+// Stage starts a named stage: the previous running stage is marked done.
 func (j *Job) Stage(name string) {
+	now := time.Now().UTC()
 	j.mu.Lock()
 	j.row.Stage = name
 	j.row.Pct = 0
 	j.row.Message = ""
+	idx := -1
+	for i := range j.row.Stages {
+		s := &j.row.Stages[i]
+		if s.Status == "running" {
+			s.Status, s.Progress, s.FinishedAt = "done", 1, &now
+		}
+		if s.Name == name {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		j.row.Stages = append(j.row.Stages, store.StageRow{Name: name, Status: "pending"})
+		idx = len(j.row.Stages) - 1
+	}
+	s := &j.row.Stages[idx]
+	s.Status, s.Progress, s.Detail, s.StartedAt, s.FinishedAt = "running", 0, "", &now, nil
 	j.mu.Unlock()
 	j.flush(true)
 	j.Logf("== stage: %s", name)
+}
+
+// SetGeneration records the generation a build produced.
+func (j *Job) SetGeneration(id string) {
+	j.mu.Lock()
+	j.row.Generation = id
+	j.mu.Unlock()
+	j.flush(true)
 }
 
 // Progress reports progress within the current stage; frac is 0..1.
@@ -88,6 +113,11 @@ func (j *Job) Progress(frac float64, msg string) {
 	j.mu.Lock()
 	j.row.Pct = frac
 	j.row.Message = msg
+	for i := range j.row.Stages {
+		if s := &j.row.Stages[i]; s.Status == "running" {
+			s.Progress, s.Detail = frac, msg
+		}
+	}
 	j.mu.Unlock()
 	j.flush(false)
 }
@@ -100,7 +130,7 @@ func (j *Job) Logf(format string, args ...any) {
 		if err := j.r.st.AppendJobLog(context.WithoutCancel(j.ctx), j.ID, now, l); err != nil {
 			slog.Warn("job log", "job", j.ID, "err", err)
 		}
-		j.r.hub.publish(Event{Type: "log", Data: store.LogLine{JobID: j.ID, At: now.UTC(), Line: l}})
+		j.r.hub.publish(Event{Type: "log", Data: LogView(store.LogLine{JobID: j.ID, At: now.UTC(), Line: l})})
 	}
 }
 
@@ -125,7 +155,7 @@ func (j *Job) flush(force bool) {
 			slog.Warn("job update", "job", j.ID, "err", err)
 		}
 	}
-	j.r.hub.publish(Event{Type: "job", Data: row})
+	j.r.hub.publish(Event{Type: "job", Data: View(row)})
 }
 
 // ErrorDetails extracts history details from a job error (for example the pipeline's
@@ -142,6 +172,7 @@ type Runner struct {
 
 	mu      sync.Mutex
 	funcs   map[string]Func
+	plans   map[string][]string
 	queue   []int64
 	current *Job
 	cancels map[int64]context.CancelFunc
@@ -150,7 +181,7 @@ type Runner struct {
 
 // NewRunner returns a runner backed by st. Call Start to begin processing.
 func NewRunner(st *store.Store) *Runner {
-	return &Runner{st: st, hub: NewHub(), funcs: map[string]Func{}, cancels: map[int64]context.CancelFunc{}, wake: make(chan struct{}, 1)}
+	return &Runner{st: st, hub: NewHub(), funcs: map[string]Func{}, plans: map[string][]string{"build": BuildStages}, cancels: map[int64]context.CancelFunc{}, wake: make(chan struct{}, 1)}
 }
 
 // Hub returns the event hub (SSE fan-out).
@@ -161,6 +192,17 @@ func (r *Runner) Register(name string, f Func) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.funcs[name] = f
+}
+
+// BuildStages are the pipeline's stages in order; a build job starts with them all pending.
+var BuildStages = []string{"guard", "download", "merge", "basemap", "valhalla", "terrain", "verify", "swap", "retention"}
+
+// SetStages declares the stages a job of this name goes through, so the UI can show the
+// whole plan from the start. Stages reported that are not in the plan are appended.
+func (r *Runner) SetStages(name string, stages []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.plans[name] = stages
 }
 
 // Registered reports whether a job name has a function.
@@ -204,9 +246,19 @@ func (r *Runner) Enqueue(ctx context.Context, name string, params any, opt Enque
 		return nil, err
 	}
 	r.mu.Lock()
+	for _, n := range r.plans[name] {
+		row.Stages = append(row.Stages, store.StageRow{Name: n, Status: "pending"})
+	}
+	r.mu.Unlock()
+	if len(row.Stages) > 0 {
+		if err := r.st.UpdateJob(ctx, row); err != nil {
+			return nil, err
+		}
+	}
+	r.mu.Lock()
 	r.queue = append(r.queue, row.ID)
 	r.mu.Unlock()
-	r.hub.publish(Event{Type: "job", Data: *row})
+	r.hub.publish(Event{Type: "job", Data: View(*row)})
 	r.poke()
 	return row, nil
 }
@@ -262,7 +314,7 @@ func (r *Runner) Cancel(ctx context.Context, id int64) error {
 			if err := r.st.UpdateJob(ctx, row); err != nil {
 				return err
 			}
-			r.hub.publish(Event{Type: "job", Data: *row})
+			r.hub.publish(Event{Type: "job", Data: View(*row)})
 			return nil
 		}
 	}
@@ -334,6 +386,10 @@ func (r *Runner) run(parent context.Context, id int64) {
 	}
 	r.mu.Lock()
 	f := r.funcs[row.Name]
+	row.Stages = row.Stages[:0]
+	for _, n := range r.plans[row.Name] {
+		row.Stages = append(row.Stages, store.StageRow{Name: n, Status: "pending"})
+	}
 	ctx, cancel := context.WithCancel(parent)
 	j := &Job{ID: row.ID, Name: row.Name, Trigger: row.Trigger, params: json.RawMessage(row.Params), ctx: ctx, r: r, row: *row}
 	r.current = j
@@ -359,6 +415,17 @@ func (r *Runner) run(parent context.Context, id int64) {
 	fin := time.Now().UTC()
 	j.mu.Lock()
 	j.row.FinishedAt = &fin
+	for i := range j.row.Stages {
+		s := &j.row.Stages[i]
+		switch {
+		case s.Status == "running" && err == nil:
+			s.Status, s.Progress, s.FinishedAt = "done", 1, &fin
+		case s.Status == "running":
+			s.Status, s.FinishedAt = "failed", &fin
+		case s.Status == "pending" && err == nil:
+			s.Status = "skipped"
+		}
+	}
 	switch {
 	case err == nil:
 		j.row.Status, j.row.Pct = StatusSucceeded, 1

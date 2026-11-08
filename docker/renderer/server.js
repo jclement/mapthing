@@ -1,10 +1,11 @@
-// mapthing raster renderer: renders mapthing's GL styles to PNG tiles with MapLibre Native.
+// mapthing raster renderer: renders mapthing's GL styles to raster tiles with MapLibre Native.
 //
-//   GET /render/{style}/{size}/{z}/{x}/{y}[@2x].png   size 256|512; @2x renders at pixel ratio 2
+//   GET /render/{style}/{size}/{z}/{x}/{y}[@2x].{png|jpg|webp}   size 256|512; @2x renders at
+//       pixel ratio 2; jpg and webp are encoded at quality 80 (sharp)
 //   GET /healthz                                       {"ok":true, ...}
 //   POST /reload                                       drop cached styles and renderer pools
 //
-// It binds to 127.0.0.1 only; mapthing proxies /styles/{name}/{size}/{z}/{x}/{y}[@2x].png here.
+// It binds to 127.0.0.1 only; mapthing proxies /styles/{name}/{size}/{z}/{x}/{y}[@2x].{ext} here.
 // Styles, tiles, glyphs and sprites are fetched from mapthing itself with the shared secret
 // header X-Mapthing-Internal: $MAPTHING_INTERNAL_TOKEN.
 //
@@ -17,7 +18,7 @@
 
 import http from "node:http";
 import { createRequire } from "node:module";
-import { tileCenter, parseRenderPath, rewriteURL } from "./lib.js";
+import { FORMATS, tileCenter, parseRenderPath, rewriteURL } from "./lib.js";
 
 const require = createRequire(import.meta.url);
 const mbgl = require("@maplibre/maplibre-gl-native");
@@ -149,7 +150,7 @@ function renderRaw(map, opts) {
 
 // Render one tile. MapLibre Native's zoom is in 512 px tile units, so a 512 tile at z renders at
 // zoom z, and a 256 tile at z renders 256 px at zoom z-1. z0 at 256 renders 512 px and scales down.
-async function renderTile({ style, size, z, x, y, ratio }) {
+async function renderTile({ style, size, z, x, y, ratio, format }) {
   const center = tileCenter(z, x, y);
   let zoom = size === 512 ? z : z - 1;
   let px = size;
@@ -172,7 +173,15 @@ async function renderTile({ style, size, z, x, y, ratio }) {
   const w = px * ratio;
   let img = sharp(Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength), { raw: { width: w, height: w, channels: 4 } });
   if (downscale) img = img.resize(size * ratio, size * ratio);
-  return img.png({ compressionLevel: 6, adaptiveFiltering: false }).toBuffer();
+  switch (format) {
+    case "jpg":
+      // Satellite at 512@2x is ~2-2.5 MB as PNG; JPEG q80 is a fraction of that.
+      return img.flatten({ background: "#ffffff" }).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
+    case "webp":
+      return img.webp({ quality: 80 }).toBuffer();
+    default:
+      return img.png({ compressionLevel: 6, adaptiveFiltering: false }).toBuffer();
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,10 +225,10 @@ const server = http.createServer(async (req, res) => {
   if (!params) return send(res, 404, '{"error":"not found"}');
   const t0 = Date.now();
   try {
-    const png = await renderTile(params);
+    const body = await renderTile(params);
     rendered++;
-    res.writeHead(200, { "Content-Type": "image/png", "Content-Length": png.length, "Cache-Control": "public, max-age=86400" });
-    res.end(req.method === "HEAD" ? undefined : png);
+    res.writeHead(200, { "Content-Type": FORMATS[params.format], "Content-Length": body.length, "Cache-Control": "public, max-age=86400" });
+    res.end(req.method === "HEAD" ? undefined : body);
     log("DEBUG", "rendered", { path: url.pathname, ms: Date.now() - t0 });
   } catch (err) {
     failures++;
