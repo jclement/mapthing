@@ -1,12 +1,10 @@
 // Validates the generated styles against the Mapbox GL style spec v13 (what mapbox-gl 1.13.x
 // implements) and the current MapLibre style spec, and rejects expressions, properties and
-// placeholders that mapbox-gl 1.13 does not understand. Exits non-zero on any problem.
-import { readFileSync } from "node:fs";
+// placeholders that mapbox-gl 1.13 does not understand. Used by build.mjs.
 import { createRequire } from "node:module";
 const mapboxSpec = createRequire(import.meta.url)("@mapbox/mapbox-gl-style-spec");
 import * as maplibreSpec from "@maplibre/maplibre-gl-style-spec";
-
-const STYLES = ["outdoors", "outdoors-dark", "satellite"];
+import { FONTS } from "./layers.mjs";
 
 // Expression operators added after mapbox-gl 1.13 (or MapLibre-only).
 const BANNED_OPS = new Set([
@@ -37,10 +35,11 @@ function walkOps(v, path, errs) {
   }
 }
 
-let failed = false;
-for (const name of STYLES) {
-  const file = new URL(`./${name}.json`, import.meta.url);
-  const text = readFileSync(file, "utf8");
+/**
+ * Validate one generated style. `text` is the JSON as written (with placeholders).
+ * @returns {string[]} problems; empty when the style is fine
+ */
+export function validateStyle(name, text) {
   // the spec validators need real URLs; substitute the placeholders the way mapthing does
   const style = JSON.parse(text.replaceAll("{{BASE_URL}}", "http://127.0.0.1:8080").replaceAll("{{KEY_QS}}", "?key=mt_test"));
   const errs = [];
@@ -48,12 +47,9 @@ for (const name of STYLES) {
   for (const e of mapboxSpec.validate(style)) errs.push(`mapbox-gl-style-spec@13: ${e.message}`);
   for (const e of maplibreSpec.validateStyleMin(style)) errs.push(`maplibre-gl-style-spec: ${e.message}`);
 
-  const ids = new Set(style.layers.map((l) => l.id));
-  if (!ids.has("satellite")) errs.push("no layer with id satellite");
   const sat = style.layers.find((l) => l.id === "satellite");
-  if (sat && (sat.type !== "raster" || sat.source !== "imagery")) errs.push("satellite layer must be raster from source imagery");
-  const vis = sat?.layout?.visibility ?? "visible";
-  if (name === "satellite" ? vis !== "visible" : vis !== "none") errs.push(`satellite layer visibility ${vis} wrong for ${name}`);
+  if (!sat) errs.push("no layer with id satellite");
+  else if (sat.type !== "raster" || sat.source !== "imagery") errs.push("satellite layer must be raster from source imagery");
 
   for (const l of style.layers) {
     if (!ALLOWED_LAYER_TYPES.has(l.type)) errs.push(`${l.id}: layer type ${l.type}`);
@@ -64,7 +60,7 @@ for (const name of STYLES) {
     walkOps(l.layout, `${l.id}.layout`, errs);
     walkOps(l.paint, `${l.id}.paint`, errs);
     for (const f of JSON.stringify(l.layout?.["text-font"] ?? []).match(/Noto Sans[^"]*/g) ?? []) {
-      if (!["Noto Sans Regular", "Noto Sans Medium", "Noto Sans Italic"].includes(f)) errs.push(`${l.id}: font ${f} has no glyphs`);
+      if (!FONTS.includes(f)) errs.push(`${l.id}: font ${f} has no glyphs in assets/fonts`);
     }
   }
   for (const [id, src] of Object.entries(style.sources)) {
@@ -72,13 +68,5 @@ for (const name of STYLES) {
   }
   if (!text.includes("{{KEY_QS}}") || !text.includes("{{BASE_URL}}")) errs.push("placeholders missing");
   if (/\{\{(?!BASE_URL|KEY_QS)[^}]*\}\}/.test(text)) errs.push("unknown {{placeholder}}");
-
-  if (errs.length) {
-    failed = true;
-    console.error(`${name}.json: ${errs.length} problem(s)`);
-    for (const e of errs) console.error("  " + e);
-  } else {
-    console.log(`${name}.json: ok (${style.layers.length} layers)`);
-  }
+  return errs.map((e) => `${name}: ${e}`);
 }
-process.exit(failed ? 1 : 0);

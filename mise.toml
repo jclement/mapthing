@@ -13,6 +13,7 @@ description = "Install Go and web dependencies (idempotent)"
 run = [
   "go mod download",
   "cd web && npm ci --no-audit --no-fund",
+  "cd assets/styles && npm ci --no-audit --no-fund",
 ]
 
 [tasks."build:web"]
@@ -60,6 +61,7 @@ run = [
   "go vet ./...",
   "golangci-lint run ./...",
   "cd web && npm run lint",
+  "cd assets/styles && npm run -s check",
 ]
 
 [tasks.fmt]
@@ -72,3 +74,8 @@ run = [
 [tasks.check]
 description = "The done-gate: lint + test"
 depends = ["lint", "test"]
+
+[tasks.styles]
+description = "Regenerate assets/styles/*.json from the themes in assets/styles/src/themes and validate them (mapbox-gl 1.13 + MapLibre specs)"
+dir = "assets/styles"
+run = "npm run -s build"

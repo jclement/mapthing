@@ -3,13 +3,14 @@
  "name": "mapthing satellite",
  "metadata": {
   "mapthing:style": "satellite",
-  "mapthing:generator": "assets/styles/build.mjs"
+  "mapthing:generator": "assets/styles/src/build.mjs"
  },
  "center": [
   -102.08,
   31.85
  ],
  "zoom": 9,
+ "sprite": "{{BASE_URL}}/sprites/outdoors",
  "glyphs": "{{BASE_URL}}/fonts/{fontstack}/{range}.pbf{{KEY_QS}}",
  "sources": {
   "protomaps": {
@@ -3215,6 +3216,5 @@
     "text-halo-width": 1.5
    }
   }
- ],
- "sprite": "{{BASE_URL}}/sprites/outdoors"
+ ]
 }
