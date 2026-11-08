@@ -64,8 +64,13 @@ RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -q -DskipTests -Dspotless.check.skip=true package && \
     cp target/protomaps-basemap-HEAD-with-deps.jar /protomaps-basemap.jar
 
+FROM node:${NODE_VERSION}-bookworm-slim AS node
+
 # ---------------------------------------------------------------- renderer deps (target arch)
 FROM oven/bun:${BUN_VERSION} AS renderer
+# A real Node 24 on PATH: install scripts (node-pre-gyp) must pick the prebuilt addon for the
+# Node that runs the renderer, not bun's emulated Node version (which has no prebuilt).
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
 WORKDIR /opt/renderer
 # docker/renderer/ is provided by the style work; skip cleanly when absent.
 RUN --mount=type=bind,source=docker,target=/ctx \
@@ -76,7 +81,6 @@ RUN --mount=type=bind,source=docker,target=/ctx \
       cd /opt/renderer && bun install --frozen-lockfile --production ; \
     fi
 
-FROM node:${NODE_VERSION}-bookworm-slim AS node
 FROM ${JRE_IMAGE} AS jre
 
 # ---------------------------------------------------------------- final image
