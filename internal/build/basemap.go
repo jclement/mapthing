@@ -72,6 +72,15 @@ func (s *state) basemap(ctx context.Context) error {
 		"--nodemap-storage=" + storage,
 		fmt.Sprintf("--threads=%d", threads),
 	}
+	// The ocean/land polygons have one upstream (osmdata.openstreetmap.de); allow a mirror.
+	for envName, arg := range map[string]string{
+		"MAPTHING_WATER_POLYGONS_URL": "--osm_water_url=",
+		"MAPTHING_LAND_POLYGONS_URL":  "--osm_land_url=",
+	} {
+		if v := os.Getenv(envName); v != "" {
+			args = append(args, arg+v)
+		}
+	}
 	if err := s.exec(ctx, wd, s.b.Tools.Java, args...); err != nil {
 		return err
 	}
