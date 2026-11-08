@@ -26,7 +26,7 @@ export default {
     sand: "#22221f",
     beach: "#242421",
     hospital: "#201e1f",
-    industrial: "#1e2022",
+    industrial: "#201f1e", // well pads: neutral, not the cool slate of the water
     school: "#201f1d",
     pedestrian: "#212325",
     aerodrome: "#1f2123",

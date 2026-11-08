@@ -6,9 +6,9 @@ a client can toggle imagery under the roads and labels.
 
 | Theme | For | Character |
 |---|---|---|
-| `overlay` | light apps that draw dense data on the map (points, pipelines, survey grids) | cool pale-grey land, greyed water and vegetation, neutral (never warm) land-use fills, white roads ranked by width and casing darkness, white-cored service roads, muted taupe tracks, streams from z12, Interstate and US shields only below z11, no POI icons, soft hillshade |
+| `overlay` | light apps that draw dense data on the map (points, pipelines, survey grids) | cool pale-grey land, greyed water and vegetation, neutral (never warm) land-use fills, well pads (`industrial`) in neutral grey, white roads ranked by width and casing darkness, white-cored service roads, muted taupe tracks, streams from z12, Interstate and US shields only below z11, no POI icons, soft hillshade |
 | `overlay-dark` | the same, in dark application chrome | charcoal land, dark slate water, roads lighten with rank, service roads with a body over a dark casing, warm-grey tracks, streams from z12, grey route tags instead of black shields, highlight-led hillshade, no POI icons |
-| `field` | outdoor use in sunlight | warm paper land, strong blue water and green vegetation, orange motorways, yellow trunk/primary/secondary roads, dark-cased white tertiary, minor and lease/service roads (about 3 px at z13, 5.5 px at z15), dark-brown dashed tracks from z11, strong hillshade, labels 20% larger with 2 px halos |
+| `field` | outdoor use in sunlight | warm paper land, strong blue water and green vegetation, orange motorways, yellow trunk/primary/secondary roads, dark-cased white tertiary, minor and lease/service roads (about 3 px at z13, 5.5 px at z15), dark-brown dashed tracks from z11, strong hillshade, labels 20% larger with 2 px halos, route shields 1.4x the Protomaps size |
 
 ## Design rules
 

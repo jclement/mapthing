@@ -54,7 +54,7 @@ export default {
     sand: neutralUse,
     beach: neutralUse,
     hospital: neutralUse,
-    industrial: neutralUse,
+    industrial: "#e1e1df", // well pads: neutral grey, so they never read as water (was the cool neutralUse)
     school: neutralUse,
     pedestrian: neutralUse,
     aerodrome: "#e4e7e9",

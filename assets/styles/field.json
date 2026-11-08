@@ -4178,8 +4178,8 @@
     "text-font": [
      "Noto Sans Medium"
     ],
-    "text-size": 8,
-    "icon-size": 0.8,
+    "text-size": 11,
+    "icon-size": 1.1,
     "symbol-placement": "line",
     "icon-rotation-alignment": "viewport",
     "text-rotation-alignment": "viewport"

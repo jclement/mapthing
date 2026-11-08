@@ -75,3 +75,12 @@ export function streams(layers, color, width, minzoom = 12) {
   l.minzoom = minzoom;
   Object.assign(l.paint, { "line-color": color, "line-width": width });
 }
+
+/** route shields larger than the Protomaps default (icon 0.8, text 8 px) */
+export function largerShields(layers, iconSize = 1, textSize = 10) {
+  for (const l of layers) {
+    if (!l.id.startsWith("roads_shields")) continue;
+    l.layout["icon-size"] = iconSize;
+    l.layout["text-size"] = textSize;
+  }
+}
