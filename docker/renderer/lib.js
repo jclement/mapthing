@@ -52,3 +52,39 @@ export function rewriteURL(url, base) {
   }
   return u.toString();
 }
+
+// Degrading per source: a failed sub-resource must not fail the whole raster tile (a missing
+// terrain archive or an imagery upstream outage must never 503 the basemap). classify() says
+// what a resource request is; degradedResponse() is what MapLibre gets instead of an error.
+
+// mbgl.Resource kinds (MapLibre Native): 1 style, 2 source, 3 tile, 4 glyphs, 5 sprite image,
+// 6 sprite json, 7 image.
+const KIND_NAMES = { 1: "style", 2: "source", 3: "tile", 4: "glyphs", 5: "sprite", 6: "sprite", 7: "image" };
+
+export function classify(url, kind) {
+  if (kind && KIND_NAMES[kind]) return KIND_NAMES[kind];
+  const path = (() => {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return url;
+    }
+  })();
+  if (/^\/styles\/[^/]+\.json$/.test(path)) return "style";
+  if (/^\/tiles\/[^/]+\.json$/.test(path)) return "source";
+  if (path.startsWith("/fonts/")) return "glyphs";
+  if (path.startsWith("/sprites/")) return "sprite";
+  return "tile";
+}
+
+// An empty TileJSON whose tiles never resolve: the source loads and draws nothing.
+export const EMPTY_TILE_URL = "mapthing-empty://tile/{z}/{x}/{y}";
+const EMPTY_TILEJSON = JSON.stringify({ tilejson: "2.2.0", tiles: [EMPTY_TILE_URL], minzoom: 0, maxzoom: 0 });
+
+// degradedResponse returns the stand-in for a failed resource: undefined = fail (styles are
+// essential), null = "no data" (tiles, glyphs, sprites), or a Buffer (an empty TileJSON).
+export function degradedResponse(what) {
+  if (what === "style") return undefined;
+  if (what === "source") return Buffer.from(EMPTY_TILEJSON);
+  return null;
+}

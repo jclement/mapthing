@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+// DegradedHeader marks a raster tile the renderer drew without one of its sources (a failed
+// terrain, imagery or vector request). Such tiles are served with no-store and never cached.
+const DegradedHeader = "X-Mapthing-Degraded"
+
+// errDegraded stops the cache fill for a degraded tile.
+var errDegraded = errors.New("degraded render")
+
 // errUpstream marks a failure of the renderer or imagery upstream (answered 502/503).
 var errUpstream = errors.New("upstream unavailable")
 
@@ -67,29 +74,54 @@ func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
 	}
 	tail := fmt.Sprintf("%s/%s/%d/%d/%d%s.%s", name, size, z, x, y, scale, ext)
 	key := gen + "/" + tail
-	p, hit, err := s.raster.Do(key, func() error {
+	render := func() (body []byte, degraded bool, err error) {
 		ctx, cancel := detach(r.Context(), 90*time.Second)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.opt.RendererURL, "/")+"/render/"+tail, nil)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		resp, err := s.client.Do(req)
 		if err != nil {
-			return fmt.Errorf("%w: renderer: %w", errUpstream, err)
+			return nil, false, fmt.Errorf("%w: renderer: %w", errUpstream, err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("%w: renderer answered %s", errUpstream, resp.Status)
+			return nil, false, fmt.Errorf("%w: renderer answered %s", errUpstream, resp.Status)
 		}
-		_, err = s.raster.Put(key, func(w io.Writer) error {
-			_, err := io.Copy(w, io.LimitReader(resp.Body, 32<<20))
+		body, err = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		return body, resp.Header.Get(DegradedHeader) != "", err
+	}
+	var direct []byte
+	p, hit, err := s.raster.Do(key, func() error {
+		body, degraded, err := render()
+		if err != nil {
 			return err
-		})
+		}
+		if degraded { // drawn without a failed source: serve, never cache
+			direct = body
+			return errDegraded
+		}
+		_, err = s.raster.PutBytes(key, body)
 		return err
 	})
 	if s.opt.Stats != nil {
 		s.opt.Stats.Cache("raster", hit)
+	}
+	if errors.Is(err, errDegraded) {
+		if direct == nil { // another request rendered it; render our own copy
+			if direct, _, err = render(); err != nil {
+				direct = nil
+			}
+		}
+		if direct != nil {
+			h := w.Header()
+			h.Set("Content-Type", rasterTypes[ext])
+			h.Set("Cache-Control", "no-store")
+			h.Set(DegradedHeader, "1")
+			_, _ = w.Write(direct)
+			return
+		}
 	}
 	if err != nil {
 		if errors.Is(err, errUpstream) {

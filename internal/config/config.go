@@ -18,7 +18,7 @@ type Config struct {
 	PublicURL     string // MAPTHING_PUBLIC_URL, used in styles/TileJSON; default derived from request
 
 	ValhallaURL string   // MAPTHING_VALHALLA_URL, default http://127.0.0.1:8002
-	ValhallaCmd []string // MAPTHING_VALHALLA_CMD, default "valhalla_service <data>/current/valhalla/valhalla.json 1"
+	ValhallaCmd []string // MAPTHING_VALHALLA_CMD, default "valhalla_service {config} 1" ({config} = per-instance config)
 	RendererURL string   // MAPTHING_RENDERER_URL, default http://127.0.0.1:8081
 	RendererCmd []string // MAPTHING_RENDERER_CMD, default "node /opt/renderer/server.js"
 
@@ -48,7 +48,7 @@ func FromEnv() (Config, error) {
 	}
 	c.InternalToken = os.Getenv("MAPTHING_INTERNAL_TOKEN")
 	c.ImageryURL = os.Getenv("MAPTHING_IMAGERY_URL")
-	c.ValhallaCmd = strings.Fields(getenv("MAPTHING_VALHALLA_CMD", "valhalla_service "+c.DataDir+"/current/valhalla/valhalla.json 1"))
+	c.ValhallaCmd = strings.Fields(getenv("MAPTHING_VALHALLA_CMD", "valhalla_service {config} 1"))
 	c.RendererCmd = strings.Fields(getenv("MAPTHING_RENDERER_CMD", "node /opt/renderer/server.js"))
 	var errs []error
 	num := func(k string, def int64) int64 {

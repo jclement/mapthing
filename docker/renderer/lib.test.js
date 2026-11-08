@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRenderPath, rewriteURL, tileCenter } from "./lib.js";
+import { classify, degradedResponse, parseRenderPath, rewriteURL, tileCenter } from "./lib.js";
 
 describe("parseRenderPath", () => {
   const cases = [
@@ -42,5 +42,25 @@ describe("rewriteURL", () => {
   });
   test("glyph url with spaces", () => {
     expect(rewriteURL("http://h/fonts/Noto%20Sans%20Regular/0-255.pbf", base)).toBe("http://127.0.0.1:8080/fonts/Noto%20Sans%20Regular/0-255.pbf");
+  });
+});
+
+describe("degrading per source", () => {
+  test("classify by kind, then by URL", () => {
+    expect(classify("http://h/anything", 2)).toBe("source");
+    expect(classify("http://h/tiles/terrain.json?key=x")).toBe("source");
+    expect(classify("http://h/tiles/imagery/3/1/2.jpg")).toBe("tile");
+    expect(classify("http://h/tiles/basemap/3/1/2.mvt")).toBe("tile");
+    expect(classify("http://h/styles/outdoors.json?internal=1")).toBe("style");
+    expect(classify("http://h/fonts/Noto%20Sans%20Regular/0-255.pbf")).toBe("glyphs");
+    expect(classify("http://h/sprites/outdoors@2x.png")).toBe("sprite");
+  });
+  test("stand-ins: style fails, source gets an empty TileJSON, the rest no data", () => {
+    expect(degradedResponse("style")).toBeUndefined();
+    const tj = JSON.parse(degradedResponse("source").toString());
+    expect(tj.tiles.length).toBe(1);
+    expect(tj.maxzoom).toBe(0);
+    expect(degradedResponse("tile")).toBeNull();
+    expect(degradedResponse("glyphs")).toBeNull();
   });
 });

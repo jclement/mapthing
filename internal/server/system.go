@@ -458,7 +458,7 @@ func (s *Server) readiness(ctx context.Context) (bool, []readinessJSON) {
 			if c.Message != "" {
 				detail += ": " + c.Message
 			}
-			if c.State != supervisor.StateUnavailable {
+			if c.State != supervisor.StateUnavailable && !c.Standby {
 				ready = ready && ok
 			}
 			out = append(out, readinessJSON{Name: c.Name, OK: ok, Detail: detail})

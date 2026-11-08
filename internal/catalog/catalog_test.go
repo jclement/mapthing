@@ -249,3 +249,31 @@ func (rt rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.URL.Scheme, r.URL.Host, r.Host = u.Scheme, u.Host, u.Host
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+func TestParseIndexUSStates(t *testing.T) {
+	idx := `{"features":[
+{"properties":{"id":"north-america","name":"North America","urls":{"pbf":"https://download.geofabrik.de/north-america-latest.osm.pbf"}}},
+{"properties":{"id":"us","parent":"north-america","name":"United States of America","urls":{"pbf":"https://download.geofabrik.de/north-america/us-latest.osm.pbf"}}},
+{"properties":{"id":"us/new-mexico","parent":"north-america","name":"us/new-mexico","urls":{"pbf":"https://download.geofabrik.de/north-america/us/new-mexico-latest.osm.pbf"}}},
+{"properties":{"id":"alberta","parent":"canada","name":"Alberta","urls":{"pbf":"https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf"}}},
+{"properties":{"id":"canada","parent":"north-america","name":"Canada","urls":{"pbf":"https://download.geofabrik.de/north-america/canada-latest.osm.pbf"}}}
+]}`
+	es, err := parseIndex([]byte(idx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Entry{}
+	for _, e := range es {
+		got[e.ID] = e
+	}
+	nm := got["north-america/us/new-mexico"]
+	if nm.Name != "New Mexico" || nm.Parent != "north-america/us" {
+		t.Errorf("new mexico: %q under %q", nm.Name, nm.Parent)
+	}
+	if ab := got["north-america/canada/alberta"]; ab.Name != "Alberta" || ab.Parent != "north-america/canada" {
+		t.Errorf("alberta: %q under %q", ab.Name, ab.Parent)
+	}
+	if us := got["north-america/us"]; us.Parent != "north-america" {
+		t.Errorf("us parent %q", us.Parent)
+	}
+}

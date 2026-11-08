@@ -23,6 +23,8 @@ type features struct {
 	sup     *supervisor.Supervisor
 	watcher *tiles.Watcher
 	tiles   *tiles.Server
+
+	valhalla *supervisor.BlueGreen
 }
 
 func (f *features) wire(ctx context.Context, d *server.Deps) error {
@@ -37,6 +39,7 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 
 	// Routing (wired with the pipeline so the smoke test can route).
 	router := routing.New(f.cfg.ValhallaURL)
+	f.valhalla = f.newValhalla(router) // blue/green across generation swaps (valhalla.go)
 	d.Mounts = append(d.Mounts, routing.NewHandlers(router))
 	if d.ReadyChecks == nil {
 		d.ReadyChecks = map[string]func(context.Context) bool{}

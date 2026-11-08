@@ -41,6 +41,9 @@ type Child struct {
 	// Precheck, if set, must return nil before the child is started (else state "waiting";
 	// re-checked every 10 s and on Restart).
 	Precheck func() error
+	// Standby children (a blue/green replacement warming up) are reported but do not count
+	// towards readiness until promoted with SetStandby(name, false).
+	Standby bool
 }
 
 // Status is a child's state for the admin UI.
@@ -52,6 +55,7 @@ type Status struct {
 	Restarts  int        `json:"restarts"`
 	StartedAt *time.Time `json:"started_at,omitempty"`
 	Healthy   bool       `json:"healthy"`
+	Standby   bool       `json:"standby,omitempty"`
 	LogTail   []string   `json:"log_tail,omitempty"`
 }
 
@@ -69,6 +73,9 @@ type proc struct {
 	cmd      *exec.Cmd
 	restart  chan struct{}
 	logPath  string
+	standby  bool
+	cancel   context.CancelFunc
+	done     chan struct{}
 }
 
 // Supervisor manages children.
@@ -88,15 +95,87 @@ func New(logDir string) *Supervisor {
 }
 
 // Add registers a child. Call before Start.
+// Add registers a child. Before Start it waits for Start; after Start it starts at once.
 func (s *Supervisor) Add(c Child) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := &proc{spec: c, state: StateStopped, restart: make(chan struct{}, 1)}
+	p := &proc{spec: c, state: StateStopped, restart: make(chan struct{}, 1), standby: c.Standby, done: make(chan struct{})}
 	if s.logDir != "" {
 		p.logPath = filepath.Join(s.logDir, c.Name+".log")
 	}
 	s.procs[c.Name] = p
 	s.order = append(s.order, c.Name)
+	if s.ctx != nil {
+		s.launch(p)
+	}
+}
+
+func (s *Supervisor) launch(p *proc) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	p.cancel = cancel
+	go func() {
+		defer close(p.done)
+		s.manage(ctx, p)
+	}()
+}
+
+// Remove stops a child (SIGTERM, then SIGKILL) and forgets it. Unknown names are ignored.
+func (s *Supervisor) Remove(name string) {
+	s.mu.Lock()
+	p, ok := s.procs[name]
+	if ok {
+		delete(s.procs, name)
+		for i, n := range s.order {
+			if n == name {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+	if !ok || p.cancel == nil {
+		return
+	}
+	p.cancel()
+	<-p.done
+}
+
+// SetStandby marks a child as standby (not counted for readiness) or active.
+func (s *Supervisor) SetStandby(name string, standby bool) {
+	s.mu.Lock()
+	p, ok := s.procs[name]
+	s.mu.Unlock()
+	if ok {
+		p.mu.Lock()
+		p.standby = standby
+		p.mu.Unlock()
+	}
+}
+
+// markHealthy records a successful external health check (BlueGreen just probed the child),
+// so readiness does not wait for the child's own next probe.
+func (s *Supervisor) markHealthy(name string) {
+	s.mu.Lock()
+	p, ok := s.procs[name]
+	s.mu.Unlock()
+	if ok {
+		p.mu.Lock()
+		p.healthy = true
+		if p.state == StateRunning {
+			p.msg = ""
+		}
+		p.mu.Unlock()
+	}
+}
+
+// Status returns one child's status.
+func (s *Supervisor) Status(name string) (Status, bool) {
+	for _, st := range s.Statuses() {
+		if st.Name == name {
+			return st, true
+		}
+	}
+	return Status{}, false
 }
 
 // Start launches every child's management loop; they stop when ctx is done.
@@ -111,9 +190,11 @@ func (s *Supervisor) Start(ctx context.Context) {
 	if s.logDir != "" {
 		_ = os.MkdirAll(s.logDir, 0o755)
 	}
+	s.mu.Lock()
 	for _, p := range procs {
-		go s.manage(ctx, p)
+		s.launch(p)
 	}
+	s.mu.Unlock()
 }
 
 // Restart restarts one child (or starts it if waiting). Unknown names are an error.
@@ -156,7 +237,7 @@ func (s *Supervisor) Statuses() []Status {
 		p.mu.Lock()
 		out = append(out, Status{
 			Name: p.spec.Name, State: p.state, Message: p.msg, PID: p.pid, Restarts: p.restarts,
-			StartedAt: p.started, Healthy: p.healthy, LogTail: append([]string(nil), p.tail...),
+			StartedAt: p.started, Healthy: p.healthy, Standby: p.standby, LogTail: append([]string(nil), p.tail...),
 		})
 		p.mu.Unlock()
 	}
@@ -310,8 +391,11 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
-	probe := time.NewTicker(pollEvery)
+	// Probe every second until the first healthy answer (so a fresh instance is reported
+	// ready quickly), then every pollEvery.
+	probe := time.NewTicker(time.Second)
 	defer probe.Stop()
+	everHealthy := false
 	if p.spec.HealthURL == "" {
 		p.mu.Lock()
 		p.healthy = true
@@ -345,10 +429,17 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 				p.mu.Lock()
 				p.healthy = ok
 				p.mu.Unlock()
-				if ok {
+				switch {
+				case ok:
 					p.set(StateRunning, "")
-				} else {
+					if !everHealthy {
+						everHealthy = true
+						probe.Reset(pollEvery)
+					}
+				case everHealthy:
 					p.set(StateUnhealthy, "health probe failed")
+				default:
+					p.set(StateRunning, "waiting for the health probe")
 				}
 			}
 		}

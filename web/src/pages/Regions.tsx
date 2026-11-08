@@ -703,7 +703,7 @@ function CatalogTree({
       .map((e) => {
         const kids = children.get(e.id);
         const isOpen = matches ? true : open.has(e.id);
-        const selectable = e.extract_bytes > 0;
+        const selectable = e.downloadable ?? e.extract_bytes > 0;
         const isInstalled = installed.has(e.id);
         return (
           <li key={e.id}>
@@ -748,7 +748,9 @@ function CatalogTree({
                 <span className="flex shrink-0 items-center gap-2">
                   {isInstalled && <Badge tone="ok">installed</Badge>}
                   {selectable && (
-                    <span className="tnum text-xs text-faint">{fmt.bytes(e.extract_bytes)}</span>
+                    <span className="tnum text-xs text-faint">
+                      {e.extract_bytes > 0 ? fmt.bytes(e.extract_bytes) : "…"}
+                    </span>
                   )}
                 </span>
               </button>

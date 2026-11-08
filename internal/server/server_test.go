@@ -53,6 +53,7 @@ var testAssets = fstest.MapFS{
 "sources":{"protomaps":{"type":"vector","url":"{{BASE_URL}}/tiles/basemap.json{{KEY_QS}}"},"imagery":{"type":"raster","tiles":["{{BASE_URL}}/tiles/imagery/{z}/{x}/{y}.jpg{{KEY_QS}}"],"attribution":"built-in"}},
 "layers":[{"id":"satellite","type":"raster","source":"imagery","layout":{"visibility":"none"}}]}`)},
 	"styles/outdoors-dark.json":         {Data: []byte(`{"version":8,"layers":[]}`)},
+	"styles/package.json":               {Data: []byte(`{"name":"styles","version":"1.0.0","type":"module"}`)},
 	"styles/satellite.json":             {Data: []byte(`{"version":8,"layers":[]}`)},
 	"fonts/Noto Sans Regular/0-255.pbf": {Data: []byte("glyphs")},
 	"sprites/outdoors@2x.png":           {Data: []byte("\x89PNG")},
@@ -236,6 +237,9 @@ func TestHealth(t *testing.T) {
 	}
 	if r, b := e.do(nil, "GET", "/readyz", nil, nil); r.StatusCode != 503 {
 		t.Fatalf("readyz without generation: %d %s", r.StatusCode, b)
+	}
+	if r, _ := e.do(nil, "GET", "/tiles/basemap.json", nil, map[string]string{"X-Mapthing-Internal": token}); r.StatusCode != 503 {
+		t.Fatalf("tilejson before any build: %d", r.StatusCode)
 	}
 	e2 := newEnv(t, true)
 	if r, b := e2.do(nil, "GET", "/readyz", nil, nil); r.StatusCode != 200 {
@@ -439,6 +443,30 @@ func TestCompatErrorShapes(t *testing.T) {
 			t.Errorf("%s: %d %s (want %s)", path, resp.StatusCode, b, want)
 		}
 	}
+	// Google clients switch by configuration only: the key works as X-Goog-Api-Key and as key=.
+	_, secret, err := keys.NewService(e.st).Create(context.Background(), "google client", store.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ method, path, hdr string }{
+		{"GET", "/maps/api/elevation/json?locations=39.1,-75.5&key=" + secret, ""},
+		{"GET", "/maps/api/elevation/json?locations=39.1,-75.5", secret},
+		{"POST", "/directions/v2:computeRoutes?key=" + secret, ""},
+		{"POST", "/directions/v2:computeRoutes", secret},
+	} {
+		req, _ := http.NewRequest(c.method, hs.URL+c.path, nil)
+		if c.hdr != "" {
+			req.Header.Set("X-Goog-Api-Key", c.hdr)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Errorf("%s %s (header %v): %d", c.method, c.path, c.hdr != "", resp.StatusCode)
+		}
+	}
 	check("GET", "/maps/api/elevation/json", `"status":"REQUEST_DENIED"`)
 	check("POST", "/directions/v2:computeRoutes", `"status":"UNAUTHENTICATED"`)
 	check("POST", "/ors/v2/snap/driving-hgv", `"code":401`)
@@ -496,8 +524,11 @@ func TestTiles(t *testing.T) {
 	if r, _ := e.do(nil, "GET", "/tiles/nope/0/0/0.mvt"+q, nil, nil); r.StatusCode != 404 {
 		t.Fatalf("unknown tileset: %d", r.StatusCode)
 	}
-	if r, _ := e.do(nil, "GET", "/tiles/terrain/0/0/0.png"+q, nil, nil); r.StatusCode != 503 {
+	if r, _ := e.do(nil, "GET", "/tiles/terrain/0/0/0.png"+q, nil, nil); r.StatusCode != 404 {
 		t.Fatalf("missing terrain archive: %d", r.StatusCode)
+	}
+	if r, _ := e.do(nil, "GET", "/tiles/terrain.json"+q, nil, nil); r.StatusCode != 404 {
+		t.Fatalf("missing terrain tilejson: %d", r.StatusCode)
 	}
 
 	// TileJSON carries the key and metadata
@@ -573,8 +604,10 @@ func TestStylesAndAssets(t *testing.T) {
 	if r, _ := e.do(nil, "GET", "/styles/v1/someone/outdoors"+q, nil, nil); r.StatusCode != 200 {
 		t.Fatalf("v1 style: %d", r.StatusCode)
 	}
-	if r, _ := e.do(nil, "GET", "/styles/nope.json"+q, nil, nil); r.StatusCode != 404 {
-		t.Fatalf("unknown style: %d", r.StatusCode)
+	for _, p := range []string{"/styles/nope.json", "/styles/package.json", "/styles/package/256/1/0/0.png"} {
+		if r, _ := e.do(nil, "GET", p+q, nil, nil); r.StatusCode != 404 {
+			t.Fatalf("%s: %d", p, r.StatusCode)
+		}
 	}
 	// list
 	_, lb := e.do(nil, "GET", "/styles"+q, nil, nil)
@@ -620,6 +653,10 @@ func TestRasterProxyAndCache(t *testing.T) {
 		calls++
 		paths = append(paths, r.URL.Path)
 		switch {
+		case r.URL.Path == "/render/outdoors/256/4/2/1.png": // rendered without a failed source
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set(tiles.DegradedHeader, "1")
+			_, _ = w.Write([]byte("\x89PNG partial"))
 		case r.URL.Path == "/render/outdoors/512/3/2/1@2x.png":
 			w.Header().Set("Content-Type", "image/png")
 			_, _ = w.Write([]byte("\x89PNG fake"))
@@ -687,6 +724,15 @@ func TestRasterProxyAndCache(t *testing.T) {
 	if len(paths) != before+1 || !strings.HasSuffix(paths[before], "1@2x.png") {
 		t.Fatalf("png variant: %v", paths)
 	}
+	// a degraded render is served (200, no-store) but never cached: asked twice, rendered twice
+	for i := range 2 {
+		before := len(paths)
+		r, b := get("/styles/outdoors/256/4/2/1.png")
+		if r.StatusCode != 200 || string(b) != "\x89PNG partial" || r.Header.Get("Cache-Control") != "no-store" ||
+			r.Header.Get(tiles.DegradedHeader) != "1" || len(paths) != before+1 {
+			t.Fatalf("degraded %d: %d %q %v %v", i, r.StatusCode, b, r.Header, paths)
+		}
+	}
 	if r, _ := get("/styles/outdoors/256/3/2/1.gif"); r.StatusCode != 400 {
 		t.Fatalf("bad format: %d", r.StatusCode)
 	}
@@ -696,7 +742,7 @@ func TestRasterProxyAndCache(t *testing.T) {
 	if r, _ := get("/styles/nope/256/3/2/1.png"); r.StatusCode != 404 {
 		t.Fatalf("unknown style: %d", r.StatusCode)
 	}
-	if _, c := e.stats.Totals(); c["raster"] != [2]int64{3, 5} {
+	if _, c := e.stats.Totals(); c["raster"] != [2]int64{3, 7} {
 		t.Fatalf("raster cache stats %v", c["raster"])
 	}
 }

@@ -67,7 +67,8 @@ export interface CatalogEntry {
   name: string;
   parent: string | null;
   bbox: BBox;
-  extract_bytes: number; // 0 for grouping nodes without their own extract
+  extract_bytes: number; // 0 for grouping nodes, or while the size is not known yet
+  downloadable?: boolean; // has its own extract (selectable); absent → extract_bytes > 0
   elevation_sources: string[]; // ElevationSource ids covering this entry, best first
 }
 
@@ -259,7 +260,11 @@ export interface RouteFeature {
   type: "Feature";
   bbox?: BBox;
   geometry: LineString;
-  properties: Omit<RouteResult, "geometry">;
+  // The server names it surface_breakdown (metres by surface class).
+  properties: Omit<RouteResult, "geometry" | "surface_breakdown_m"> & {
+    surface_breakdown?: RouteResult["surface_breakdown_m"];
+    surface_breakdown_m?: RouteResult["surface_breakdown_m"];
+  };
 }
 
 export interface ElevationSample {
@@ -323,7 +328,14 @@ export const api = {
   // alternates); the UI works with the flattened RouteResult.
   route: (r: RouteRequest) =>
     request<RouteFeature>("POST", "/api/v1/route", r).then(
-      (f): RouteResult => ({ ...f.properties, geometry: f.geometry }),
+      ({
+        properties: { surface_breakdown, surface_breakdown_m, ...rest },
+        geometry,
+      }): RouteResult => ({
+        ...rest,
+        surface_breakdown_m: surface_breakdown ?? surface_breakdown_m ?? {},
+        geometry,
+      }),
     ),
   elevation: (points: LonLat[]) =>
     request<{ results: ElevationSample[] }>("POST", "/api/v1/elevation", { points }),

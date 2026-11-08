@@ -161,7 +161,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		children = s.d.Supervisor.Statuses()
 		for _, c := range children {
 			ok := c.State == supervisor.StateRunning && c.Healthy
-			if c.State == supervisor.StateUnavailable {
+			if c.State == supervisor.StateUnavailable || c.Standby {
 				continue
 			}
 			checks["child:"+c.Name] = ok
