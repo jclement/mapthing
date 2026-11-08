@@ -15,6 +15,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { useEvents } from "../lib/events";
 import { percent } from "../lib/format";
 import { useTheme } from "../lib/theme";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { cx } from "./ui";
 
 const NAV = [
@@ -155,7 +156,9 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
       </header>
 
       <main className={cx("relative min-h-0 min-w-0 flex-1", !fullBleed && "bg-bg")}>
-        <Outlet />
+        <ErrorBoundary key={loc.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
 
       {/* Mobile bottom nav */}

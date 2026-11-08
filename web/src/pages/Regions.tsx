@@ -303,7 +303,7 @@ function RegionTable({
                 </td>
                 <td className="px-3 py-2.5">
                   <div className="flex flex-wrap gap-1">
-                    {r.elevation_sources.map((s) => {
+                    {(r.elevation_sources ?? []).map((s) => {
                       const info = srcName(s);
                       return (
                         <Badge key={s} tone="neutral">
@@ -347,10 +347,12 @@ type Selection =
   | { kind: "box"; name: string; bbox: BBox };
 
 function estimateFor(sel: Selection, catalog: Catalog) {
-  const srcById = (id: string) => catalog.elevation_sources.find((s) => s.id === id);
+  const srcById = (id: string) => (catalog.elevation_sources ?? []).find((s) => s.id === id);
   if (sel.kind === "catalog") {
     const area = bboxAreaKm2(sel.entry.bbox);
-    const sources = sel.entry.elevation_sources.map(srcById).filter(Boolean) as ElevationSource[];
+    const sources = (sel.entry.elevation_sources ?? [])
+      .map(srcById)
+      .filter(Boolean) as ElevationSource[];
     // Terrain is built at the national/regional grid; 1 m sources only where small enough.
     const usable = sources.filter((s) => s.resolution_m >= 10 || area < 5000);
     const best = Math.min(...usable.map((s) => s.resolution_m), 30);

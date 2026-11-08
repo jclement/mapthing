@@ -154,7 +154,7 @@ export function MapPage() {
   const fitted = useRef(false);
 
   const sourceName = useCallback(
-    (id?: string) => catalog.data?.elevation_sources.find((s) => s.id === id)?.name ?? id ?? "—",
+    (id?: string) => catalog.data?.elevation_sources?.find((s) => s.id === id)?.name ?? id ?? "—",
     [catalog.data],
   );
 
