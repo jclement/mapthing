@@ -645,7 +645,7 @@ on("POST", /^\/api\/v1\/route$/, (_m, b) => {
     properties: {
       distance_m: dist,
       duration_s: legs.reduce((s, l) => s + l.duration_s, 0),
-      surface_breakdown_m: {
+      surface_breakdown: {
         paved: dist * (1 - unpaved - 0.03),
         gravel: dist * unpaved * 0.7,
         dirt: dist * unpaved * 0.3,

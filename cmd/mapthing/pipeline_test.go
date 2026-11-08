@@ -36,7 +36,8 @@ func TestCatalogJSON(t *testing.T) {
 	s := string(b)
 	for _, want := range []string{
 		`"entries":[{"id":"north-america","name":"North America","parent":null,`,
-		`"extract_bytes":0,"elevation_sources":[]}`,
+		`"extract_bytes":0,"downloadable":false,"elevation_sources":[]}`,
+		`"downloadable":true`,
 		`"parent":"north-america/us"`, `"extract_bytes":26214400`, `"elevation_sources":["3dep13","glo30"]`,
 		`"elevation_sources":[{"id":"hrdem"`,
 	} {

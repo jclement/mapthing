@@ -30,6 +30,7 @@ page.on("console", (m) => {
     problems.push(`console: ${m.text()}`);
 });
 const seen = { style: 0, tiles: 0, glyphs: 0 };
+let live = !BUILD; // a generation is live (BUILD mode starts from an empty data dir)
 page.on("response", (r) => {
   const u = r.url();
   if (r.status() === 200 && u.startsWith(base)) {
@@ -40,6 +41,7 @@ page.on("response", (r) => {
   if (!u.startsWith(base) || r.status() < 400) return;
   const line = `${r.status()} ${r.request().method()} ${u.slice(base.length)}`;
   if (r.status() === 401 && u.endsWith("/admin/api/system")) return; // session probe before login
+  if (r.status() === 503 && u.includes("/tiles/") && !live) return; // nothing built yet
   (allow.some((a) => u.includes(a)) ? expected : problems).push(line);
 });
 
@@ -195,16 +197,15 @@ async function api(method, path, body) {
 }
 
 async function buildFlow() {
-  await step("build: SSE subscription in the page", async () => {
+  let key = "";
+  await step(`build: catalog search → add ${BUILD_REGION} → build`, async () => {
+    await page.goto(`${base}/admin/regions?add=1`, { waitUntil: "networkidle" });
+    // count SSE events in this page (it stays loaded: the UI navigates client-side from here)
     await page.evaluate(() => {
       window.__ev = { job: 0, log: 0, generation: 0 };
       const es = new EventSource("/admin/api/events");
       for (const t of ["job", "log", "generation"]) es.addEventListener(t, () => window.__ev[t]++);
     });
-  });
-
-  await step(`build: catalog search → add ${BUILD_REGION} → build`, async () => {
-    await page.goto(`${base}/admin/regions?add=1`, { waitUntil: "networkidle" });
     const dlg = page.getByRole("dialog", { name: "Add a region" });
     await dlg
       .getByLabel("Search regions")
@@ -216,7 +217,7 @@ async function buildFlow() {
     await dlg.getByTestId("estimate").waitFor();
     await shot("10-catalog-estimate");
     await dlg.getByRole("button", { name: "Add and build" }).click();
-    await page.getByRole("heading", { name: "Builds" }).waitFor();
+    await page.getByRole("heading", { name: "Builds" }).first().waitFor();
     await page.getByText("Current build").waitFor({ timeout: 30000 });
     await shot("11-build-running");
   });
@@ -256,13 +257,14 @@ async function buildFlow() {
       );
       throw new Error(`build ${job.status}: ${job.error}`);
     }
-    const ev = await page.evaluate(() => window.__ev);
+    const ev = (await page.evaluate(() => window.__ev)) ?? { job: 0, log: 0 };
     console.log(`  build took ${Math.round((Date.now() - t0) / 1000)}s; SSE events`, ev);
     if (ev.job < 5 || ev.log < 5) throw new Error(`too few SSE events ${JSON.stringify(ev)}`);
     if (!job.generation_id) throw new Error("job has no generation_id");
     const gens = (await (await api("GET", "/admin/api/generations")).json()).generations;
     if (gens[0]?.status !== "live" || gens[0].id !== job.generation_id)
       throw new Error(`live generation ${gens[0]?.id} != ${job.generation_id}`);
+    live = true;
     await page.getByText(/Idle/).waitFor({ timeout: 30000 });
     await shot("13-build-done");
   });
@@ -310,7 +312,7 @@ async function buildFlow() {
 
   await step("raster: png, jpg, webp through the real renderer", async () => {
     const created = await (await api("POST", "/admin/api/keys", { label: "e2e raster" })).json();
-    const key = created.secret;
+    key = created.secret;
     const regions = (await (await api("GET", "/admin/api/regions")).json()).regions;
     const b = regions.find((r) => r.status === "installed").bbox;
     const [lon, lat] = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
@@ -348,6 +350,68 @@ async function buildFlow() {
           `${path}: ${r.status} ${r.headers.get("content-type")} ${body.subarray(0, 120).toString()}`,
         );
     }
+  });
+  if (process.env.E2E_SWAP !== "0" && key) await swapFlow(key);
+}
+
+async function swapFlow(key) {
+  await step("swap: rebuild while routing — zero downtime", async () => {
+    const regions = (await (await api("GET", "/admin/api/regions")).json()).regions;
+    const b = regions.find((r) => r.status === "installed").bbox;
+    const [lon, lat] = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+    const routeBody = JSON.stringify({
+      locations: [
+        { lat, lon },
+        { lat: lat + 0.03, lon: lon + 0.03 },
+      ],
+      profile: "auto",
+    });
+    const before = (await (await api("GET", "/admin/api/generations")).json()).generations[0].id;
+    const started = await api("POST", "/admin/api/build", { refresh_downloads: false });
+    if (started.status !== 202) throw new Error(`build ${started.status}`);
+    const stats = { route: 0, routeFail: 0, ready: 0, readyFail: 0, fails: [] };
+    let done = false;
+    const hammer = (async () => {
+      while (!done) {
+        const [r1, r2] = await Promise.all([
+          fetch(`${base}/api/v1/route?key=${key}`, { method: "POST", body: routeBody }).catch(
+            (e) => ({ status: 0, e }),
+          ),
+          fetch(`${base}/readyz`).catch((e) => ({ status: 0, e })),
+        ]);
+        stats.route++;
+        stats.ready++;
+        if (r1.status !== 200) {
+          stats.routeFail++;
+          stats.fails.push(`route ${r1.status} ${new Date().toISOString()}`);
+        }
+        if (r2.status !== 200) {
+          stats.readyFail++;
+          stats.fails.push(`readyz ${r2.status} ${new Date().toISOString()}`);
+        }
+        await new Promise((res) => setTimeout(res, 250));
+      }
+    })();
+    const deadline = Date.now() + 2400 * 1000;
+    let job;
+    for (;;) {
+      job = (await (await api("GET", "/admin/api/jobs")).json()).jobs[0];
+      if (["succeeded", "failed", "cancelled"].includes(job.status)) break;
+      if (Date.now() > deadline) break;
+      await new Promise((res) => setTimeout(res, 5000));
+    }
+    // keep routing a little after the swap: the old instance stops after the switch
+    await new Promise((res) => setTimeout(res, 10000));
+    done = true;
+    await hammer;
+    const after = (await (await api("GET", "/admin/api/generations")).json()).generations[0].id;
+    console.log(
+      `  swap ${before} → ${after}: ${stats.route} routes (${stats.routeFail} failed), ${stats.ready} readyz (${stats.readyFail} failed)`,
+    );
+    if (stats.fails.length) console.log(`    ${stats.fails.slice(0, 10).join("\n    ")}`);
+    if (job.status !== "succeeded") throw new Error(`second build ${job.status}: ${job.error}`);
+    if (after === before) throw new Error("generation did not change");
+    if (stats.routeFail || stats.readyFail) throw new Error("requests failed during the swap");
   });
 }
 

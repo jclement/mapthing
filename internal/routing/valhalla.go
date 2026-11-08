@@ -14,6 +14,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,9 +38,25 @@ const (
 
 // Client talks to valhalla_service over HTTP. It implements Router.
 type Client struct {
-	BaseURL string
+	BaseURL string // initial Valhalla URL; SetBaseURL switches it at run time
 	HTTP    *http.Client
 	Log     *slog.Logger
+
+	live atomic.Pointer[string] // set by SetBaseURL (blue/green switch); wins over BaseURL
+}
+
+// SetBaseURL points the client at another Valhalla instance. Safe while requests are in
+// flight: each request reads the URL once.
+func (c *Client) SetBaseURL(u string) {
+	u = strings.TrimRight(u, "/")
+	c.live.Store(&u)
+}
+
+func (c *Client) base() string {
+	if p := c.live.Load(); p != nil {
+		return *p
+	}
+	return c.BaseURL
 }
 
 // New returns a client for the Valhalla service at baseURL.
@@ -57,7 +74,7 @@ var _ Router = (*Client)(nil)
 func (c *Client) Ready(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/status", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+"/status", nil)
 	if err != nil {
 		return false
 	}
@@ -135,7 +152,7 @@ func (c *Client) post(ctx context.Context, action string, body, out any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+action, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base()+"/"+action, bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
@@ -182,7 +199,7 @@ func valhallaError(status int, body []byte) *Error {
 
 // Raw forwards a request to Valhalla unchanged (the pass-through endpoint).
 func (c *Client) Raw(ctx context.Context, method, action string, query url.Values, body io.Reader) (*http.Response, error) {
-	u := c.BaseURL + "/" + action
+	u := c.base() + "/" + action
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}

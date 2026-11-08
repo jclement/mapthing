@@ -23,6 +23,17 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 	go func() {
 		if err := cat.Ensure(ctx); err != nil {
 			slog.Warn("region catalog not loaded yet", "err", err)
+			return
+		}
+		// Extract sizes (HEAD requests, cached) feed the UI's disk estimates.
+		var ids []string
+		for _, e := range cat.Entries(catalog.Filter{}) {
+			if e.PBFURL != "" {
+				ids = append(ids, e.ID)
+			}
+		}
+		if err := cat.FillSizes(ctx, ids); err != nil {
+			slog.Warn("catalog extract sizes", "err", err)
 		}
 	}()
 	b := build.New(f.cfg.DataDir)
@@ -76,7 +87,8 @@ type catalogEntryJSON struct {
 	Name             string    `json:"name"`
 	Parent           *string   `json:"parent"`
 	BBox             []float64 `json:"bbox"`
-	ExtractBytes     int64     `json:"extract_bytes"`
+	ExtractBytes     int64     `json:"extract_bytes"` // 0 while unknown or for grouping nodes
+	Downloadable     bool      `json:"downloadable"`  // has its own extract (selectable)
 	ElevationSources []string  `json:"elevation_sources"`
 }
 
@@ -84,13 +96,10 @@ type catalogEntryJSON struct {
 func catalogJSON(entries []catalog.Entry) map[string]any {
 	out := make([]catalogEntryJSON, 0, len(entries))
 	for _, e := range entries {
-		ce := catalogEntryJSON{ID: e.ID, Name: e.Name, BBox: e.BBox[:], ExtractBytes: e.Size, ElevationSources: e.ElevationSources}
+		ce := catalogEntryJSON{ID: e.ID, Name: e.Name, BBox: e.BBox[:], ExtractBytes: e.Size, Downloadable: e.PBFURL != "", ElevationSources: e.ElevationSources}
 		if e.Parent != "" {
 			p := e.Parent
 			ce.Parent = &p
-		}
-		if e.PBFURL == "" {
-			ce.ExtractBytes = 0 // a grouping node without its own extract
 		}
 		if ce.ElevationSources == nil {
 			ce.ElevationSources = []string{}

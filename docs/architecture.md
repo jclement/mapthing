@@ -367,7 +367,7 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
 - `GET /admin/api/system` → `{version,commit,build_date,components:[{name,version}],ready,readiness:[{name,ok,detail?}],disk:{free_bytes,total_bytes},current_generation|null,attribution:[{name,license,url?,note?}],imagery_source:{name,attribution}|null}`
   + *extra* `styles:[{id,name,description,dark}],elevation_sources,platform,data_dir,process`.
 - `GET /admin/api/history?kind=&limit=` → `{history:[{id,at,kind,ok,message,job_id?,generation?,details?}]}`; `POST /admin/api/system/restart/{name}` → 204.
-- Keyed endpoints as the UI calls them: `POST /api/v1/route` → GeoJSON Feature (`geometry` LineString, `properties` = `{distance_m,duration_s,surface_breakdown_m,legs}`); the client flattens it.
+- Keyed endpoints as the UI calls them: `POST /api/v1/route` → GeoJSON Feature (`geometry` LineString, `properties` = `{distance_m,duration_s,surface_breakdown,legs}`); the client flattens it (to `surface_breakdown_m`).
   Route errors use codes `no_road` / `no_route`. `POST /api/v1/elevation` → `{results:[sample]}`; `POST /api/v1/elevation/profile` → the `elevation.Profile` JSON.
 
 - Errors: non-2xx with `{"error":{"code":"…","message":"…"}}` (a plain string `error` is accepted too).

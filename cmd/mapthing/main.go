@@ -123,18 +123,7 @@ func serve() error {
 		port = "8080"
 	}
 	sup := supervisor.New(filepath.Join(cfg.DataDir, "logs"))
-	valhallaConf := filepath.Join(cfg.DataDir, "current", "valhalla", "valhalla.json")
-	sup.Add(supervisor.Child{
-		Name:      "valhalla",
-		Command:   cfg.ValhallaCmd,
-		HealthURL: cfg.ValhallaURL + "/status",
-		Precheck: func() error {
-			if _, err := os.Stat(valhallaConf); err != nil {
-				return errors.New("no routing graph yet (build a generation first)")
-			}
-			return nil
-		},
-	})
+	// valhalla is started per generation, blue/green, by features (cmd/mapthing/valhalla.go).
 	sup.Add(supervisor.Child{
 		Name:      "renderer",
 		Command:   cfg.RendererCmd,
@@ -161,12 +150,13 @@ func serve() error {
 		return fmt.Errorf("tiles: %w", err)
 	}
 
+	var f *features
 	watcher := &tiles.Watcher{DataDir: cfg.DataDir}
 	watcher.OnSwap = func(ctx context.Context, oldID, newID string) {
+		// Zero downtime: tiles reopen at once; valhalla switches blue/green once the new
+		// instance answers; the renderer drops its styles and pools (no restart).
 		ts.Reload()
-		if err := sup.RestartAll(ctx); err != nil {
-			slog.Warn("restart children", "err", err)
-		}
+		f.swap(ctx, newID)
 		runner.Hub().Publish(jobs.Event{Type: "generation", Data: map[string]any{"id": newID, "previous": oldID}})
 	}
 	watcher.Prime()
@@ -175,7 +165,7 @@ func serve() error {
 		DataDir: cfg.DataDir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner,
 		Scheduler: sched, Supervisor: sup, Tiles: ts, Assets: assets.FS(), UI: web.Dist(),
 	}
-	f := features{cfg: cfg, store: st, runner: runner, sup: sup, watcher: watcher, tiles: ts}
+	f = &features{cfg: cfg, store: st, runner: runner, sup: sup, watcher: watcher, tiles: ts}
 	if err := f.wire(ctx, &deps); err != nil {
 		return err
 	}
@@ -189,6 +179,7 @@ func serve() error {
 	go ss.Run(ctx, 30*time.Second)
 	go watcher.Run(ctx, 2*time.Second)
 	sup.Start(ctx)
+	f.start(ctx)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
