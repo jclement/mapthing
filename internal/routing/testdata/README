@@ -7,3 +7,8 @@ valhalla_error_nopath.json (442) and valhalla_error_unconnected.json (170).
 
 golden/ holds the expected API responses; regenerate with `go test ./internal/routing -update`
 and review the diff.
+
+valhalla_trace_structures.json is trace_attributes (map_snap; edge.bridge, edge.tunnel,
+matched.type, matched.edge_index) for valhalla_trace_structures_points.json: the shape of an
+auto route along SR-1 across the C&D Canal bridge in Delaware (39.570,-75.664 → 39.530,-75.656),
+recorded from the same Delaware graph.

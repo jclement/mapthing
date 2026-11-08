@@ -23,6 +23,7 @@ import (
 	"github.com/jclement/mapthing/internal/build"
 	"github.com/jclement/mapthing/internal/catalog"
 	"github.com/jclement/mapthing/internal/elevation"
+	"github.com/jclement/mapthing/internal/routing"
 )
 
 type logReporter struct{ last time.Time }
@@ -96,6 +97,7 @@ func main() {
 		fs := flag.NewFlagSet("profile", flag.ExitOnError)
 		in := fs.String("in", "data/terrain/terrain.pmtiles", "archive")
 		polyFile := fs.String("polyline", "", "file holding an encoded polyline (precision 5) instead of lon,lat args")
+		valhalla := fs.String("valhalla", "", "Valhalla URL: also compare bridges=deck (e.g. http://127.0.0.1:8002)")
 		_ = fs.Parse(os.Args[2:])
 		a, err := elevation.OpenArchive(*in, 0)
 		if err != nil {
@@ -138,11 +140,40 @@ func main() {
 			{"256 samples, default", elevation.ProfileOptions{Samples: 256}},
 			{"512 samples, raw", elevation.ProfileOptions{Samples: 512, SmoothWindowM: -1, HysteresisM: -1}},
 		} {
-			p, err := elevation.ProfileArchive(ctx, a, path, sm.o)
+			p, err := elevation.ProfileArchive(ctx, a, nil, path, sm.o)
 			if err != nil {
 				fail(err)
 			}
 			fmt.Printf("%-26s %8d %8.1f %8.1f %8.1f %8.1f\n", sm.name, len(p.Samples), p.GainM, p.LossM, p.GainRawM, p.LossRawM)
+		}
+		if *valhalla != "" {
+			finder := routing.New(*valhalla)
+			for _, sm := range []struct {
+				name string
+				o    elevation.ProfileOptions
+			}{
+				{"30 m, default, ground", elevation.ProfileOptions{IntervalM: 30}},
+				{"30 m, default, deck", elevation.ProfileOptions{IntervalM: 30, Bridges: elevation.BridgesDeck}},
+				{"30 m, hyst 2 only, deck", elevation.ProfileOptions{IntervalM: 30, SmoothWindowM: -1, Bridges: elevation.BridgesDeck}},
+				{"256 samples, raw, deck", elevation.ProfileOptions{Samples: 256, SmoothWindowM: -1, HysteresisM: -1, Bridges: elevation.BridgesDeck}},
+			} {
+				p, err := elevation.ProfileArchive(ctx, a, finder, path, sm.o)
+				if err != nil {
+					fail(err)
+				}
+				var bridges, tunnels int
+				var onStruct float64
+				for _, sp := range p.StructureSpans {
+					if sp.Kind == "tunnel" {
+						tunnels++
+					} else {
+						bridges++
+					}
+					onStruct += sp.EndM - sp.StartM
+				}
+				fmt.Printf("%-26s %8d %8.1f %8.1f %8.1f %8.1f  mode=%s spans=%d bridges/%d tunnels (%.1f km) %s\n",
+					sm.name, len(p.Samples), p.GainM, p.LossM, p.GainRawM, p.LossRawM, p.Bridges, bridges, tunnels, onStruct/1000, p.Warning)
+			}
 		}
 	default:
 		fail(fmt.Errorf("unknown command %q", os.Args[1]))

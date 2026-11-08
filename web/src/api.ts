@@ -274,6 +274,17 @@ export interface ElevationSample {
   source?: string;
   resolution_m?: number;
   distance_m?: number;
+  /** "bridge" | "tunnel" when a deck-mode profile interpolated this sample. */
+  structure?: string;
+}
+
+/** How a profile treats bridges and tunnels: terrain under them, or the road level across. */
+export type BridgeMode = "ground" | "deck";
+
+export interface StructureSpan {
+  start_m: number;
+  end_m: number;
+  kind: "bridge" | "tunnel";
 }
 
 export interface ElevationProfile {
@@ -284,6 +295,10 @@ export interface ElevationProfile {
   min_m: number;
   max_m: number;
   sources: string[];
+  bridges: BridgeMode;
+  structure_spans?: StructureSpan[];
+  /** Set when deck mode was asked for but the profile fell back to ground. */
+  warning?: string;
 }
 
 export interface StyleInfo {
@@ -339,8 +354,8 @@ export const api = {
     ),
   elevation: (points: LonLat[]) =>
     request<{ results: ElevationSample[] }>("POST", "/api/v1/elevation", { points }),
-  profile: (path: LonLat[], interval_m?: number) =>
-    request<ElevationProfile>("POST", "/api/v1/elevation/profile", { path, interval_m }),
+  profile: (path: LonLat[], interval_m?: number, bridges?: BridgeMode) =>
+    request<ElevationProfile>("POST", "/api/v1/elevation/profile", { path, interval_m, bridges }),
 };
 
 /** Server-sent events from /admin/api/events. */

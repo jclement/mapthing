@@ -73,6 +73,7 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 	//	d.ReadyChecks = map[string]func(context.Context) bool{"routing": router.Ready}
 	// Elevation: reads <data>/current/terrain.pmtiles and follows generation swaps.
 	terrain := elevation.NewTerrainForData(f.cfg.DataDir)
+	terrain.SetStructureFinder(router) // bridges=deck profiles map-match through Valhalla
 	d.Mounts = append(d.Mounts, elevation.NewHandler(terrain))
 	d.ElevationSources = func() any { return terrain.Sources() }
 	return nil

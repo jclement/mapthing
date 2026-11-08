@@ -201,6 +201,18 @@ reads `/data/current/terrain.pmtiles` and reopens it within 2 s of a `current` s
     climb: bridge and culvert dips in a bare-earth DEM, embankment edges, single-pixel
     noise. With these defaults, gain is nearly independent of sample spacing (10 m vs 30 m
     agree within ~1% on the test routes; see REPORT).
+  - `bridges`: `"ground"` (default) samples the terrain everywhere. That is right for buried
+    pipe, which goes under a creek or canal rather than over it. `"deck"` map-matches the
+    profile's sample points onto the road graph (Valhalla `trace_attributes`, `map_snap`,
+    `edge.bridge`/`edge.tunnel`), then interpolates elevation linearly across each run of
+    bridge or tunnel samples. The interpolation runs between the nearest ground samples, or is
+    held level when a structure reaches the path's end. Gain, loss, min and max then come from
+    that road-level series. The response echoes `bridges` and lists `structure_spans`
+    (`start_m`, `end_m`, `kind`); interpolated samples carry `structure`. If Valhalla is
+    unavailable, the path does not map-match, or fewer than 50% of points match, the answer
+    is the ground profile with `bridges: "ground"` and a `warning`. The admin map's route tool
+    uses deck by default, with a toggle. The Google-compatible endpoint always samples the
+    ground. `POST /api/v1/route` does not return a profile, so it takes no `bridges` option.
 - `GET /api/v1/elevation/sources` → sources in the live archive.
 - `GET /maps/api/elevation/json`: Google-compatible (`locations=` / `path=`+`samples=` ≤ 512,
   `lat,lng|…` or `enc:`). `path` + `samples=N` returns N points equidistant along the whole
