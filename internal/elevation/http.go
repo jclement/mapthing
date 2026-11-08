@@ -152,6 +152,8 @@ type profileRequest struct {
 	IntervalM   float64  `json:"interval_m"`
 	Samples     int      `json:"samples"`
 	HysteresisM float64  `json:"hysteresis_m"`
+	// SmoothWindowM: running-median window for gain/loss (default 150 m; negative = off).
+	SmoothWindowM float64 `json:"smooth_window_m"`
 }
 
 func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +203,7 @@ func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
 	if req.IntervalM > 0 && req.IntervalM < 1 {
 		req.IntervalM = 1
 	}
-	p, err := h.Svc.Profile(r.Context(), path, ProfileOptions{IntervalM: req.IntervalM, Samples: req.Samples, HysteresisM: req.HysteresisM})
+	p, err := h.Svc.Profile(r.Context(), path, ProfileOptions{IntervalM: req.IntervalM, Samples: req.Samples, HysteresisM: req.HysteresisM, SmoothWindowM: req.SmoothWindowM})
 	if err != nil {
 		apiError(w, wrapInternal(err))
 		return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sort"
 )
 
 const (
@@ -11,6 +12,8 @@ const (
 	DefaultIntervalM = 30.0
 	// DefaultHysteresisM is the default threshold for smoothed gain/loss.
 	DefaultHysteresisM = 2.0
+	// DefaultSmoothWindowM is the default running-median window for gain/loss.
+	DefaultSmoothWindowM = 150.0
 	// MaxProfileSamples caps a profile; the interval grows to fit.
 	MaxProfileSamples = 10000
 )
@@ -23,9 +26,9 @@ type sampler interface {
 // along-path distances (great-circle). Vertices are kept and each segment is
 // split evenly so no gap exceeds intervalM. With samples > 0 the path is
 // instead sampled at exactly that many evenly spaced distances (first and
-// last at the ends), as the Google Elevation API does. Intermediate points
-// are interpolated linearly in lon/lat, which is indistinguishable from the
-// great circle at sample spacing.
+// last at the ends), as the Google Elevation API does. Intermediate points lie
+// on the great circle between vertices at the stated distance, so samples are
+// exactly evenly spaced along the path however long a segment is.
 func Densify(path []LonLat, intervalM float64, samples int) ([]LonLat, []float64) {
 	if len(path) == 0 {
 		return nil, nil
@@ -68,7 +71,7 @@ func Densify(path []LonLat, intervalM float64, samples int) ([]LonLat, []float64
 		n := int(math.Ceil(segLen / intervalM))
 		for k := 1; k < n; k++ {
 			f := float64(k) / float64(n)
-			pts = append(pts, LonLat{path[i-1][0] + f*(path[i][0]-path[i-1][0]), path[i-1][1] + f*(path[i][1]-path[i-1][1])})
+			pts = append(pts, greatCircle(path[i-1], path[i], f))
 			dist = append(dist, cum[i-1]+f*segLen)
 		}
 		pts = append(pts, path[i])
@@ -87,7 +90,65 @@ func interp(path []LonLat, cum []float64, seg int, d float64) LonLat {
 		return a
 	}
 	f := math.Max(0, math.Min(1, (d-cum[seg])/l))
-	return LonLat{a[0] + f*(b[0]-a[0]), a[1] + f*(b[1]-a[1])}
+	return greatCircle(a, b, f)
+}
+
+// greatCircle returns the point a fraction f of the way from a to b along the
+// great circle (spherical linear interpolation).
+func greatCircle(a, b LonLat, f float64) LonLat {
+	if f <= 0 {
+		return a
+	}
+	if f >= 1 {
+		return b
+	}
+	rad := math.Pi / 180
+	φ1, λ1, φ2, λ2 := a[1]*rad, a[0]*rad, b[1]*rad, b[0]*rad
+	x1, y1, z1 := math.Cos(φ1)*math.Cos(λ1), math.Cos(φ1)*math.Sin(λ1), math.Sin(φ1)
+	x2, y2, z2 := math.Cos(φ2)*math.Cos(λ2), math.Cos(φ2)*math.Sin(λ2), math.Sin(φ2)
+	dot := math.Max(-1, math.Min(1, x1*x2+y1*y2+z1*z2))
+	δ := math.Acos(dot)
+	if δ < 1e-12 { // coincident points
+		return a
+	}
+	s := math.Sin(δ)
+	ka, kb := math.Sin((1-f)*δ)/s, math.Sin(f*δ)/s
+	x, y, z := ka*x1+kb*x2, ka*y1+kb*y2, ka*z1+kb*z2
+	return LonLat{math.Atan2(y, x) / rad, math.Atan2(z, math.Hypot(x, y)) / rad}
+}
+
+// MedianFilter returns a running median of elev over a window of windowM
+// metres centred on each sample (by the along-path distances dist), narrowed
+// near the ends so it stays centred. Samples further apart than windowM are
+// left unchanged.
+func MedianFilter(elev, dist []float64, windowM float64) []float64 {
+	out := make([]float64, len(elev))
+	if windowM <= 0 || len(elev) < 3 {
+		copy(out, elev)
+		return out
+	}
+	first, last := dist[0], dist[len(dist)-1]
+	var win []float64
+	for i := range elev {
+		// Symmetric window, shrunk near the ends so endpoints keep their own
+		// value (a one-sided median would shave the start and end of a climb).
+		half := math.Min(windowM/2, math.Min(dist[i]-first, last-dist[i]))
+		lo, hi := i, i
+		for lo > 0 && dist[lo-1] >= dist[i]-half {
+			lo--
+		}
+		for hi+1 < len(elev) && dist[hi+1] <= dist[i]+half {
+			hi++
+		}
+		win = append(win[:0], elev[lo:hi+1]...)
+		sort.Float64s(win)
+		if n := len(win); n%2 == 1 {
+			out[i] = win[n/2]
+		} else {
+			out[i] = (win[n/2-1] + win[n/2]) / 2
+		}
+	}
+	return out
 }
 
 // GainLoss returns the total ascent and descent of a series. With threshold
@@ -144,6 +205,11 @@ func GainLoss(elev []float64, threshold float64) (gain, loss float64) {
 	return gain, loss
 }
 
+// ProfileArchive computes a profile directly from an archive (tools and tests).
+func ProfileArchive(ctx context.Context, a *Archive, path []LonLat, opt ProfileOptions) (*Profile, error) {
+	return profileFrom(ctx, a, path, opt)
+}
+
 func profileFrom(ctx context.Context, s sampler, path []LonLat, opt ProfileOptions) (*Profile, error) {
 	if len(path) == 0 {
 		return nil, errors.New("path is empty")
@@ -156,7 +222,7 @@ func profileFrom(ctx context.Context, s sampler, path []LonLat, opt ProfileOptio
 	if len(dist) > 0 {
 		p.LengthM = math.Round(dist[len(dist)-1]*100) / 100
 	}
-	var series []float64
+	var series, seriesDist []float64
 	seen := map[string]bool{}
 	for i, pt := range pts {
 		if i%256 == 0 && ctx.Err() != nil {
@@ -171,6 +237,7 @@ func profileFrom(ctx context.Context, s sampler, path []LonLat, opt ProfileOptio
 		if smp.Elevation != nil {
 			e := *smp.Elevation
 			series = append(series, e)
+			seriesDist = append(seriesDist, dist[i])
 			p.MinM = math.Min(p.MinM, e)
 			p.MaxM = math.Max(p.MaxM, e)
 		}
@@ -189,9 +256,16 @@ func profileFrom(ctx context.Context, s sampler, path []LonLat, opt ProfileOptio
 	if h < 0 {
 		h = 0
 	}
-	p.HysteresisM = h
+	w := opt.SmoothWindowM
+	if w == 0 {
+		w = DefaultSmoothWindowM
+	}
+	if w < 0 {
+		w = 0
+	}
+	p.HysteresisM, p.SmoothWindowM = h, w
 	p.GainRawM, p.LossRawM = GainLoss(series, 0)
-	p.GainM, p.LossM = GainLoss(series, h)
+	p.GainM, p.LossM = GainLoss(MedianFilter(series, seriesDist, w), h)
 	for _, f := range []*float64{&p.GainM, &p.LossM, &p.GainRawM, &p.LossRawM} {
 		*f = math.Round(*f*100) / 100
 	}

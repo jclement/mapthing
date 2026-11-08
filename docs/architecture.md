@@ -188,14 +188,25 @@ reads `/data/current/terrain.pmtiles` and reopens it within 2 s of a `current` s
 - `GET /api/v1/elevation?points=lon,lat|lon,lat` and `POST {"points":[[lon,lat],…]}` (≤ 10 000)
   → `{"results":[{lon,lat,elevation_m,source,resolution_m}],"sources":[…]}`.
 - `POST /api/v1/elevation/profile` with `{"path":[[lon,lat],…]}` or `{"polyline":"…",
-  "precision":5|6}`, plus `interval_m` (default 30, vertices kept), or `samples` (exactly N,
-  Google semantics), and `hysteresis_m` (default 2; negative = off). Returns `samples[]` (with
-  `distance_m`), `length_m`, `gain_m`/`loss_m` (hysteresis-smoothed), `gain_raw_m`/`loss_raw_m`,
-  `min_m`, `max_m`, `sources`. Distances are great-circle; at most 10 000 samples (the interval
-  grows to fit).
+  "precision":5|6}`. Sampling is either `interval_m` (default 30; vertices are kept) or
+  `samples` (exactly N, Google semantics). Intermediate points lie on the great circle, and
+  distances are great-circle. At most 10 000 samples; the interval grows to fit. Returns:
+  - `samples[]` with unsmoothed elevations and `distance_m`.
+  - `length_m`, `min_m`, `max_m`, `sources`.
+  - `gain_raw_m` / `loss_raw_m`: every sample-to-sample change.
+  - `gain_m` / `loss_m`: the elevation series is first passed through a running median over
+    `smooth_window_m` (default **150 m**, centred, narrowed at the path ends), then a
+    `hysteresis_m` threshold (default **2 m**); negative turns either step off. The median
+    removes features narrower than about half the window that a vehicle or pipe does not
+    climb: bridge and culvert dips in a bare-earth DEM, embankment edges, single-pixel
+    noise. With these defaults, gain is nearly independent of sample spacing (10 m vs 30 m
+    agree within ~1% on the test routes; see REPORT).
 - `GET /api/v1/elevation/sources` → sources in the live archive.
 - `GET /maps/api/elevation/json`: Google-compatible (`locations=` / `path=`+`samples=` ≤ 512,
-  `lat,lng|…` or `enc:`). Errors are `INVALID_REQUEST` (HTTP 400). Google's shape has no null,
+  `lat,lng|…` or `enc:`). `path` + `samples=N` returns N points equidistant along the whole
+  path (great circle), ends included, with **unsmoothed** elevations, as Google does, so gain
+  computed client-side from it is comparable with Google's. Errors are `INVALID_REQUEST`
+  (HTTP 400). Google's shape has no null,
   so an uncovered point returns `elevation: 0, resolution: -1`; if no point is covered (or no
   generation is live) the status is `DATA_NOT_AVAILABLE`.
 - Heights are each source's native orthometric datum (NAVD88 / CGVD2013 / EGM2008), with no
