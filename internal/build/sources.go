@@ -27,16 +27,17 @@ const (
 // download again.
 type planetilerSource struct {
 	name, file, url, env string
-	ocean                bool // water/land polygons: failure falls back instead of failing the build
+	ocean                bool  // water/land polygons: failure falls back instead of failing the build
+	approxBytes          int64 // download size, for the disk guard
 }
 
 var planetilerSources = []planetilerSource{
-	{"natural earth", "natural_earth_vector.gpkg.zip", "https://naciscdn.org/naturalearth/packages/natural_earth_vector.gpkg.zip", "MAPTHING_NATURAL_EARTH_URL", false},
-	{"water polygons", "water-polygons-split-3857.zip", "https://osmdata.openstreetmap.de/download/water-polygons-split-3857.zip", "MAPTHING_WATER_POLYGONS_URL", true},
-	{"land polygons", "land-polygons-split-3857.zip", "https://osmdata.openstreetmap.de/download/land-polygons-split-3857.zip", "MAPTHING_LAND_POLYGONS_URL", true},
-	{"landcover", "daylight-landcover.gpkg", "https://r2-public.protomaps.com/datasets/daylight-landcover.gpkg", "MAPTHING_LANDCOVER_URL", false},
-	{"qrank", "qrank.csv.gz", "https://qrank.toolforge.org/download/qrank.csv.gz", "MAPTHING_QRANK_URL", false},
-	{"pgf encoding", "pgf-encoding.zip", "https://wipfli.github.io/pgf-encoding/pgf-encoding.zip", "MAPTHING_PGF_ENCODING_URL", false},
+	{"natural earth", "natural_earth_vector.gpkg.zip", "https://naciscdn.org/naturalearth/packages/natural_earth_vector.gpkg.zip", "MAPTHING_NATURAL_EARTH_URL", false, 470 << 20},
+	{"water polygons", "water-polygons-split-3857.zip", "https://osmdata.openstreetmap.de/download/water-polygons-split-3857.zip", "MAPTHING_WATER_POLYGONS_URL", true, 900 << 20},
+	{"land polygons", "land-polygons-split-3857.zip", "https://osmdata.openstreetmap.de/download/land-polygons-split-3857.zip", "MAPTHING_LAND_POLYGONS_URL", true, 800 << 20},
+	{"landcover", "daylight-landcover.gpkg", "https://r2-public.protomaps.com/datasets/daylight-landcover.gpkg", "MAPTHING_LANDCOVER_URL", false, 40 << 20},
+	{"qrank", "qrank.csv.gz", "https://qrank.toolforge.org/download/qrank.csv.gz", "MAPTHING_QRANK_URL", false, 130 << 20},
+	{"pgf encoding", "pgf-encoding.zip", "https://wipfli.github.io/pgf-encoding/pgf-encoding.zip", "MAPTHING_PGF_ENCODING_URL", false, 1 << 20},
 }
 
 // sourceBackoff is the wait before each retry of a failed source download.

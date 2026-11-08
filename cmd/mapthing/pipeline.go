@@ -22,6 +22,11 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 	go func() {
 		if err := cat.Ensure(ctx); err != nil {
 			slog.Warn("region catalog not loaded yet", "err", err)
+			return
+		}
+		// Extract sizes for the catalog UI, custom-region estimates and the disk guard.
+		if err := cat.WarmSizes(ctx, catalog.Filter{}); err != nil {
+			slog.Warn("catalog extract sizes not saved", "err", err)
 		}
 	}()
 	b := build.New(f.cfg.DataDir)
@@ -78,7 +83,7 @@ func (f *features) buildRegions(ctx context.Context, cat *catalog.Catalog) ([]ca
 	var out []catalog.Region
 	skip := map[string]bool{}
 	for _, rg := range rows {
-		r, err := storeRegion(cat, rg)
+		r, err := storeRegion(ctx, cat, rg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("region %s: %w", rg.ID, err)
 		}
@@ -90,8 +95,9 @@ func (f *features) buildRegions(ctx context.Context, cat *catalog.Catalog) ([]ca
 	return out, skip, nil
 }
 
-func storeRegion(cat *catalog.Catalog, rg *store.Region) (catalog.Region, error) {
+func storeRegion(ctx context.Context, cat *catalog.Catalog, rg *store.Region) (catalog.Region, error) {
 	if rg.Kind != "custom" {
+		_ = cat.FillSizes(ctx, []string{rg.ID}) // real size for the disk guard (cached a week)
 		return cat.Region(rg.ID)
 	}
 	var bbox *catalog.BBox
@@ -108,6 +114,12 @@ func storeRegion(cat *catalog.Catalog, rg *store.Region) (catalog.Region, error)
 		return catalog.Region{}, err
 	}
 	r.ID = rg.ID
+	if p := &r.Custom.Parent; p.ID != "" {
+		_ = cat.FillSizes(ctx, []string{p.ID})
+		if e, ok := cat.Get(p.ID); ok && e.Size > 0 {
+			p.SizeHint = e.Size
+		}
+	}
 	return r, nil
 }
 
@@ -116,6 +128,14 @@ func storeRegion(cat *catalog.Catalog, rg *store.Region) (catalog.Region, error)
 func geojsonPolygon(raw json.RawMessage) ([][][2]float64, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
+	}
+	// The admin API stores a drawn polygon as a bare outer ring [[lon,lat],…] (polygonRing).
+	var ring [][2]float64
+	if err := json.Unmarshal(raw, &ring); err == nil {
+		if len(ring) < 3 {
+			return nil, fmt.Errorf("polygon ring needs at least 3 points, got %d", len(ring))
+		}
+		return [][][2]float64{ring}, nil
 	}
 	var g struct {
 		Type        string          `json:"type"`

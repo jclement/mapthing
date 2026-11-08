@@ -709,3 +709,78 @@ func TestValhallaMissingSpeedsFails(t *testing.T) {
 		t.Fatalf("with speeds present: %v", err)
 	}
 }
+
+func TestDiskGuardItemised(t *testing.T) {
+	e := newEnv(t)
+	// A 10°×10° "Texas" parent of 700 MiB and five 1°×1° custom boxes inside it.
+	texas := catalog.Region{ID: "north-america/us/texas", Name: "Texas", BBox: catalog.BBox{-106, 26, -96, 36},
+		PBFURL: "http://127.0.0.1:1/texas-latest.osm.pbf", SizeHint: 700 << 20,
+		Polygon: [][][2]float64{{{-106, 26}, {-96, 26}, {-96, 36}, {-106, 36}, {-106, 26}}}}
+	var regions []catalog.Region
+	for i := 0; i < 5; i++ {
+		w := -105 + float64(i)*2
+		regions = append(regions, catalog.Region{ID: fmt.Sprintf("custom/box-%d", i), Name: "box",
+			BBox: catalog.BBox{w, 31, w + 1, 32}, Custom: &catalog.Custom{Parent: texas}})
+	}
+	est := e.b.Estimate(regions)
+	if est.DownloadBytes != 700<<20 {
+		t.Errorf("download %s, want texas once (700 MiB)", humanBytes(est.DownloadBytes))
+	}
+	// Each box is ~1% of the parent's area (cos-weighted), so ~7 MiB, not 700 MiB or 512 MiB.
+	if est.ClipBytes < 25<<20 || est.ClipBytes > 50<<20 {
+		t.Errorf("clips %s, want ≈ 5 × 7 MiB", humanBytes(est.ClipBytes))
+	}
+	if est.SourcesBytes != 0 {
+		t.Errorf("sources %s although cached", humanBytes(est.SourcesBytes))
+	}
+	want := est.DownloadBytes + est.ClipBytes + est.MergeBytes + est.WorkBytes
+	if est.NeedBytes != want || est.Factor != 1 {
+		t.Errorf("need %d, want %d (factor %v)", est.NeedBytes, want, est.Factor)
+	}
+	if est.NeedBytes > 1<<30 {
+		t.Errorf("five small Texas boxes need %s; the old guard said ~22 GiB", humanBytes(est.NeedBytes))
+	}
+
+	t.Setenv("MAPTHING_DISK_GUARD_FACTOR", "0.5")
+	if half := e.b.Estimate(regions); half.NeedBytes != want/2 || half.Factor != 0.5 {
+		t.Errorf("factor 0.5: need %d, want %d", half.NeedBytes, want/2)
+	}
+	t.Setenv("MAPTHING_DISK_GUARD_FACTOR", "nonsense")
+	if bad := e.b.Estimate(regions); bad.Factor != 1 {
+		t.Errorf("invalid factor used: %v", bad.Factor)
+	}
+}
+
+func TestDiskGuardSourcesAndReuse(t *testing.T) {
+	e := newEnv(t)
+	for _, f := range []string{"water-polygons-split-3857.zip", "land-polygons-split-3857.zip"} {
+		_ = os.Remove(filepath.Join(e.b.sourcesDir(), f))
+	}
+	est := e.b.Estimate([]catalog.Region{e.region})
+	if est.SourcesBytes != (900+800)<<20 {
+		t.Errorf("sources %s, want water+land", humanBytes(est.SourcesBytes))
+	}
+	// osmdata known down → the Natural Earth fallback will be used: no reservation.
+	e.b.markHostFailed("osmdata.openstreetmap.de")
+	est = e.b.Estimate([]catalog.Region{e.region})
+	if est.SourcesBytes != 0 || !strings.Contains(strings.Join(est.Items, "\n"), "Natural Earth fallback") {
+		t.Errorf("sources %s items %v", humanBytes(est.SourcesBytes), est.Items)
+	}
+	// An extract already on disk costs nothing to download unless refreshing.
+	if _, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}}); err != nil {
+		t.Fatal(err)
+	}
+	if est := e.b.Estimate([]catalog.Region{e.region}); est.DownloadBytes != 0 {
+		t.Errorf("reuse: download %d", est.DownloadBytes)
+	}
+	if est := e.b.EstimateFor(Options{Regions: []catalog.Region{e.region}, Refresh: true}); est.DownloadBytes == 0 {
+		t.Error("refresh: download not counted")
+	}
+	rep := &testRep{}
+	if _, err := e.b.Run(context.Background(), rep, Options{Regions: []catalog.Region{e.region}}); err != nil {
+		t.Fatal(err)
+	}
+	if !rep.has("disk: reuse north-america/us/delaware") || !rep.has("disk: need ~") {
+		t.Error("itemised estimate not in the job log")
+	}
+}

@@ -101,6 +101,19 @@ func (c *Catalog) readSizes() map[string]sizeRec {
 	return m
 }
 
+// WarmSizes HEADs every extract matching f (North America by default) whose size is missing or
+// stale, so the catalog, estimates and the disk guard see real sizes. Cached sizes are reused for
+// MaxAge, so this is cheap after the first run.
+func (c *Catalog) WarmSizes(ctx context.Context, f Filter) error {
+	var ids []string
+	for _, e := range c.Entries(f) {
+		if e.PBFURL != "" {
+			ids = append(ids, e.ID)
+		}
+	}
+	return c.FillSizes(ctx, ids)
+}
+
 // FillSizes HEADs the PBF of each id whose cached size is missing or older than MaxAge, a few
 // at a time, and persists the results. Errors for individual entries are ignored (size stays 0).
 func (c *Catalog) FillSizes(ctx context.Context, ids []string) error {
@@ -160,5 +173,19 @@ func (c *Catalog) FillSizes(ctx context.Context, ids []string) error {
 	if err := os.MkdirAll(c.dir(), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(c.sizesPath(), data, 0o644)
+	// Atomic replace: a background warm-up and a request may both be writing.
+	tmp, err := os.CreateTemp(c.dir(), "sizes-*.json")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), c.sizesPath())
 }
