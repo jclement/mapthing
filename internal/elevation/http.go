@@ -28,17 +28,20 @@ type Handler struct {
 // NewHandler returns the HTTP handler set for svc.
 func NewHandler(svc Service) *Handler { return &Handler{Svc: svc} }
 
-// Mount registers the elevation routes. wrap applies authentication, rate
-// limits and usage counting (core's middleware); pass nil for none.
-func (h *Handler) Mount(mux *http.ServeMux, wrap func(http.Handler) http.Handler) {
+// Mount registers the elevation routes (core's server.Mountable). wrap applies
+// authentication, rate limits and usage counting under a kind; every route
+// here counts as "elevation", the Google-compatible one included. A nil wrap
+// mounts the handlers bare (tests).
+func (h *Handler) Mount(mux *http.ServeMux, wrap func(kind string, h http.Handler) http.Handler) {
 	if wrap == nil {
-		wrap = func(h http.Handler) http.Handler { return h }
+		wrap = func(_ string, h http.Handler) http.Handler { return h }
 	}
-	mux.Handle("GET /api/v1/elevation", wrap(http.HandlerFunc(h.points)))
-	mux.Handle("POST /api/v1/elevation", wrap(http.HandlerFunc(h.points)))
-	mux.Handle("POST /api/v1/elevation/profile", wrap(http.HandlerFunc(h.profile)))
-	mux.Handle("GET /api/v1/elevation/sources", wrap(http.HandlerFunc(h.sources)))
-	mux.Handle("GET /maps/api/elevation/json", wrap(http.HandlerFunc(h.google)))
+	const kind = "elevation"
+	mux.Handle("GET /api/v1/elevation", wrap(kind, http.HandlerFunc(h.points)))
+	mux.Handle("POST /api/v1/elevation", wrap(kind, http.HandlerFunc(h.points)))
+	mux.Handle("POST /api/v1/elevation/profile", wrap(kind, http.HandlerFunc(h.profile)))
+	mux.Handle("GET /api/v1/elevation/sources", wrap(kind, http.HandlerFunc(h.sources)))
+	mux.Handle("GET /maps/api/elevation/json", wrap(kind, http.HandlerFunc(h.google)))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

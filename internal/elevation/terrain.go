@@ -291,9 +291,17 @@ func (t *Terrain) Sources() []SourceInfo {
 	if err != nil {
 		return nil
 	}
+	// List the sources that contributed pixels; archives without pixel
+	// counts (hand-made, tests) list every source.
+	counted := false
+	for _, s := range a.meta.Sources {
+		counted = counted || s.Pixels > 0
+	}
 	var out []SourceInfo
 	for _, s := range a.meta.Sources {
-		out = append(out, s.SourceInfo)
+		if !counted || s.Pixels > 0 {
+			out = append(out, s.SourceInfo)
+		}
 	}
 	return out
 }

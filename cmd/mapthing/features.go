@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jclement/mapthing/internal/config"
+	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/server"
 	"github.com/jclement/mapthing/internal/store"
@@ -51,16 +52,15 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 	//	d.Catalog = func(ctx context.Context) (any, error) { return cat.List(ctx) }
 	//	d.ValidateRegion = cat.Validate
 	//
-	// Elevation (merge), as given by the elevation worker:
-	//
-	//	terrain := elevation.NewTerrainForData(f.cfg.DataDir)
-	//	d.Mounts = append(d.Mounts, elevation.NewHandler(terrain))   // Mount(mux, wrap)
-	//	cat.Coverage = elevation.CoverageIDs
-	//	d.ElevationSources = func() any { return terrain.Sources() }
+	// Catalog (merge, with the pipeline): cat.Coverage = elevation.CoverageIDs
 	//
 	// Routing (merge): append its Mountable and readiness, e.g.
 	//
 	//	d.Mounts = append(d.Mounts, routing.NewHandlers(router))
 	//	d.ReadyChecks = map[string]func(context.Context) bool{"routing": router.Ready}
+	// Elevation: reads <data>/current/terrain.pmtiles and follows generation swaps.
+	terrain := elevation.NewTerrainForData(f.cfg.DataDir)
+	d.Mounts = append(d.Mounts, elevation.NewHandler(terrain))
+	d.ElevationSources = func() any { return terrain.Sources() }
 	return nil
 }

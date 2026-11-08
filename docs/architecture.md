@@ -167,8 +167,10 @@ metadata is `elevation.Metadata`: `format`, `encoding: "terrarium"`, `tile_size:
 index − 1: id, name, resolution, licence, attribution, datum, kind dtm/dsm, footprint boxes,
 pixel count).
 
-**API** (`internal/elevation`, `Handler.Mount(mux, wrap)`; `elevation.NewTerrainForData(dataDir)`
-reads `/data/current/terrain.pmtiles` and reopens it within 2 s of a `current` swap):
+**API** (`internal/elevation`; `Handler` is a `server.Mountable` and wraps every route with usage
+kind `elevation`; wired in `cmd/mapthing/features.go`. `elevation.NewTerrainForData(dataDir)`
+reads `/data/current/terrain.pmtiles` and reopens it within 2 s of a `current` swap.
+`GET /api/v1/elevation/sources` and `/admin/api/system` list only sources that contributed pixels):
 
 - Points and profiles sample the max zoom with bilinear interpolation on pixel centres. A
   neighbour without data is dropped and the remaining weights renormalised; if there are no
