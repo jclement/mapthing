@@ -50,12 +50,17 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 	//	}
 	//	d.Catalog = func(ctx context.Context) (any, error) { return cat.List(ctx) }
 	//	d.ValidateRegion = cat.Validate
-	//	cat.Coverage = elevationSvc.Coverage   // elevation sources per bbox
 	//
-	// Routing and elevation (merge): append their Mountables and readiness, e.g.
+	// Elevation (merge), as given by the elevation worker:
 	//
-	//	d.Mounts = append(d.Mounts, routing.NewHandlers(router), elevation.NewHandlers(elevationSvc))
+	//	terrain := elevation.NewTerrainForData(f.cfg.DataDir)
+	//	d.Mounts = append(d.Mounts, elevation.NewHandler(terrain))   // Mount(mux, wrap)
+	//	cat.Coverage = elevation.CoverageIDs
+	//	d.ElevationSources = func() any { return terrain.Sources() }
+	//
+	// Routing (merge): append its Mountable and readiness, e.g.
+	//
+	//	d.Mounts = append(d.Mounts, routing.NewHandlers(router))
 	//	d.ReadyChecks = map[string]func(context.Context) bool{"routing": router.Ready}
-	//	d.ElevationSources = func() any { return elevationSvc.Sources() }
 	return nil
 }

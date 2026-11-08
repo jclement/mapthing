@@ -173,6 +173,18 @@ func (s *Server) tileJSON(w http.ResponseWriter, r *http.Request, name string) {
 		tj["encoding"] = "terrarium"
 		tj["tileSize"] = 256
 	}
+	// The terrain build records tile_size and maxzoom in its metadata; they win over defaults.
+	if meta, err := rd.Metadata(); err == nil {
+		var m map[string]any
+		if json.Unmarshal(meta, &m) == nil {
+			if v, ok := m["tile_size"].(float64); ok && v > 0 {
+				tj["tileSize"] = int(v)
+			}
+			if v, ok := m["maxzoom"].(float64); ok && v >= 0 && v <= 24 {
+				tj["maxzoom"] = int(v)
+			}
+		}
+	}
 	if _, ok := tj["attribution"]; !ok {
 		tj["attribution"] = `<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>`
 	}

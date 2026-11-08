@@ -173,3 +173,41 @@ swap takes effect immediately.
 **Imagery source** (`internal/tiles/imagery_sources.go`, style worker):
 `func ImageryUpstream(z, x, y int) (url string, ok bool)` returns the upstream tile URL
 (`ok=false` = not configured / outside coverage) and `func ImageryAttribution() string`.
+
+**Feature wiring.** `cmd/mapthing/features.go` is the single place that imports the build
+pipeline, catalog, routing and elevation packages and plugs them into `server.Deps`
+(`Mounts`, `Catalog`, `ValidateRegion`, `ElevationSources`, `ReadyChecks`) and the job runner
+(`Register("build", …)`, `runner.Details` for `*build.StageError`).
+
+**Internal requests (renderer).** The renderer fetches `/styles/{name}.json?internal=1`,
+tiles, glyphs and sprites from `http://127.0.0.1:<port>` with header
+`X-Mapthing-Internal: <token>`. Core accepts such requests only from a loopback address with
+the right token, needs no API key for them, templates no key into URLs, uses the request's own
+host (not `MAPTHING_PUBLIC_URL`) as base URL, and counts them as usage kind
+`raster-internal`. The token is `MAPTHING_INTERNAL_TOKEN`, or random per start; it reaches the
+renderer child as env `MAPTHING_INTERNAL_TOKEN`, with `MAPTHING_URL` (the local base URL).
+
+**Styles.** `GET /styles` (keyed) and `/admin/api/system` (`styles`) list
+`[{id, name, description, dark}]` from `assets/styles/*.json` (`metadata["mapthing:name"]`,
+`["mapthing:description"]`, optional `["mapthing:dark"]`, else an id ending in `-dark`). The raster
+endpoints accept any embedded style. Core appends the key query to the style's `sprite` URL
+when the style does not template it, and with `MAPTHING_IMAGERY_URL` set replaces
+`sources.imagery.attribution` with `tiles.ImageryAttribution()`. Glyph ranges missing from
+every font in the stack answer 404.
+
+**Configuration** (environment): `MAPTHING_DATA`, `MAPTHING_LISTEN`, `ADMIN_USER`,
+`ADMIN_PASSWORD`, `MAPTHING_PUBLIC_URL`, `MAPTHING_VALHALLA_URL` (default
+`http://127.0.0.1:8002`), `MAPTHING_VALHALLA_CMD`, `MAPTHING_RENDERER_URL` (default
+`http://127.0.0.1:8081`), `MAPTHING_RENDERER_CMD` (default `node /opt/renderer/server.js`),
+`MAPTHING_RENDERER_HEALTH_URL` (default renderer URL + `/health`), `MAPTHING_RASTER_CACHE_MB`
+(2048), `MAPTHING_IMAGERY_CACHE_MB` (4096), `MAPTHING_PACK_CACHE_MB` (4096),
+`MAPTHING_PACK_MAX_TILES` (2000000), `MAPTHING_INTERNAL_TOKEN`, `MAPTHING_IMAGERY_URL`,
+`MAPTHING_DEBUG`. Caches live in `/data/raster-cache`, `/data/imagery-cache`, `/data/pack-cache`.
+
+**Admin API additions.** `GET /admin/api/session` (open; `{authenticated}`),
+`PATCH /admin/api/keys/{id}` (label, limits), `DELETE /admin/api/keys/{id}` revokes (the row
+stays for history), `POST /admin/api/jobs/{id}/cancel`, `GET /admin/api/history?kind=`,
+`PATCH /admin/api/regions/{id}` (`{refresh}`), `POST /admin/api/system/restart/{name}`.
+Region ids may contain `/` (`us/texas`). Keyed errors are JSON `{"error":{"code","message"}}`,
+except under `/maps/api/` (Google Elevation shape), `/directions/v2` (Google RPC shape) and
+`/ors/` (ORS shape). An API key is also accepted as `?api_key=` (ORS GET style).

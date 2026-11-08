@@ -115,9 +115,12 @@ func (s *Server) routes() {
 	m.Handle("GET /admin/api/regions/{id...}", admin(s.getRegion))
 	m.Handle("PATCH /admin/api/regions/{id...}", admin(s.patchRegion))
 	m.Handle("DELETE /admin/api/regions/{id...}", admin(s.deleteRegion))
-	m.Handle("/admin/api/", admin(func(w http.ResponseWriter, r *http.Request) {
+	notFound := admin(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "no such admin endpoint")
-	}))
+	})
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		m.Handle(method+" /admin/api/", notFound)
+	}
 
 	if s.d.Tiles != nil {
 		s.d.Tiles.Mount(m, a.Wrap)
