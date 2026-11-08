@@ -1,0 +1,818 @@
+{
+  "trip": {
+    "locations": [
+      {
+        "type": "break",
+        "lat": 39.7391,
+        "lon": -75.5398,
+        "side_of_street": "left",
+        "original_index": 0
+      },
+      {
+        "type": "break",
+        "lat": 39.1582,
+        "lon": -75.5244,
+        "original_index": 1
+      },
+      {
+        "type": "break",
+        "lat": 38.69,
+        "lon": -75.385,
+        "side_of_street": "left",
+        "original_index": 2
+      }
+    ],
+    "legs": [
+      {
+        "maneuvers": [
+          {
+            "type": 3,
+            "instruction": "Drive northwest.",
+            "verbal_succinct_transition_instruction": "Drive northwest. Then Turn right onto North Locust Street.",
+            "verbal_pre_transition_instruction": "Drive northwest. Then Turn right onto North Locust Street.",
+            "verbal_post_transition_instruction": "Continue for 30 meters.",
+            "bearing_after": 299,
+            "time": 35.392,
+            "length": 0.029,
+            "cost": 339.032,
+            "begin_shape_index": 0,
+            "end_shape_index": 2,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto North Locust Street.",
+            "verbal_transition_alert_instruction": "Turn right onto North Locust Street.",
+            "verbal_succinct_transition_instruction": "Turn right. Then Turn left onto East 8th Street.",
+            "verbal_pre_transition_instruction": "Turn right onto North Locust Street. Then Turn left onto East 8th Street.",
+            "verbal_post_transition_instruction": "Continue for 30 meters.",
+            "street_names": [
+              "North Locust Street"
+            ],
+            "bearing_before": 299,
+            "bearing_after": 27,
+            "time": 7.724,
+            "length": 0.03,
+            "cost": 30.522,
+            "begin_shape_index": 2,
+            "end_shape_index": 3,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left onto East 8th Street.",
+            "verbal_transition_alert_instruction": "Turn left onto East 8th Street.",
+            "verbal_succinct_transition_instruction": "Turn left. Then Turn right onto North Church Street.",
+            "verbal_pre_transition_instruction": "Turn left onto East 8th Street. Then Turn right onto North Church Street.",
+            "verbal_post_transition_instruction": "Continue for 80 meters.",
+            "street_names": [
+              "East 8th Street"
+            ],
+            "bearing_before": 27,
+            "bearing_after": 299,
+            "time": 8.755,
+            "length": 0.075,
+            "cost": 24.706,
+            "begin_shape_index": 3,
+            "end_shape_index": 4,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto North Church Street/US 13. Continue on US 13.",
+            "verbal_transition_alert_instruction": "Turn right onto North Church Street.",
+            "verbal_succinct_transition_instruction": "Turn right.",
+            "verbal_pre_transition_instruction": "Turn right onto North Church Street, US 13.",
+            "verbal_post_transition_instruction": "Continue on US 13 for 600 meters.",
+            "street_names": [
+              "US 13"
+            ],
+            "begin_street_names": [
+              "North Church Street",
+              "US 13"
+            ],
+            "bearing_before": 299,
+            "bearing_after": 28,
+            "time": 59.98,
+            "length": 0.563,
+            "cost": 124.837,
+            "begin_shape_index": 4,
+            "end_shape_index": 18,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto East 12th Street.",
+            "verbal_transition_alert_instruction": "Turn right onto East 12th Street.",
+            "verbal_succinct_transition_instruction": "Turn right.",
+            "verbal_pre_transition_instruction": "Turn right onto East 12th Street.",
+            "verbal_post_transition_instruction": "Continue for 1.5 kilometers.",
+            "street_names": [
+              "East 12th Street"
+            ],
+            "bearing_before": 66,
+            "bearing_after": 139,
+            "time": 139.75,
+            "length": 1.425,
+            "cost": 207.348,
+            "begin_shape_index": 18,
+            "end_shape_index": 49,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 18,
+            "instruction": "Take the I 495 South ramp on the right toward Delaware Memorial Bridge/Baltimore.",
+            "verbal_transition_alert_instruction": "Take the I 495 South ramp on the right.",
+            "verbal_pre_transition_instruction": "Take the I 495 South ramp on the right toward Delaware Memorial Bridge, Baltimore.",
+            "verbal_post_transition_instruction": "Continue for 13 kilometers.",
+            "street_names": [
+              "I 495 South",
+              "Vietnam Veterans Memorial Highway"
+            ],
+            "bearing_before": 134,
+            "bearing_after": 158,
+            "time": 434.374,
+            "length": 12.568,
+            "cost": 434.07,
+            "begin_shape_index": 49,
+            "end_shape_index": 214,
+            "highway": true,
+            "sign": {
+              "exit_branch_elements": [
+                {
+                  "text": "I 495 South",
+                  "consecutive_count": 1
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "Delaware Memorial Bridge"
+                },
+                {
+                  "text": "Baltimore"
+                }
+              ]
+            },
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 20,
+            "instruction": "Take exit 4A on the right onto DE 1 South toward Dover/Beaches.",
+            "verbal_transition_alert_instruction": "Take exit 4A on the right.",
+            "verbal_pre_transition_instruction": "Take exit 4A on the right onto DE 1 South toward Dover, Beaches.",
+            "bearing_before": 247,
+            "bearing_after": 265,
+            "time": 32.688,
+            "length": 0.902,
+            "cost": 33.634,
+            "begin_shape_index": 214,
+            "end_shape_index": 239,
+            "sign": {
+              "exit_number_elements": [
+                {
+                  "text": "4A"
+                }
+              ],
+              "exit_branch_elements": [
+                {
+                  "text": "DE 1 South",
+                  "consecutive_count": 1
+                },
+                {
+                  "text": "DE 7 South"
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "Dover",
+                  "consecutive_count": 1
+                },
+                {
+                  "text": "Beaches",
+                  "consecutive_count": 1
+                },
+                {
+                  "text": "Mall Road"
+                }
+              ]
+            },
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 24,
+            "instruction": "Keep left to take DE 1 South toward Dover/Beaches.",
+            "verbal_transition_alert_instruction": "Keep left to take DE 1 South.",
+            "verbal_pre_transition_instruction": "Keep left to take DE 1 South toward Dover, Beaches.",
+            "verbal_post_transition_instruction": "Continue for 17 kilometers.",
+            "street_names": [
+              "Korean War Veterans Memorial Highway"
+            ],
+            "bearing_before": 209,
+            "bearing_after": 206,
+            "time": 638.816,
+            "length": 17.493,
+            "cost": 643.825,
+            "begin_shape_index": 239,
+            "end_shape_index": 439,
+            "toll": true,
+            "highway": true,
+            "sign": {
+              "exit_branch_elements": [
+                {
+                  "text": "DE 1 South",
+                  "consecutive_count": 1
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "Dover",
+                  "consecutive_count": 1
+                },
+                {
+                  "text": "Beaches",
+                  "consecutive_count": 1
+                }
+              ]
+            },
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 24,
+            "instruction": "Keep left to take DE 1 Toll/Korean War Veterans Memorial Highway.",
+            "verbal_transition_alert_instruction": "Keep left to take DE 1 Toll.",
+            "verbal_pre_transition_instruction": "Keep left to take DE 1 Toll, Korean War Veterans Memorial Highway.",
+            "verbal_post_transition_instruction": "Continue for 500 meters.",
+            "street_names": [
+              "DE 1 Toll",
+              "Korean War Veterans Memorial Highway"
+            ],
+            "bearing_before": 181,
+            "bearing_after": 180,
+            "time": 15.916,
+            "length": 0.464,
+            "cost": 14.715,
+            "begin_shape_index": 439,
+            "end_shape_index": 447,
+            "toll": true,
+            "highway": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 24,
+            "instruction": "Keep left to stay on DE 1 Toll/Korean War Veterans Memorial Highway.",
+            "verbal_transition_alert_instruction": "Keep left to stay on DE 1 Toll.",
+            "verbal_pre_transition_instruction": "Keep left to stay on DE 1 Toll, Korean War Veterans Memorial Highway.",
+            "verbal_post_transition_instruction": "Continue for 41 kilometers.",
+            "street_names": [
+              "DE 1 Toll",
+              "Korean War Veterans Memorial Highway"
+            ],
+            "bearing_before": 187,
+            "bearing_after": 186,
+            "time": 1435.276,
+            "length": 41.42,
+            "cost": 1362.685,
+            "begin_shape_index": 447,
+            "end_shape_index": 744,
+            "toll": true,
+            "highway": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 20,
+            "instruction": "Take exit 104 on the right onto US 13/Scarborough Road toward DE 8/North Dover.",
+            "verbal_transition_alert_instruction": "Take exit 104 on the right.",
+            "verbal_pre_transition_instruction": "Take exit 104 on the right onto US 13, Scarborough Road toward DE 8, North Dover.",
+            "bearing_before": 144,
+            "bearing_after": 151,
+            "time": 72.381,
+            "length": 1.417,
+            "cost": 89.751,
+            "begin_shape_index": 744,
+            "end_shape_index": 782,
+            "toll": true,
+            "sign": {
+              "exit_number_elements": [
+                {
+                  "text": "104"
+                }
+              ],
+              "exit_branch_elements": [
+                {
+                  "text": "US 13"
+                },
+                {
+                  "text": "Scarborough Road"
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "DE 8"
+                },
+                {
+                  "text": "North Dover"
+                }
+              ]
+            },
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left onto US 13/North Dupont Highway.",
+            "verbal_transition_alert_instruction": "Turn left onto US 13.",
+            "verbal_succinct_transition_instruction": "Turn left.",
+            "verbal_pre_transition_instruction": "Turn left onto US 13, North Dupont Highway.",
+            "verbal_post_transition_instruction": "Continue for 3 kilometers.",
+            "street_names": [
+              "US 13",
+              "North Dupont Highway"
+            ],
+            "bearing_before": 223,
+            "bearing_after": 133,
+            "time": 147.577,
+            "length": 2.934,
+            "cost": 191.828,
+            "begin_shape_index": 782,
+            "end_shape_index": 843,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 9,
+            "instruction": "Bear right onto North State Street/US 13 Alternate.",
+            "verbal_transition_alert_instruction": "Bear right onto North State Street.",
+            "verbal_succinct_transition_instruction": "Bear right.",
+            "verbal_pre_transition_instruction": "Bear right onto North State Street, US 13 Alternate.",
+            "verbal_post_transition_instruction": "Continue for 1 kilometer.",
+            "street_names": [
+              "North State Street",
+              "US 13 Alternate"
+            ],
+            "bearing_before": 133,
+            "bearing_after": 165,
+            "time": 60.951,
+            "length": 1.05,
+            "cost": 67.711,
+            "begin_shape_index": 843,
+            "end_shape_index": 876,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 16,
+            "instruction": "Bear left to stay on North State Street.",
+            "verbal_transition_alert_instruction": "Bear left to stay on North State Street.",
+            "verbal_succinct_transition_instruction": "Bear left.",
+            "verbal_pre_transition_instruction": "Bear left to stay on North State Street.",
+            "verbal_post_transition_instruction": "Continue for 1.5 kilometers.",
+            "street_names": [
+              "North State Street"
+            ],
+            "bearing_before": 185,
+            "bearing_after": 151,
+            "time": 149.672,
+            "length": 1.724,
+            "cost": 200.427,
+            "begin_shape_index": 876,
+            "end_shape_index": 909,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 14,
+            "instruction": "Make a sharp left onto Kings Highway.",
+            "verbal_transition_alert_instruction": "Make a sharp left onto Kings Highway.",
+            "verbal_succinct_transition_instruction": "Make a sharp left. Then You will arrive at your destination.",
+            "verbal_pre_transition_instruction": "Make a sharp left onto Kings Highway. Then You will arrive at your destination.",
+            "verbal_post_transition_instruction": "Continue for 10 meters.",
+            "street_names": [
+              "Kings Highway"
+            ],
+            "bearing_before": 164,
+            "bearing_after": 5,
+            "time": 11.04,
+            "length": 0.014,
+            "cost": 35.506,
+            "begin_shape_index": 909,
+            "end_shape_index": 911,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 4,
+            "instruction": "You have arrived at your destination.",
+            "verbal_transition_alert_instruction": "You will arrive at your destination.",
+            "verbal_pre_transition_instruction": "You have arrived at your destination.",
+            "bearing_before": 5,
+            "time": 0.0,
+            "length": 0.0,
+            "cost": 0.0,
+            "begin_shape_index": 911,
+            "end_shape_index": 911,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          }
+        ],
+        "summary": {
+          "has_time_restrictions": false,
+          "has_toll": true,
+          "has_highway": true,
+          "has_ferry": false,
+          "min_lat": 39.158071,
+          "min_lon": -75.67508,
+          "max_lat": 39.743649,
+          "max_lon": -75.522821,
+          "time": 3250.299,
+          "length": 82.111,
+          "cost": 3800.603
+        },
+        "shape": "asnxjA~oqaoCeEtMy@hC{MaIiS~n@yf@kZoKsGsYgQu`@cVaTmM}b@mW}A_A}IsFgBqAw@qAeAiB}M}e@yWy~@kCaLjBeBfRiWzKcQ~PwVdEgNvDeMhEuNbOwe@hU_v@|GgTh@gBlKm]rAcEbI}WrAqEvD_MjAwDjBgGji@ufBhBcGz\\{gAhd@gzAtFwMfE}JxEwLtGoNnX_d@~|@ouAfg@yv@pG_K~BcDbG}CrDm@xADpAHrBr@tMtK|FdD~ErBpD~@zDb@zM~@hdAhFfGp@tFdAdExAzDdBtC~Atg@he@vY|T`T`Ub^ra@dXr\\tR|VvSxYhgMpjQ~oA|gB~e@hs@rUv[`R~WnWj^rO|T~JrOtM`UxEpIdLpTbStb@lNn]vHrSnF`PdHlTvNzg@|FrVzCpNrFlXnChOpC`QvBpNvB`PhBlPjApIvAfPpAxO`A~N`AlPv@dPh@xP^|PV~ONvOBnPt@ppGn@jr@VneCJb`Aj@`iBXxg@|@xfED~PH~PLnPR|PTxOZlP\\~Qb@xPd@|Ph@nPn@pPr@|Pv@nP|@fQx@hPfAtPdAlPlA|PhAzOvAjQrAvOtAvO`BzPhBzPdBtP~fAddKjMjmAjHzo@hLvfAlC~Wjj@riF|MlpAxErg@pArLxAnL~AxLvAfJvAlIjBfKpBxIjBxHnCnJfCvH`DtIrCtHtCdI~CzHvCtHtD~HpDtHhDbHvKz]tW`i@rOh[bd@t~@`qEbgJnt@`|AhpD|pHpxGn`Npy@x`BbFjKfH~NhGlMxFbMzFnMvFnMvFvMtFzMfFtMhFdNdFdNdFjN|EhNtEbNvEtNrExNlEvNhEvN~DpN`E~NxDzNxDvOfDfNrCvLnCtLfDdOjDtO`m@lrCdSd_AbtDtaQfrAhhGjk@lkCb^hbBbMfl@vFzW`}@leEdV`gA~a@lkBfAz]bNf|@jAxI|Hfo@bEjZrAjJ|CdTzA`InB`KxDvPlFnRxGpRrHtRpG~N~F~KbGxKvLdRtPvT`KxMzJbLrLtLfMnNnh@ve@tK~If\\vSdLjGxIjFjR|IdC`B~OxGfKfDjC|@jFvAzCv@zCp@pDp@|G|@hZxDxEd@lOl@fO?~DFlNY~DShHc@rJiAfAOhAUnEcAhBc@tAe@pSmFnO{EfOkGtPqHhm@yYr`B}w@|^iR~N{GpIkCzF_BxIiCxK_CxRcBzQa@lFA|CDdCLlGf@dSbCn`@vIp^pIlGtAb`@jI~u@nOrL~BzPhCnPbClNjAjKRl]Nt[}@~]yBtMyAdVeEtTmEpSeFbQaFbUsIhz@a\\hz@e`@vUyJlPaG|ZuK|h@kOr^}JdZwHnY}Fnt@eMl{@aNxgAiQruAwTh\\qFrsAiRryBm_@rtBu[~e@aGzy@gEvc@NheA|Bl`@xCfa@|Fna@zHb\\rHjo@fR`i@fRbcArg@dhAvg@dNlFxp@pThT|FvO~DhRfE~MvC|TzDnTfDvQfCtPpBrXfChk@`Dja@vBrDLpv@Hz]y@rdA}Hzo@iHdM_Brc@eJdXuG`jAsWx_Bil@b`Ayb@rs@_`@bZoQ`x@gj@hdAqx@xpAacAhw@gg@rm@sZfa@kP~k@sOnw@{Jlu@iCf[vAd]bB`e@~DtSfDz`@lIhn@bTtjAzi@vaB|iA|oAj|@lkBtqAdPhLxhD||BdS`LzcAfl@h}Apv@lmH~xCvyJ|{Dpa@|PncA|]rj@pNpSdEnh@nJtp@dJdeAhHjgB~BjIDlgAb@byC@zkJ~FxcBjAlxB`Fh|ChRfyFf`@~l@dElyC|R~aBrLxPVnx@mAdViB~ReCxS}Dhl@yQji@eVtVkM|PyK|PcMlPuMj`@a]xnSomQpd@{`@nMwKnL{I|MeJbMsH~MqHzMkGlNaG~MgFfO{EjN_EfOqDjOkChOsBbOeBhOgAzOo@~Oa@fOGvx@nAz`E`C`ULvwAx@|f@Gz[Vl_@p@|`@~Av`@`Crb@lCl^hCvVzBxtAnKnkEnc@p~Dfa@paCrWvYzAtWv@bZb@nYAlXYdXs@fXqAdXgBpZoCt\\_EfZuEf[{FpYsGf^iJrYsIxZmK~XuKtWaL~_Bsw@~r@g]tRoJdjBg}@fdAia@joA__@jx@mPv_AyNn`AmJ|S}AtS}@nXs@`S_@xSIhWDxa@Zde@vAfy@hEdlA|Obi@bJbd@fJxuAvZ|bE~y@b{ErdAffBjYnpAjOtoAtJ|z@hFxhA`B`lJjJ~kCv@jlExEbh@h@zj@~@bj@fH`b@zKbUdJlSxJzThNnRvN~]~[~Wl^xHzLrLdStSle@bItSdGxSfQvu@xPneA~CjSxzBvcNr|@~nFdLbq@nFrVbI~Y~Mpc@lL~XvHfQvMdV|b@vq@nq@rq@fS`QfW|Q|R|KdTfKxTfJt[jJdx@pO|l@~Dzq@o@hl@cFlo@kMjk@qSzi@}[dl@}`@x[_^rnJsqLrxBmmC`a@{^`Z{Qxb@cWfe@qTrQqFrOwEvmE}x@t}JchBziD}i@pa@eCtmAwEn}Ad@x}AtGpbAhKvu@|Lll@vLpxE|gApdJ~oBpoDjx@xZjH`qG`xApxLnmCpm@dHpr@hChg@^|m@_Dnr@qGbc@{Ip|@qUb}A_o@zpB{y@t}Aip@rdAgb@|eDktA|jJ}vDxxA{l@pkAaf@bmCyaAbhAcY`b@eJtlBo^`N_CbyAiUxtBc\\v`@uGbT_EvSqE`S_FlR_FlXgIhS_H~VkJ|XmLxQkIxQ_JjR{JtWiOnUsNvM_JxS_ObVaRpOgMzViTv}CunCjmB{aBni@mc@hg@m`@pR}Ntx@}l@tG}EnR}MdWkShmC{dB`mEafC~xH{jE|b@kYdg@ca@dYoX~YmZ`v@s~@rScY|Rw[xUoa@zGsMnwBefFbk@muAxnA}uCt_@k}@bvA_`Dx_EorJroCstG|~@yzBbcAk`Chv@guApp@o`ApNqQfYw]|o@qq@bUeSzy@op@|eBemAtiCyiB`hAgw@|{CsvBxi@e_@vs@qb@~k@mX|e@uSraAqYnn@kOfg@cJnr@_Jpp@{Gx_AuCzo@Rh~A~FzuApGnfApD|dBnE`s@dAdc@c@tp@}AtfAwI~S}Avs@gIty@cOfg@iLdaAeW|f@mRlq@wV~s@c]|i@aYxY}Pfw@of@t[qSfjAgs@jhC}_Bft@md@nwCejBhwC{lB~o@g_@jSkKlk@uX`sAcn@hk@wT|cBai@n_@yLtj@yM~`C{d@bwBsW~gByLbqAmCbyAw@brA|D||@dEfyAxJdfArMxyAnV`~Dl}@fwDxy@th@nJds@xH`l@bChZdAx}@j@rv@cDpc@yCnc@mDrd@uIba@kGfmAe[ze@wOhi@qSbj@yWleBgcAlj@g_@`y@yk@b|@ip@~xAmlAfjAqeArbAsdAbp@au@~_B_oB|aBa}Bz{@yuAxy@exA|aEm}HpmJkwQrz@_~AvT{\\jVy]|Zw`@tO_RtP{QbP_PxPgPfh@ye@nWiPjIiEdLkEzHkBrHsAfIo@zGOrFGfFJxF^jFf@bGdAdGtAhIpC|GzC|GzDdG`E~DhDzFrFxFbHrGfJ|QpYvEvHlI|NfMzRtl@v~@~b@px@zWhp@l|@bwBnEtKpOn^~MrY~Vnd@nGvJlk@lu@|NhRlDnEjGdI~EwHpOgV|b@oq@jJ}NrCkE|KcQbH{KbDcFda@{n@\\i@nCiEbYqc@bU}]vy@gqAnFqIry@_qA`OqU|KeQlDsFjLyPfHwKh@y@nCeExEuHNS~Se\\tR_[|ByDbU_^na@ym@nGsJ`CwDj}@wwAbGoJ|BqDzn@{aArGaKd@u@nJcOxEoH~~@oxAhEyGhDmFpB}CpAqBvbAi}Att@kiAhLmQ\\i@rCgE~AeCjWk`@dUc`@bKaP|Vq`@zFaJdD}EtWa`@xvA{wBrDuFz\\eh@tDqDpQiQdJ_JxIeGtKaHzH}DfRyHpA[bG{AlFw@~Hk@vOiArT}Adp@bBxAFlIZt^j@v@BjFJtFH`O^dHLlHNxDHlJVvu@nBfGNdWl@`c@dA~e@z@`Zx@jq@nB~Nv@tGkEh@_@jXqHzIkC~RqFnXeHt^gKb`@mKrAa@tb@iLzv@gTnh@oNxYeIrVyGp]qJv~@iW`XiHfzAq`@laAmX|Bi@zBk@hfAwZlCu@hCq@th@oNnl@yOtSuFzBm@lBg@n`@sKbi@yNlWyG`EeAcF[]C"
+      },
+      {
+        "maneuvers": [
+          {
+            "type": 1,
+            "instruction": "Drive north on Kings Highway.",
+            "verbal_succinct_transition_instruction": "Drive north.",
+            "verbal_pre_transition_instruction": "Drive north on Kings Highway.",
+            "verbal_post_transition_instruction": "Continue for 400 meters.",
+            "street_names": [
+              "Kings Highway"
+            ],
+            "bearing_after": 6,
+            "time": 47.672,
+            "length": 0.395,
+            "cost": 137.003,
+            "begin_shape_index": 0,
+            "end_shape_index": 18,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 16,
+            "instruction": "Bear left onto Pennsylvania Avenue.",
+            "verbal_transition_alert_instruction": "Bear left onto Pennsylvania Avenue.",
+            "verbal_succinct_transition_instruction": "Bear left. Then Turn right onto DE 8.",
+            "verbal_pre_transition_instruction": "Bear left onto Pennsylvania Avenue. Then Turn right onto DE 8.",
+            "verbal_post_transition_instruction": "Continue for 60 meters.",
+            "street_names": [
+              "Pennsylvania Avenue"
+            ],
+            "bearing_before": 25,
+            "bearing_after": 347,
+            "time": 7.54,
+            "length": 0.062,
+            "cost": 23.761,
+            "begin_shape_index": 18,
+            "end_shape_index": 21,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto DE 8/East Division Street. Continue on DE 8.",
+            "verbal_transition_alert_instruction": "Turn right onto DE 8.",
+            "verbal_succinct_transition_instruction": "Turn right.",
+            "verbal_pre_transition_instruction": "Turn right onto DE 8, East Division Street.",
+            "verbal_post_transition_instruction": "Continue on DE 8 for 700 meters.",
+            "street_names": [
+              "DE 8"
+            ],
+            "begin_street_names": [
+              "DE 8",
+              "East Division Street"
+            ],
+            "bearing_before": 344,
+            "bearing_after": 73,
+            "time": 58.485,
+            "length": 0.748,
+            "cost": 112.706,
+            "begin_shape_index": 21,
+            "end_shape_index": 63,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto US 13/South Dupont Highway.",
+            "verbal_transition_alert_instruction": "Turn right onto US 13.",
+            "verbal_succinct_transition_instruction": "Turn right.",
+            "verbal_pre_transition_instruction": "Turn right onto US 13, South Dupont Highway.",
+            "verbal_post_transition_instruction": "Continue for 400 meters.",
+            "street_names": [
+              "US 13",
+              "South Dupont Highway"
+            ],
+            "bearing_before": 61,
+            "bearing_after": 148,
+            "time": 28.736,
+            "length": 0.366,
+            "cost": 51.812,
+            "begin_shape_index": 63,
+            "end_shape_index": 79,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 24,
+            "instruction": "Keep left to take South Bay Road.",
+            "verbal_transition_alert_instruction": "Keep left to take South Bay Road.",
+            "verbal_pre_transition_instruction": "Keep left to take South Bay Road.",
+            "verbal_post_transition_instruction": "Continue for 2 kilometers.",
+            "street_names": [
+              "South Bay Road"
+            ],
+            "bearing_before": 149,
+            "bearing_after": 149,
+            "time": 117.457,
+            "length": 2.158,
+            "cost": 173.814,
+            "begin_shape_index": 79,
+            "end_shape_index": 134,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 18,
+            "instruction": "Take the DE 1 South ramp on the right toward Dover AFB/Beaches.",
+            "verbal_transition_alert_instruction": "Take the DE 1 South ramp on the right.",
+            "verbal_pre_transition_instruction": "Take the DE 1 South ramp on the right toward Dover AFB, Beaches.",
+            "verbal_post_transition_instruction": "Continue for 25 kilometers.",
+            "street_names": [
+              "DE 1"
+            ],
+            "bearing_before": 147,
+            "bearing_after": 160,
+            "time": 1007.253,
+            "length": 25.378,
+            "cost": 841.281,
+            "begin_shape_index": 134,
+            "end_shape_index": 504,
+            "highway": true,
+            "sign": {
+              "exit_branch_elements": [
+                {
+                  "text": "DE 1 South"
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "Dover AFB"
+                },
+                {
+                  "text": "Beaches"
+                }
+              ]
+            },
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 23,
+            "instruction": "Keep right to take US 113 toward Milford/Georgetown.",
+            "verbal_transition_alert_instruction": "Keep right to take US 113.",
+            "verbal_pre_transition_instruction": "Keep right to take US 113 toward Milford, Georgetown.",
+            "verbal_post_transition_instruction": "Continue for 27 kilometers.",
+            "street_names": [
+              "US 113"
+            ],
+            "begin_street_names": [
+              "US 113",
+              "DE 1 BUS",
+              "North Dupont Boulevard"
+            ],
+            "bearing_before": 183,
+            "bearing_after": 189,
+            "time": 1170.646,
+            "length": 27.036,
+            "cost": 1099.513,
+            "begin_shape_index": 504,
+            "end_shape_index": 766,
+            "sign": {
+              "exit_branch_elements": [
+                {
+                  "text": "US 113 South"
+                },
+                {
+                  "text": "DE 1 Business"
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "Milford"
+                },
+                {
+                  "text": "Georgetown"
+                }
+              ]
+            },
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 21,
+            "instruction": "Take the exit.",
+            "verbal_transition_alert_instruction": "Take the exit.",
+            "verbal_pre_transition_instruction": "Take the exit.",
+            "verbal_post_transition_instruction": "Continue for 1.5 kilometers.",
+            "street_names": [
+              "North Bedford Street"
+            ],
+            "bearing_before": 160,
+            "bearing_after": 159,
+            "time": 85.196,
+            "length": 1.4,
+            "cost": 108.077,
+            "begin_shape_index": 766,
+            "end_shape_index": 798,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left onto DE 18/DE 404/Bridgeville Road. Continue on DE 18/DE 404.",
+            "verbal_transition_alert_instruction": "Turn left onto DE 18.",
+            "verbal_succinct_transition_instruction": "Turn left.",
+            "verbal_pre_transition_instruction": "Turn left onto DE 18, DE 404.",
+            "verbal_post_transition_instruction": "Continue on DE 18, DE 404 for 1 kilometer.",
+            "street_names": [
+              "DE 18",
+              "DE 404"
+            ],
+            "begin_street_names": [
+              "DE 18",
+              "DE 404",
+              "Bridgeville Road"
+            ],
+            "bearing_before": 187,
+            "bearing_after": 123,
+            "time": 98.956,
+            "length": 1.095,
+            "cost": 106.132,
+            "begin_shape_index": 798,
+            "end_shape_index": 831,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 26,
+            "instruction": "Enter The Circle and take the 2nd exit onto South Bedford Street.",
+            "verbal_transition_alert_instruction": "Enter The Circle and take the 2nd exit onto South Bedford Street.",
+            "verbal_succinct_transition_instruction": "Enter the roundabout and take the 2nd exit.",
+            "verbal_pre_transition_instruction": "Enter The Circle and take the 2nd exit onto South Bedford Street.",
+            "street_names": [
+              "The Circle"
+            ],
+            "bearing_before": 135,
+            "bearing_after": 203,
+            "time": 14.264,
+            "length": 0.104,
+            "cost": 16.875,
+            "begin_shape_index": 831,
+            "end_shape_index": 854,
+            "roundabout_exit_count": 2,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 27,
+            "instruction": "Exit the roundabout onto South Bedford Street.",
+            "verbal_succinct_transition_instruction": "Exit the roundabout. Then Turn left onto East Pine Street.",
+            "verbal_pre_transition_instruction": "Exit the roundabout onto South Bedford Street. Then Turn left onto East Pine Street.",
+            "verbal_post_transition_instruction": "Continue for 100 meters.",
+            "street_names": [
+              "South Bedford Street"
+            ],
+            "bearing_before": 64,
+            "bearing_after": 136,
+            "time": 14.079,
+            "length": 0.099,
+            "cost": 16.987,
+            "begin_shape_index": 854,
+            "end_shape_index": 858,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left onto East Pine Street.",
+            "verbal_transition_alert_instruction": "Turn left onto East Pine Street.",
+            "verbal_succinct_transition_instruction": "Turn left. Then Turn left.",
+            "verbal_pre_transition_instruction": "Turn left onto East Pine Street. Then Turn left.",
+            "verbal_post_transition_instruction": "Continue for 90 meters.",
+            "street_names": [
+              "East Pine Street"
+            ],
+            "bearing_before": 135,
+            "bearing_after": 44,
+            "time": 11.791,
+            "length": 0.093,
+            "cost": 39.059,
+            "begin_shape_index": 858,
+            "end_shape_index": 861,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left.",
+            "verbal_transition_alert_instruction": "Turn left.",
+            "verbal_succinct_transition_instruction": "Turn left. Then Turn left.",
+            "verbal_pre_transition_instruction": "Turn left. Then Turn left.",
+            "verbal_post_transition_instruction": "Continue for 20 meters.",
+            "bearing_before": 44,
+            "bearing_after": 313,
+            "time": 6.528,
+            "length": 0.018,
+            "cost": 14.672,
+            "begin_shape_index": 861,
+            "end_shape_index": 862,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left.",
+            "verbal_transition_alert_instruction": "Turn left.",
+            "verbal_succinct_transition_instruction": "Turn left.",
+            "verbal_pre_transition_instruction": "Turn left.",
+            "verbal_post_transition_instruction": "Continue for 90 meters.",
+            "bearing_before": 313,
+            "bearing_after": 225,
+            "time": 22.693,
+            "length": 0.087,
+            "cost": 32.998,
+            "begin_shape_index": 862,
+            "end_shape_index": 865,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          },
+          {
+            "type": 6,
+            "instruction": "Your destination is on the left.",
+            "verbal_transition_alert_instruction": "Your destination will be on the left.",
+            "verbal_pre_transition_instruction": "Your destination is on the left.",
+            "bearing_before": 273,
+            "time": 0.0,
+            "length": 0.0,
+            "cost": 0.0,
+            "begin_shape_index": 865,
+            "end_shape_index": 865,
+            "travel_mode": "drive",
+            "travel_type": "truck"
+          }
+        ],
+        "summary": {
+          "has_time_restrictions": false,
+          "has_toll": false,
+          "has_highway": true,
+          "has_ferry": false,
+          "min_lat": 38.689222,
+          "min_lon": -75.524404,
+          "max_lat": 39.163261,
+          "max_lon": -75.384042,
+          "time": 2691.303,
+          "length": 59.043,
+          "cost": 2774.696
+        },
+        "shape": "oz_uiAfrs`oCeBKoPoAiHi@iNeAuCUs@GeIm@}c@iDiL}@eAIeUeBuAWcC]aDg@eNiHmLgGkDiBm^{QyDt@iVbGwCv@c@_DoEwZc@gDkGmd@gA}HcEuYsAyJaEoY[mC{CoU_QuoA_@{C]gDW_DMeCKoCG_CAgCByCLcCR_Cn@gFl@uC~F_Y|AoJx@kHv@{K\\wJT}KCgLUeKIuB]{Hq@yJ}@}IwAmJ_BwHkBeHmDmKmAsD[aAyBwGdFuDzW{RhX_UjWeS`JgHtJyHz@q@tEsD`RyNdCqBdFeEdEiDfBqAzAgAtOcLb@[nl@_b@lUwIfTeGbHmDhG{FxFoF|HkKdS_a@d@aAlHsLrHwJhUaUhDiCnCsBtMyJrFoEtP{MnY_U|RuOxMmK`DeC~QsNjc@a]dEaDnRcOtH_GnKiInWeSdNqKvAiAjCuBnQ}Nl]gYhWwRze@u^nJcIxOmLxg@oa@~LkJrB_BnCyBjMkKh_BioAnT_QjQmN|QqNvJuH|EuDzEwDjI_HjM_K~s@_l@jH}Fls@ak@lQqNbHcBvEgDvJqGtJoFhH{CzGqCzEkBpGiBhHgAbJ_ArH]jKHfLr@rv@jIbPzAdOhAbRt@rN`@hQFpOMlK_@nLk@fMu@`PuAtKqAtMeBhMkCbGoAtMeDdLsDbL_E`]qOfQ{JfNeJpIkG~HwGpEeF|DiGxYaWrU}Rbr@ql@vf@eb@rf@_b@t`@_]lc@k_@tp@oj@nCaCdWkT`e@_a@p`@s\\fXwUtUaRnWcTpEuDxNyL~l@qh@lOgNfN{MlIaJhK_MlHuJjFeHbK{N~FwJ`IaNxHsNzD{HdH_PnLqWb`AyvBta@q~@hKoUfc@qbAhs@a_B|e@sfAx^ox@dPi]fPc]|NkZjSga@`R}^h`@sv@r[qn@p~Ac~ClKyStF{KzFqK|L{T~KeR|NqVfRu\\pSw_@~Pw\\t[qn@zGmMp]oq@hEaJhMyVr^os@`CuEl^_s@x^os@`Wyf@|[yo@|`A}lBjm@_lAlNeXdSma@|Vgf@|Sib@rLmUrJeQbHoLtFaI`G_IfGeIfK_LrJoJpG{FrGmFbJ_HlIgFxFgDnLeGlIsDfEaBfKuDzQuEdMiCtP_CtMiAjMm@lLU~IChINxGX`Hd@lShBlNbBfu@dJh_BbSbbB~S|s@vIxr@bJ`ZhDnTvBhRzAtRjAnYjAnSt@h`@|@zJZbHTdNj@bQnAr_@tD|qAdO||JnoAzuAjRxUxE~QtDjMxCduAx[ne@zIxp@bJ`aJrhAhdEvh@h`Ftn@xkAzMlp@xGtj@zC|w@lAjh@W|a@{Ap_@aChf@mCh\\wDnb@yG~_AoOdt@qLf|@gNtjAoQhnAkRxfAwPd[{Eju@}L|p@gKp{@mNn{@cN|b@qGbS}CzRoDzJmB~Q_FnlB}j@jVaH|WiGjSkEbQiDjNgC|QqChSeCvWsClUeBrYcBzV_Adf@qA`\\SdOGha@^xTZzXdA`UlAtYxBzRpBv]lEbs@pJvd@|Ffu@|J`ZjDr_@bFzg@nGx`@jFh^bF|bAzMdbAdMdb@|EdNhBhKlBzIhBbIhBtmAjZlSbFhf@nKvLrBba@jFpmArOp{Cp`@nyBzYfaA~LvH`AvC`@xj@pH`w@tJx_@nElIv@fIj@hJRvH@tIMnI_@zSmBjScEfOcEbHiCfIgDdHoDpcCiqAjb@_Rxe@wObjDi`ApxCgy@zsAc_@dxGuhBz|Bgn@t{B_n@ttAu_@vMmEzM{EhJuDvKoE`QaId\\kQn`@mWxZcUdJ}HpIkHtJeJrTkTlPsR~N{QvLwOdOwT~HqMnRw[loBggDh_@go@rHiMpKgP|KgP~HwKnAkB|IuLtC{DzQoUzToWfUeVnd@yc@lVsS|MuKrPaMtPwL|VoP~Y}QhZwOjUgLxZeNzYmLftE}dBfnCkcAvdCe_AbN_FfBs@xmAod@~y@k[rjBir@tpA}e@~HyCplBis@fSuHvs@qW`e@uPfF}B~uBmx@hp@iWtPsGh_@uNjM_Fx\\}L|~Auk@lYuKnuBgw@xqA}f@lu@yWjNaEzV}GtQwE|GyA`RwDpSyDnM{BjPyB`QwBxVgCjf@iDp`@sAvMYxNQzPGpKDrD@z\\j@pHRrFNfI^hMt@vU~ArNlAzn@lGxSzDfNhChNvCb}@jRr[`G`kCbg@rCf@lUtEtcAzOv`@lEz\\bAva@tE~b@|Cfa@hFnVhFjT~Gh[tNb`@zQpMvGzI~CzIhC`LjCjWdF|AZ~LbCpM`CjQxDvjApUfO|C`n@~L`n@nOhUdHtC|@lk@nT`a@hQfMrFlEfCtHxDfn@|]hYfQzB|ApCdBxZnRlQnLtNlJj`@tWrE`Dlu@rh@zv@|k@v\\|V`jAb~@hk@bd@~a@z[lQrN`f@d`@fQlNbh@la@hTxPhQhNr]|XdMvJ|cA~x@bRrNh]xX`OtLxFrEbXlThMxJrN`KlDxB|DdCnF~ClFlCrHtDtBdAdUpHpN`EvYxFr[vCrOj@rSNlMWrP_AlJ}@zFg@bOeCdM}BbK{C`k@aRlHiCn^{LrqCo`Ap~@k[xNaF`lAga@plAoa@|IgCd@Sv]mKtFeApXiFb`@wEpZyAnOStQQj}@U~G?`QCnWCjLCzgBm@vYGlwB_@rWGf~@OlcBUrnA]hQEhcIiBrXC`MGfwAWfEArkBa@bt@MzRE|eB]nkAWtcASv~A[t~H_BnD?bJGhMCrwBYfaCaAzlEu@nmD{@tlD{@hUC~}AQb{Bo@zmAc@~PElgBU|EAd}@UxME`_Fe@~sCiAziBYdwASf]KvwAg@dj@SbPGjtAOxYG~vCe@xa@A|YAxhCkAhUK`iA_@vSFt`DYxyBw@|sAWpeAObhCm@nrAM|pAe@p_ASdoAWppFaAfRCjAAh^E~A?zg@KlBA`C?~QCjfGcBhK@lk@Wjq@Abq@Wj}@GbzAI`vAy@dqL_Cjj@[t~CSjjAYtlCm@|{Bw@dcAGn`Cq@vdEs@|mAStxBi@n~@GrQEdfAOfy@Ud_E}@bmAW`_AWpMEbXMxWK~cBQll@Ibe@sBx]qDrj@}Ml`@iOtKoFbXcOpo@}d@na@i]hcAyu@lQ{Mne@m^vo@mf@d^cX`ScO`a@oZp_@uYbuAudA~k@wb@npAebAno@ke@tkCyoBvZoUlQoM|W}RvrBk|AzRaOna@{ZlK{Hn~AakAlxBu`Bvu@ck@tf@{^t\\wVvp@ag@fs@uh@h_Akr@dm@sd@`jAc{@`jAg{@dw@cl@hdAsv@d`@qXtQkKfjAyk@hiAgm@vhJmyEtc@oQdiAm_@hcAy\\~pAob@vfAu^tUaIdQwF~QcGxy@cYnf@}O`k@gRtK}DrRcHjdAaa@~LeHzIcIfGsF|ZyYzR}UvKgKpTiTf]s]fVkVlImIpFwFxf@eg@jHmHbQeQzV}VlZ_[jWeWbgA}fAjReSxGwGl_@m_@fLgLnp@op@tGsGxJuJtEiD|As@z@QbABh@NnClArAeE`CiG~ByFfCkFlBcDdBkCNShCiDtFeHxGsHnCaD~@gAz`@ee@x\\y_@rEgFtCeDxf@oj@da@ad@dMuNfO}PfNoO|OkQnVoXbt@qy@nG}GnUcV|@_ArIgJ`MwMpUcYvQqWnOkTxBwCdAnAXZh@\\n@Z~@ThBRhBDrAK~Ag@dBaAt@}@b@o@h@aAh@}@b@_B`@wBJ_CA{BMyB]mBs@sBSg@eA{ArCwDpNsRbP}TlAcBsAgB{Zma@gF{GaFpHjGtIcOfTW`Q"
+      }
+    ],
+    "summary": {
+      "has_time_restrictions": false,
+      "has_toll": true,
+      "has_highway": true,
+      "has_ferry": false,
+      "min_lat": 38.689222,
+      "min_lon": -75.67508,
+      "max_lat": 39.743649,
+      "max_lon": -75.384042,
+      "time": 5941.603,
+      "length": 141.154,
+      "cost": 6575.299
+    },
+    "status_message": "Found route between points",
+    "status": 0,
+    "units": "kilometers",
+    "language": "en-US"
+  }
+}

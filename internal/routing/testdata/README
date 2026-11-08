@@ -1,0 +1,1 @@
+valhalla_error_nopath.json is hand-written from Valhalla's documented error format; every other valhalla_*.json was recorded from valhalla 3.9.1 serving the Geofabrik Delaware extract (2026-11-08).
