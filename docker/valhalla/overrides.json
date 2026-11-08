@@ -1,0 +1,61 @@
+{
+  "httpd": {
+    "service": {
+      "listen": "tcp://127.0.0.1:8002",
+      "timeout_seconds": 120
+    }
+  },
+  "mjolnir": {
+    "include_driveways": true,
+    "include_construction": false,
+    "include_bicycle": false,
+    "include_pedestrian": false,
+    "include_driving": true,
+    "include_platforms": false,
+    "hierarchy": true,
+    "shortcuts": true,
+    "data_processing": {
+      "use_admin_db": true,
+      "apply_country_overrides": true,
+      "infer_internal_intersections": true,
+      "infer_turn_channels": true,
+      "allow_alt_name": true,
+      "use_direction_on_ways": false
+    }
+  },
+  "loki": {
+    "service_defaults": {
+      "minimum_reachability": 30,
+      "radius": 0,
+      "search_cutoff": 35000
+    }
+  },
+  "service_limits": {
+    "auto": {
+      "max_distance": 5000000.0,
+      "max_locations": 50,
+      "max_matrix_distance": 2000000.0,
+      "max_matrix_location_pairs": 2500
+    },
+    "truck": {
+      "max_distance": 5000000.0,
+      "max_locations": 50,
+      "max_matrix_distance": 2000000.0,
+      "max_matrix_location_pairs": 2500
+    },
+    "isochrone": {
+      "max_contours": 5,
+      "max_time_contour": 120,
+      "max_distance": 200000.0,
+      "max_locations": 1,
+      "max_distance_contour": 200
+    },
+    "max_radius": 10000,
+    "max_alternates": 3,
+    "max_reachability": 100,
+    "trace": {
+      "max_distance": 2000000.0,
+      "max_shape": 100000
+    }
+  }
+}
