@@ -1,0 +1,17 @@
+region,polygon,maxzoom,tiles,bytes,note
+delaware,geofabrik us/delaware,15,8922,34000000,validation: own build 32.0 MB
+new-mexico,geofabrik us/new-mexico,15,380898,258000000,validation: own build 258.4 MB
+louisiana,geofabrik us/louisiana,15,152514,221000000,validation: own build 211.8 MB
+gcc-states,geofabrik asia/gcc-states,15,1413937,652000000,validation: own build 617.4 MB (own build has no ocean polygons)
+saudi,approximate hand-drawn outline,15,1114311,417000000,
+saudi,approximate hand-drawn outline,14,366011,212000000,
+alberta,geofabrik canada/alberta,15,1545096,897000000,
+alberta,geofabrik canada/alberta,14,433239,465000000,
+texas,geofabrik us/texas,15,835990,987000000,
+texas,geofabrik us/texas,14,218047,437000000,
+british-columbia,geofabrik canada/british-columbia,15,2595937,1900000000,
+british-columbia,geofabrik canada/british-columbia,14,677213,940000000,
+canada,geofabrik canada,15,33395920,16000000000,
+canada,geofabrik canada,14,9934042,8400000000,
+us,geofabrik us,15,14420307,17000000000,
+us,geofabrik us,14,4207944,8000000000,

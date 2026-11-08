@@ -29,6 +29,23 @@ live.
 - **Compatibility endpoints**, so existing clients can switch by changing a URL: Google
   Elevation API, Google Routes `computeRoutes`, and OpenRouteService v2.
 
+## Sizing
+
+Whole-country builds, from measurements of regional builds plus published data
+([docs/sizing.md](docs/sizing.md) has the method, every figure's basis and the per-component tables):
+
+| | United States | Canada | Saudi Arabia |
+|---|---|---|---|
+| OSM extract | 12.3 GB | 6.5 GB | 0.12 GB |
+| Vector basemap (z0–15) | 17 GB | 16 GB | 0.4 GB |
+| One generation (basemap + routing + terrain) | ~55 GB | ~68 GB | ~4.3 GB |
+| Disk, steady / peak during a build | ~140 / ~265 GB | ~200 / ~300 GB | ~11 / ~16 GB |
+| Full build from scratch (10 vCPU) | ~8 h | ~11 h | ~1 h |
+| Machine, comfortable | 16 cores, 64 GB, 500 GB NVMe | 16 cores, 32 GB, 500 GB NVMe | 8 cores, 16 GB, 50 GB |
+
+Terrain (elevation) dominates both build time and disk. An offline pack for a ~100×150 km basin
+at full detail is ~20 MB; a state or province at z14 is 100–470 MB.
+
 ## Stack
 
 - **Go** for the service itself: one static binary that serves the API, tiles and admin UI,
