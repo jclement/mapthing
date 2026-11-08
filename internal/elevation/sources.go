@@ -104,8 +104,9 @@ func CoverageIDs(bbox [4]float64) []string {
 // Metadata is the JSON metadata stored in terrain.pmtiles.
 type Metadata struct {
 	Name     string `json:"name"`
-	Format   string `json:"format"`   // "png"
-	Encoding string `json:"encoding"` // "terrarium"
+	Format   string `json:"format"`    // "png"
+	Encoding string `json:"encoding"`  // "terrarium"
+	TileSize int    `json:"tile_size"` // pixels, 256
 	// Sources is indexed by the per-pixel source index minus one
 	// (index 0 means no data).
 	Sources     []MetaSource `json:"sources"`
