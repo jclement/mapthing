@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // Geofabrik publishes MD5 checksums: integrity, not security
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -325,7 +325,7 @@ func (s *state) copyWithProgress(dst string, src io.Reader, total int64, label s
 		return "", 0, err
 	}
 	defer func() { _ = f.Close() }()
-	h := md5.New()
+	h := md5.New() //nolint:gosec // matches the published .md5 files
 	var n atomic.Int64
 	done := make(chan struct{})
 	go func() {
@@ -390,7 +390,7 @@ func md5File(file string) (string, int64, error) {
 		return "", 0, err
 	}
 	defer func() { _ = f.Close() }()
-	h := md5.New()
+	h := md5.New() //nolint:gosec // matches the published .md5 files
 	n, err := io.Copy(h, f)
 	return hex.EncodeToString(h.Sum(nil)), n, err
 }

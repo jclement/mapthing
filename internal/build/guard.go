@@ -66,7 +66,7 @@ func freeBytes(dir string) int64 {
 	if err := syscall.Statfs(dir, &st); err != nil {
 		return -1
 	}
-	return int64(st.Bavail) * int64(st.Bsize)
+	return int64(st.Bavail) * st.Bsize
 }
 
 func (s *state) guard(ctx context.Context) error {

@@ -119,7 +119,7 @@ func (s *state) verifyRoutes(ctx context.Context) []Check {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return fail(err)
 	}
-	port, err := freePort()
+	port, err := freePort(ctx)
 	if err != nil {
 		return fail(err)
 	}
@@ -145,7 +145,8 @@ func (s *state) verifyRoutes(ctx context.Context) []Check {
 	client := &http.Client{Timeout: 60 * time.Second}
 	ready := false
 	for i := 0; i < 120 && !ready; i++ {
-		if resp, err := client.Get(base + "/status"); err == nil {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/status", nil)
+		if resp, err := client.Do(req); err == nil {
 			_ = resp.Body.Close()
 			ready = resp.StatusCode == http.StatusOK
 		}
@@ -211,8 +212,9 @@ func routeOnce(ctx context.Context, c *http.Client, base string, p [2][2]float64
 	return r.Trip.Summary.Length, nil
 }
 
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+func freePort(ctx context.Context) (int, error) {
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}

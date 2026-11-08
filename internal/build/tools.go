@@ -59,7 +59,7 @@ func (s *state) exec(ctx context.Context, dir, name string, args ...string) erro
 // execOut is exec that also captures stdout into stdout (if non-nil) instead of logging it.
 func (s *state) execOut(ctx context.Context, dir string, stdout io.Writer, name string, args ...string) (*os.ProcessState, error) {
 	s.logf("$ %s %s", name, strings.Join(args, " "))
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // configured build tools; args are built here, never from requests
 	cmd.Dir = dir
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 30 * time.Second
