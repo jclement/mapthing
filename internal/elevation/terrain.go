@@ -202,6 +202,14 @@ type Terrain struct {
 	resolved  string // real path of the open archive
 	modTime   time.Time
 	lastCheck time.Time
+	finder    StructureFinder // for bridges=deck; nil = unavailable
+}
+
+// SetStructureFinder enables bridges=deck profiles (normally the routing client).
+func (t *Terrain) SetStructureFinder(f StructureFinder) {
+	t.mu.Lock()
+	t.finder = f
+	t.mu.Unlock()
 }
 
 // NewTerrain returns a Service reading path, which normally goes through the
@@ -282,7 +290,10 @@ func (t *Terrain) Profile(ctx context.Context, path []LonLat, opt ProfileOptions
 	if err != nil {
 		return nil, err
 	}
-	return profileFrom(ctx, a, path, opt)
+	t.mu.Lock()
+	finder := t.finder
+	t.mu.Unlock()
+	return profileFrom(ctx, a, finder, path, opt)
 }
 
 // Sources lists the sources present in the live archive.

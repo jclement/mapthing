@@ -154,6 +154,8 @@ type profileRequest struct {
 	HysteresisM float64  `json:"hysteresis_m"`
 	// SmoothWindowM: running-median window for gain/loss (default 150 m; negative = off).
 	SmoothWindowM float64 `json:"smooth_window_m"`
+	// Bridges: "ground" (default) or "deck" (interpolate across bridges and tunnels).
+	Bridges string `json:"bridges"`
 }
 
 func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +198,10 @@ func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
 		apiError(w, fmt.Errorf("samples must be 0..%d", MaxProfileSamples))
 		return
 	}
+	if req.Bridges != "" && req.Bridges != BridgesGround && req.Bridges != BridgesDeck {
+		apiError(w, fmt.Errorf("bridges must be %q or %q", BridgesGround, BridgesDeck))
+		return
+	}
 	if req.IntervalM < 0 || math.IsNaN(req.IntervalM) {
 		apiError(w, errors.New("interval_m must be positive"))
 		return
@@ -203,7 +209,7 @@ func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
 	if req.IntervalM > 0 && req.IntervalM < 1 {
 		req.IntervalM = 1
 	}
-	p, err := h.Svc.Profile(r.Context(), path, ProfileOptions{IntervalM: req.IntervalM, Samples: req.Samples, HysteresisM: req.HysteresisM, SmoothWindowM: req.SmoothWindowM})
+	p, err := h.Svc.Profile(r.Context(), path, ProfileOptions{IntervalM: req.IntervalM, Samples: req.Samples, HysteresisM: req.HysteresisM, SmoothWindowM: req.SmoothWindowM, Bridges: req.Bridges})
 	if err != nil {
 		apiError(w, wrapInternal(err))
 		return

@@ -15,6 +15,33 @@ type Sample struct {
 	Source     string   `json:"source,omitempty"`
 	Resolution float64  `json:"resolution_m,omitempty"`
 	DistanceM  float64  `json:"distance_m,omitempty"` // along-path distance (profiles only)
+	// Structure is "bridge" or "tunnel" when a deck-mode profile interpolated
+	// this sample across a structure (the DEM value is then not the road level).
+	Structure string `json:"structure,omitempty"`
+}
+
+// Bridge modes for profiles.
+const (
+	// BridgesGround samples the terrain everywhere (default). Right for buried
+	// pipe, which goes under a creek or canal rather than over it.
+	BridgesGround = "ground"
+	// BridgesDeck interpolates linearly across bridges and tunnels the path
+	// map-matches onto, approximating the road level a vehicle follows.
+	BridgesDeck = "deck"
+)
+
+// StructureSpan is one stretch of a deck-mode profile that was interpolated.
+type StructureSpan struct {
+	StartM float64 `json:"start_m"` // along-path distance of the first structure sample
+	EndM   float64 `json:"end_m"`   // ... and of the last
+	Kind   string  `json:"kind"`    // bridge | tunnel
+}
+
+// StructureFinder reports, for points along a road path, which lie on a
+// bridge or tunnel ("" = ground or not matched), and the fraction of points it
+// could match. routing.Client implements it with Valhalla trace_attributes.
+type StructureFinder interface {
+	Structures(ctx context.Context, pts [][2]float64) (kinds []string, matched float64, err error)
 }
 
 // ProfileOptions controls path sampling.
@@ -31,6 +58,8 @@ type ProfileOptions struct {
 	// descent only counts once it exceeds this many metres. 0 = default (2 m);
 	// negative = off.
 	HysteresisM float64
+	// Bridges is BridgesGround ("" = ground) or BridgesDeck.
+	Bridges string
 }
 
 // Profile is an elevation profile along a path.
@@ -42,15 +71,21 @@ type Profile struct {
 	// DEM noise and bridge dips do not add up; GainRawM and LossRawM sum
 	// every sample-to-sample change of the unsmoothed series. Samples always
 	// carry the unsmoothed elevations.
-	GainM         float64  `json:"gain_m"`
-	LossM         float64  `json:"loss_m"`
-	GainRawM      float64  `json:"gain_raw_m"`
-	LossRawM      float64  `json:"loss_raw_m"`
-	SmoothWindowM float64  `json:"smooth_window_m"`
-	HysteresisM   float64  `json:"hysteresis_m"`
-	MinM          float64  `json:"min_m"`
-	MaxM          float64  `json:"max_m"`
-	Sources       []string `json:"sources"`
+	GainM         float64 `json:"gain_m"`
+	LossM         float64 `json:"loss_m"`
+	GainRawM      float64 `json:"gain_raw_m"`
+	LossRawM      float64 `json:"loss_raw_m"`
+	SmoothWindowM float64 `json:"smooth_window_m"`
+	HysteresisM   float64 `json:"hysteresis_m"`
+	// Bridges echoes the mode used; StructureSpans lists the interpolated
+	// stretches (deck only); Warning explains a deck request that fell back to
+	// ground.
+	Bridges        string          `json:"bridges"`
+	StructureSpans []StructureSpan `json:"structure_spans,omitempty"`
+	Warning        string          `json:"warning,omitempty"`
+	MinM           float64         `json:"min_m"`
+	MaxM           float64         `json:"max_m"`
+	Sources        []string        `json:"sources"`
 }
 
 // SourceInfo describes one DEM source available in the live generation.

@@ -661,8 +661,12 @@ on("POST", /^\/api\/v1\/elevation$/, (_m, b) => ({
   ),
 }));
 on("POST", /^\/api\/v1\/elevation\/profile$/, (_m, b) => {
-  const { path, interval_m } = b as { path: LonLat[]; interval_m?: number };
-  return profileOf(path, interval_m ?? 30);
+  const { path, interval_m, bridges } = b as {
+    path: LonLat[];
+    interval_m?: number;
+    bridges?: "ground" | "deck";
+  };
+  return { ...profileOf(path, interval_m ?? 30), bridges: bridges ?? "ground" };
 });
 
 function stats(): Stats {

@@ -136,6 +136,8 @@ export function MapPage() {
   const [waypoints, setWaypoints] = useState<LonLat[]>([]);
   const [profileName, setProfileName] = useState<RouteProfile>("auto");
   const [avoidUnpaved, setAvoidUnpaved] = useState(false);
+  // Road profiles follow the bridge deck by default; off = terrain under bridges (buried pipe).
+  const [bridgeDeck, setBridgeDeck] = useState(true);
   const [route, setRoute] = useState<RouteResult | null>(null);
   const [elev, setElev] = useState<ElevationProfile | null>(null);
   const [routing, setRouting] = useState(false);
@@ -237,7 +239,11 @@ export function MapPage() {
         setRoute(r);
         const coords = r.geometry.coordinates as LonLat[];
         const len = lineLength(coords);
-        const p = await api.profile(coords, Math.max(30, Math.round(len / 1500)));
+        const p = await api.profile(
+          coords,
+          Math.max(30, Math.round(len / 1500)),
+          bridgeDeck ? "deck" : "ground",
+        );
         if (live) setElev(p);
       })
       .catch((e: Error) => {
@@ -250,7 +256,7 @@ export function MapPage() {
     return () => {
       live = false;
     };
-  }, [waypoints, profileName, avoidUnpaved]);
+  }, [waypoints, profileName, avoidUnpaved, bridgeDeck]);
 
   // ----- hover marker synced with the chart -----
   useEffect(() => {
@@ -596,6 +602,24 @@ export function MapPage() {
                     max <span className="tnum text-fg">{fmt.elevation(elev.max_m)}</span>
                   </span>
                 </div>
+                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <Switch
+                    checked={bridgeDeck}
+                    onChange={setBridgeDeck}
+                    label="Follow the road over bridges and through tunnels"
+                  />
+                  <span title="On: the profile runs straight across bridges and tunnels at road level. Off: it follows the ground under them, as a buried pipe would.">
+                    Road level on bridges
+                  </span>
+                  {elev.bridges === "deck" && (elev.structure_spans?.length ?? 0) > 0 && (
+                    <span className="text-faint">({elev.structure_spans!.length} crossed)</span>
+                  )}
+                </div>
+                {elev.warning && (
+                  <p className="mb-2 rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn">
+                    {elev.warning}
+                  </p>
+                )}
                 <ElevationChart
                   samples={elev.samples}
                   hoverIndex={hoverIdx}

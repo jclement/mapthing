@@ -3,6 +3,7 @@ package elevation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 )
@@ -206,23 +207,35 @@ func GainLoss(elev []float64, threshold float64) (gain, loss float64) {
 }
 
 // ProfileArchive computes a profile directly from an archive (tools and tests).
-func ProfileArchive(ctx context.Context, a *Archive, path []LonLat, opt ProfileOptions) (*Profile, error) {
-	return profileFrom(ctx, a, path, opt)
+// finder may be nil (deck mode then falls back to ground with a warning).
+func ProfileArchive(ctx context.Context, a *Archive, finder StructureFinder, path []LonLat, opt ProfileOptions) (*Profile, error) {
+	return profileFrom(ctx, a, finder, path, opt)
 }
 
-func profileFrom(ctx context.Context, s sampler, path []LonLat, opt ProfileOptions) (*Profile, error) {
+// MinStructureMatch is the fraction of profile points that must map-match for
+// deck mode to be trusted; below it the profile falls back to ground.
+const MinStructureMatch = 0.5
+
+func profileFrom(ctx context.Context, s sampler, finder StructureFinder, path []LonLat, opt ProfileOptions) (*Profile, error) {
 	if len(path) == 0 {
 		return nil, errors.New("path is empty")
 	}
 	if opt.Samples < 0 {
 		return nil, errors.New("samples must be positive")
 	}
+	mode := opt.Bridges
+	switch mode {
+	case "", BridgesGround:
+		mode = BridgesGround
+	case BridgesDeck:
+	default:
+		return nil, fmt.Errorf("bridges must be %q or %q", BridgesGround, BridgesDeck)
+	}
 	pts, dist := Densify(path, opt.IntervalM, opt.Samples)
-	p := &Profile{Samples: make([]Sample, len(pts)), MinM: math.Inf(1), MaxM: math.Inf(-1)}
+	p := &Profile{Samples: make([]Sample, len(pts)), MinM: math.Inf(1), MaxM: math.Inf(-1), Bridges: mode}
 	if len(dist) > 0 {
 		p.LengthM = math.Round(dist[len(dist)-1]*100) / 100
 	}
-	var series, seriesDist []float64
 	seen := map[string]bool{}
 	for i, pt := range pts {
 		if i%256 == 0 && ctx.Err() != nil {
@@ -234,16 +247,23 @@ func profileFrom(ctx context.Context, s sampler, path []LonLat, opt ProfileOptio
 		}
 		smp.DistanceM = math.Round(dist[i]*100) / 100
 		p.Samples[i] = smp
+		if smp.Source != "" && !seen[smp.Source] {
+			seen[smp.Source] = true
+			p.Sources = append(p.Sources, smp.Source)
+		}
+	}
+	if mode == BridgesDeck {
+		applyDeck(ctx, p, finder, pts, dist)
+	}
+
+	var series, seriesDist []float64
+	for i, smp := range p.Samples {
 		if smp.Elevation != nil {
 			e := *smp.Elevation
 			series = append(series, e)
 			seriesDist = append(seriesDist, dist[i])
 			p.MinM = math.Min(p.MinM, e)
 			p.MaxM = math.Max(p.MaxM, e)
-		}
-		if smp.Source != "" && !seen[smp.Source] {
-			seen[smp.Source] = true
-			p.Sources = append(p.Sources, smp.Source)
 		}
 	}
 	if len(series) == 0 {
@@ -273,4 +293,84 @@ func profileFrom(ctx context.Context, s sampler, path []LonLat, opt ProfileOptio
 		p.Sources = []string{}
 	}
 	return p, nil
+}
+
+// applyDeck asks finder which samples lie on bridges or tunnels and replaces
+// their elevations by a straight line between the nearest ground samples with
+// data on either side (held flat when the structure reaches the path's end).
+// On any failure the profile stays ground and p.Warning says why.
+func applyDeck(ctx context.Context, p *Profile, finder StructureFinder, pts []LonLat, dist []float64) {
+	fallback := func(why string) {
+		p.Bridges = BridgesGround
+		p.Warning = "bridges=deck unavailable, profile is ground: " + why
+	}
+	if finder == nil {
+		fallback("no routing engine is configured")
+		return
+	}
+	raw := make([][2]float64, len(pts))
+	for i, pt := range pts {
+		raw[i] = pt
+	}
+	kinds, matched, err := finder.Structures(ctx, raw)
+	if err != nil {
+		fallback("structure lookup failed (" + err.Error() + ")")
+		return
+	}
+	if len(kinds) != len(pts) {
+		fallback("structure lookup returned the wrong number of points")
+		return
+	}
+	if matched < MinStructureMatch {
+		fallback(fmt.Sprintf("only %.0f%% of the path matched a road", matched*100))
+		return
+	}
+	n := len(kinds)
+	for i := 0; i < n; {
+		if kinds[i] == "" {
+			i++
+			continue
+		}
+		j := i
+		for j+1 < n && kinds[j+1] == kinds[i] {
+			j++
+		}
+		lo, hi := i-1, j+1
+		for lo >= 0 && p.Samples[lo].Elevation == nil {
+			lo--
+		}
+		for hi < n && p.Samples[hi].Elevation == nil {
+			hi++
+		}
+		var at func(k int) (float64, bool)
+		switch {
+		case lo >= 0 && hi < n:
+			e0, e1 := *p.Samples[lo].Elevation, *p.Samples[hi].Elevation
+			d0, d1 := dist[lo], dist[hi]
+			at = func(k int) (float64, bool) {
+				if d1 <= d0 {
+					return e0, true
+				}
+				return e0 + (e1-e0)*(dist[k]-d0)/(d1-d0), true
+			}
+		case lo >= 0:
+			e0 := *p.Samples[lo].Elevation
+			at = func(int) (float64, bool) { return e0, true }
+		case hi < n:
+			e1 := *p.Samples[hi].Elevation
+			at = func(int) (float64, bool) { return e1, true }
+		default:
+			at = func(int) (float64, bool) { return 0, false } // nothing to anchor to
+		}
+		for k := i; k <= j; k++ {
+			if v, ok := at(k); ok {
+				v = math.Round(v*100) / 100
+				p.Samples[k].Elevation = &v
+				p.Samples[k].Structure = kinds[i]
+			}
+		}
+		p.StructureSpans = append(p.StructureSpans, StructureSpan{
+			StartM: math.Round(dist[i]*10) / 10, EndM: math.Round(dist[j]*10) / 10, Kind: kinds[i]})
+		i = j + 1
+	}
 }
