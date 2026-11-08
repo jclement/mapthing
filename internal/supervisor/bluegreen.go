@@ -105,10 +105,10 @@ func (b *BlueGreen) waitReady(ctx context.Context, c Child, base string) error {
 	var last error
 	for {
 		st, _ := b.Sup.Status(c.Name)
-		switch {
-		case st.State == StateUnavailable:
+		switch st.State {
+		case StateUnavailable:
 			return fmt.Errorf("%w: %s", ErrUnavailable, st.Message)
-		case st.State == StateRunning || st.State == StateUnhealthy:
+		case StateRunning, StateUnhealthy:
 			last = nil
 			if c.HealthURL != "" && !probeURL(ctx, c.HealthURL) {
 				last = errors.New("health probe failing")
@@ -118,7 +118,7 @@ func (b *BlueGreen) waitReady(ctx context.Context, c Child, base string) error {
 			if last == nil {
 				return nil
 			}
-		case st.State == StateBackoff:
+		case StateBackoff:
 			last = fmt.Errorf("instance exited: %s", st.Message)
 		}
 		select {
