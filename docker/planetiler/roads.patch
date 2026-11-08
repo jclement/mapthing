@@ -1,0 +1,82 @@
+--- a/tiles/src/main/java/com/protomaps/basemap/layers/Roads.java	2026-11-08 09:56:14.345322158 -0600
++++ b/tiles/src/main/java/com/protomaps/basemap/layers/Roads.java	2026-11-08 09:56:14.359322264 -0600
+@@ -268,7 +268,12 @@
+ 
+     // Minor roads and paths show up a little early
+     rule(with("pm:kind", "minor_road"), use("pm:minzoom", 12)),
+-    rule(with("pm:kind", "minor_road"), with("pm:kindDetail", "service"), use("pm:minzoom", 13)),
++    // mapthing: plain service roads (often rural lease roads) from z12; parking and driveway
++    // service roads stay at z13.
++    rule(with("pm:kind", "minor_road"), with("pm:kindDetail", "service"), use("pm:minzoom", 12)),
++    rule(with("pm:kind", "minor_road"),
++      with("pm:kindDetail", "driveway", "parking_aisle", "drive-through", "alley", "emergency_access"),
++      use("pm:minzoom", 13)),
+ 
+     rule(with("pm:kind", "path"), use("pm:minzoom", 12)),
+     rule(with("pm:kind", "path"), with("pm:kindDetail", "path", "cycleway", "bridleway", "footway", "steps"),
+@@ -389,7 +394,8 @@
+     minZoomShieldText = getInteger(sf2, zoomMatches, "pm:minzoomShield", 99);
+     minZoomNames = getInteger(sf2, zoomMatches, "pm:minzoomName", 99);
+ 
+-    minZoom = sf.hasTag("access", "private", "no") ? Math.max(minZoom, 15) : minZoom;
++    // mapthing: access=private|no roads keep their normal minzoom; "access" (from z12) lets styles
++    // de-emphasise them instead.
+ 
+     var feat = features.line("roads")
+       .setId(FeatureId.create(sf))
+@@ -398,7 +404,7 @@
+       .setAttr("min_zoom", minZoom + 1)
+       .setAttrWithMinzoom("ref", sf.getString("ref"), minZoomShieldText)
+       .setAttrWithMinzoom("oneway", sf.getString("oneway"), 14)
+-      .setAttrWithMinzoom("access", sf.getTag("access"), 15)
++      .setAttrWithMinzoom("access", sf.getTag("access"), 12)
+       // temporary attribute that gets removed in the post-process step
+       .setAttr("pm:highway", highway)
+       .setAttr("sort_rank", 400)
+@@ -444,12 +450,46 @@
+       feat.setAttrWithMinzoom("is_tunnel", true, 12);
+     }
+ 
++    // mapthing: surface (paved|unpaved), raw surface and tracktype for roads and paths from z11.
++    if (kind.equals("major_road") || kind.equals("minor_road") || kind.equals("path")) {
++      String surfaceRaw = sf.getString("surface");
++      feat.setAttrWithMinzoom("surface", MapthingSurface.normalize(surfaceRaw), 11);
++      feat.setAttrWithMinzoom("surface_raw", surfaceRaw, 11);
++      feat.setAttrWithMinzoom("tracktype", sf.getString("tracktype"), 11);
++    }
++
+     // Server sort features so client label collisions are pre-sorted
+     feat.setSortKey(minZoom);
+ 
+     OsmNames.setOsmNames(feat, sf, minZoomNames);
+   }
+ 
++  /** mapthing: OSM surface values grouped into paved and unpaved; null when unknown. */
++  static final class MapthingSurface {
++    private static final java.util.Set<String> PAVED = java.util.Set.of("paved", "asphalt", "concrete",
++      "concrete:plates", "concrete:lanes", "paving_stones", "paving_stones:lanes", "sett", "cobblestone",
++      "unhewn_cobblestone", "bricks", "chipseal", "metal", "metal_grid", "wood", "rubber", "tartan");
++    private static final java.util.Set<String> UNPAVED = java.util.Set.of("unpaved", "gravel", "fine_gravel",
++      "compacted", "dirt", "earth", "ground", "grass", "grass_paver", "gravel_turf", "mud", "sand", "pebblestone",
++      "rock", "shells", "woodchips", "salt", "clay", "snow", "ice");
++
++    private MapthingSurface() {}
++
++    static String normalize(String raw) {
++      if (raw == null) {
++        return null;
++      }
++      String v = raw.split(";", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
++      if (PAVED.contains(v)) {
++        return "paved";
++      }
++      if (UNPAVED.contains(v)) {
++        return "unpaved";
++      }
++      return null;
++    }
++  }
++
+   private void processOsmNonHighways(SourceFeature sf, FeatureCollector features) {
+ 
+     if (sf.hasTag("building")) {

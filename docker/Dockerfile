@@ -56,6 +56,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM --platform=$BUILDPLATFORM ${MAVEN_IMAGE} AS planetiler
 ARG BASEMAPS_REF
 ADD https://github.com/protomaps/basemaps.git#${BASEMAPS_REF} /basemaps
+# mapthing patches (surface/access attributes, earlier rural roads): docker/planetiler/PATCHES.md
+COPY docker/planetiler /patches
+RUN cd /basemaps && for p in /patches/*.patch; do git apply --verbose "$p"; done
 WORKDIR /basemaps/tiles
 RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -q -DskipTests -Dspotless.check.skip=true package && \
