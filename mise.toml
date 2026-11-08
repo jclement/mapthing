@@ -12,13 +12,12 @@ MAPTHING_LISTEN = ":8080"
 description = "Install Go and web dependencies (idempotent)"
 run = [
   "go mod download",
-  "cd web && npm ci --no-audit --no-fund",
+  "[ ! -f web/package.json ] || (cd web && npm ci --no-audit --no-fund)",
 ]
 
 [tasks."build:web"]
 description = "Build the admin web UI into web/dist (embedded by the Go binary)"
-dir = "web"
-run = "npm run build"
+run = "[ ! -f web/package.json ] || (cd web && npm run build)"
 sources = ["web/src/**/*", "web/index.html", "web/package-lock.json", "web/vite.config.ts"]
 outputs = ["web/dist/index.html"]
 
@@ -45,7 +44,7 @@ description = "Unit and API tests (Go + web). Non-interactive."
 depends = ["build:web"]
 run = [
   "go test ./...",
-  "cd web && npm test --if-present",
+  "[ ! -f web/package.json ] || (cd web && npm test --if-present)",
 ]
 
 [tasks.smoke]
@@ -59,14 +58,14 @@ run = [
   "test -z \"$(gofmt -l cmd internal)\" || (gofmt -l cmd internal; echo 'gofmt needed'; exit 1)",
   "go vet ./...",
   "golangci-lint run ./...",
-  "cd web && npm run lint",
+  "[ ! -f web/package.json ] || (cd web && npm run lint)",
 ]
 
 [tasks.fmt]
 description = "Format Go and web code"
 run = [
   "gofmt -w cmd internal",
-  "cd web && npm run fmt",
+  "[ ! -f web/package.json ] || (cd web && npm run fmt)",
 ]
 
 [tasks.check]
