@@ -1,0 +1,33 @@
+{
+  "locations": [
+    {
+      "location": [
+        -75.5,
+        39.1001
+      ],
+      "name": "Test Road",
+      "snapped_distance": 11.12
+    },
+    null
+  ],
+  "metadata": {
+    "attribution": "© openrouteservice-compatible API by mapthing | © OpenStreetMap contributors",
+    "engine": {
+      "version": "mapthing-valhalla"
+    },
+    "query": {
+      "locations": [
+        [
+          -75.5,
+          39.1
+        ],
+        [
+          -74.9,
+          38.5
+        ]
+      ],
+      "radius": 350
+    },
+    "service": "snap"
+  }
+}

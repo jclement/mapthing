@@ -18,7 +18,7 @@ func TestRouteTrack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if math.Abs(rt.DistanceM-30147) > 1 || math.Abs(rt.DurationS-2785.125) > 0.01 {
+	if math.Abs(rt.DistanceM-30147) > 1 || math.Abs(rt.DurationS-1455.133) > 0.01 {
 		t.Errorf("distance %.1f duration %.1f", rt.DistanceM, rt.DurationS)
 	}
 	if len(rt.Legs) != 1 || rt.Legs[0].From != 0 || rt.Legs[0].To != len(rt.Geometry)-1 {
@@ -257,4 +257,29 @@ func TestURLFromEnv(t *testing.T) {
 		t.Error("env URL")
 	}
 	_ = http.StatusOK
+}
+
+func TestSurfaceFallbackToMapMatch(t *testing.T) {
+	f, c := newFake(t)
+	f.on("route", 200, "valhalla_route_443.json")
+	f.handlers["trace_attributes"] = func(body map[string]any) (int, string) {
+		if body["shape_match"] == "edge_walk" {
+			return 400, "valhalla_error_edgewalk.json"
+		}
+		return 200, "valhalla_trace_mapsnap.json"
+	}
+	rt, err := c.Route(context.Background(), Request{Locations: []Location{{Lat: 39.4473, Lon: -75.7163}, {Lat: 39.1582, Lon: -75.5244}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.SurfaceBreakdown[SurfacePaved] < 0.9*rt.DistanceM || rt.SurfaceBreakdown[SurfaceUnknown] != 0 {
+		t.Errorf("breakdown %v of %.0f m", rt.SurfaceBreakdown, rt.DistanceM)
+	}
+	// No per-vertex spans from a map match: one unknown span covering the route.
+	if len(rt.Surfaces) != 1 || rt.Surfaces[0].Class != SurfaceUnknown {
+		t.Errorf("spans %+v", rt.Surfaces)
+	}
+	if f.last("trace_attributes")["shape_match"] != "map_snap" {
+		t.Error("fallback did not map-match")
+	}
 }

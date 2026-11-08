@@ -4,1137 +4,1365 @@
     {
       "surface": "paved_smooth",
       "end_shape_index": 3,
-      "begin_shape_index": 0
+      "begin_shape_index": 0,
+      "length": 0.087
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 4,
-      "begin_shape_index": 3
+      "begin_shape_index": 3,
+      "length": 0.018
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 5,
-      "begin_shape_index": 4
+      "begin_shape_index": 4,
+      "length": 0.018
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 7,
-      "begin_shape_index": 5
+      "begin_shape_index": 5,
+      "length": 0.075
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 9,
-      "begin_shape_index": 7
+      "begin_shape_index": 7,
+      "length": 0.042
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 10,
-      "begin_shape_index": 9
+      "begin_shape_index": 9,
+      "length": 0.023
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 11,
-      "begin_shape_index": 10
+      "begin_shape_index": 10,
+      "length": 0.016
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 12,
-      "begin_shape_index": 11
+      "begin_shape_index": 11,
+      "length": 0.152
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 13,
-      "begin_shape_index": 12
+      "begin_shape_index": 12,
+      "length": 0.084
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 18,
-      "begin_shape_index": 13
+      "begin_shape_index": 13,
+      "length": 0.027
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 21,
-      "begin_shape_index": 18
+      "begin_shape_index": 18,
+      "length": 0.058
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 23,
-      "begin_shape_index": 21
+      "begin_shape_index": 21,
+      "length": 0.058
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 29,
-      "begin_shape_index": 23
+      "begin_shape_index": 23,
+      "length": 0.044
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 31,
-      "begin_shape_index": 29
+      "begin_shape_index": 29,
+      "length": 0.046
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 33,
-      "begin_shape_index": 31
+      "begin_shape_index": 31,
+      "length": 0.081
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 34,
-      "begin_shape_index": 33
+      "begin_shape_index": 33,
+      "length": 0.055
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 35,
-      "begin_shape_index": 34
+      "begin_shape_index": 34,
+      "length": 0.052
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 36,
-      "begin_shape_index": 35
+      "begin_shape_index": 35,
+      "length": 0.025
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 37,
-      "begin_shape_index": 36
+      "begin_shape_index": 36,
+      "length": 0.052
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 39,
-      "begin_shape_index": 37
+      "begin_shape_index": 37,
+      "length": 0.189
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 40,
-      "begin_shape_index": 39
+      "begin_shape_index": 39,
+      "length": 0.016
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 42,
-      "begin_shape_index": 40
+      "begin_shape_index": 40,
+      "length": 0.082
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 43,
-      "begin_shape_index": 42
+      "begin_shape_index": 42,
+      "length": 0.014
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 44,
-      "begin_shape_index": 43
+      "begin_shape_index": 43,
+      "length": 0.01
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 45,
-      "begin_shape_index": 44
+      "begin_shape_index": 44,
+      "length": 0.016
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 48,
-      "begin_shape_index": 45
+      "begin_shape_index": 45,
+      "length": 0.049
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 50,
-      "begin_shape_index": 48
+      "begin_shape_index": 48,
+      "length": 0.082
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 51,
-      "begin_shape_index": 50
+      "begin_shape_index": 50,
+      "length": 0.032
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 52,
-      "begin_shape_index": 51
+      "begin_shape_index": 51,
+      "length": 0.055
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 53,
-      "begin_shape_index": 52
+      "begin_shape_index": 52,
+      "length": 0.079
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 57,
-      "begin_shape_index": 53
+      "begin_shape_index": 53,
+      "length": 0.078
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 58,
-      "begin_shape_index": 57
+      "begin_shape_index": 57,
+      "length": 0.011
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 70,
-      "begin_shape_index": 58
+      "begin_shape_index": 58,
+      "length": 0.256
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 81,
-      "begin_shape_index": 70
+      "begin_shape_index": 70,
+      "length": 0.062
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 85,
-      "begin_shape_index": 81
+      "begin_shape_index": 81,
+      "length": 0.01
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 93,
-      "begin_shape_index": 85
+      "begin_shape_index": 85,
+      "length": 0.018
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 96,
-      "begin_shape_index": 93
+      "begin_shape_index": 93,
+      "length": 0.009
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 107,
-      "begin_shape_index": 96
+      "begin_shape_index": 96,
+      "length": 0.065
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 118,
-      "begin_shape_index": 107
+      "begin_shape_index": 107,
+      "length": 0.08
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 120,
-      "begin_shape_index": 118
+      "begin_shape_index": 118,
+      "length": 0.03
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 121,
-      "begin_shape_index": 120
+      "begin_shape_index": 120,
+      "length": 0.015
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 125,
-      "begin_shape_index": 121
+      "begin_shape_index": 121,
+      "length": 0.059
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 131,
-      "begin_shape_index": 125
+      "begin_shape_index": 125,
+      "length": 0.331
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 133,
-      "begin_shape_index": 131
+      "begin_shape_index": 131,
+      "length": 0.05
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 136,
-      "begin_shape_index": 133
+      "begin_shape_index": 133,
+      "length": 0.237
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 138,
-      "begin_shape_index": 136
+      "begin_shape_index": 136,
+      "length": 0.114
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 139,
-      "begin_shape_index": 138
+      "begin_shape_index": 138,
+      "length": 0.04
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 141,
-      "begin_shape_index": 139
+      "begin_shape_index": 139,
+      "length": 0.061
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 142,
-      "begin_shape_index": 141
+      "begin_shape_index": 141,
+      "length": 0.028
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 143,
-      "begin_shape_index": 142
+      "begin_shape_index": 142,
+      "length": 0.025
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 144,
-      "begin_shape_index": 143
+      "begin_shape_index": 143,
+      "length": 0.022
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 145,
-      "begin_shape_index": 144
+      "begin_shape_index": 144,
+      "length": 0.041
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 146,
-      "begin_shape_index": 145
+      "begin_shape_index": 145,
+      "length": 0.083
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 150,
-      "begin_shape_index": 146
+      "begin_shape_index": 146,
+      "length": 0.529
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 152,
-      "begin_shape_index": 150
+      "begin_shape_index": 150,
+      "length": 0.391
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 154,
-      "begin_shape_index": 152
+      "begin_shape_index": 152,
+      "length": 0.29
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 155,
-      "begin_shape_index": 154
+      "begin_shape_index": 154,
+      "length": 0.153
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 156,
-      "begin_shape_index": 155
+      "begin_shape_index": 155,
+      "length": 0.049
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 157,
-      "begin_shape_index": 156
+      "begin_shape_index": 156,
+      "length": 0.079
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 159,
-      "begin_shape_index": 157
+      "begin_shape_index": 157,
+      "length": 0.111
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 160,
-      "begin_shape_index": 159
+      "begin_shape_index": 159,
+      "length": 0.042
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 162,
-      "begin_shape_index": 160
+      "begin_shape_index": 160,
+      "length": 0.213
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 167,
-      "begin_shape_index": 162
+      "begin_shape_index": 162,
+      "length": 0.391
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 168,
-      "begin_shape_index": 167
+      "begin_shape_index": 167,
+      "length": 0.219
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 169,
-      "begin_shape_index": 168
+      "begin_shape_index": 168,
+      "length": 0.206
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 170,
-      "begin_shape_index": 169
+      "begin_shape_index": 169,
+      "length": 0.202
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 172,
-      "begin_shape_index": 170
+      "begin_shape_index": 170,
+      "length": 0.421
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 173,
-      "begin_shape_index": 172
+      "begin_shape_index": 172,
+      "length": 0.267
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 175,
-      "begin_shape_index": 173
+      "begin_shape_index": 173,
+      "length": 0.16
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 176,
-      "begin_shape_index": 175
+      "begin_shape_index": 175,
+      "length": 0.06
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 177,
-      "begin_shape_index": 176
+      "begin_shape_index": 176,
+      "length": 0.052
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 178,
-      "begin_shape_index": 177
+      "begin_shape_index": 177,
+      "length": 0.045
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 179,
-      "begin_shape_index": 178
+      "begin_shape_index": 178,
+      "length": 0.024
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 180,
-      "begin_shape_index": 179
+      "begin_shape_index": 179,
+      "length": 0.03
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 181,
-      "begin_shape_index": 180
+      "begin_shape_index": 180,
+      "length": 0.131
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 185,
-      "begin_shape_index": 181
+      "begin_shape_index": 181,
+      "length": 0.499
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 186,
-      "begin_shape_index": 185
+      "begin_shape_index": 185,
+      "length": 0.039
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 187,
-      "begin_shape_index": 186
+      "begin_shape_index": 186,
+      "length": 0.237
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 189,
-      "begin_shape_index": 187
+      "begin_shape_index": 187,
+      "length": 0.346
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 190,
-      "begin_shape_index": 189
+      "begin_shape_index": 189,
+      "length": 0.409
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 191,
-      "begin_shape_index": 190
+      "begin_shape_index": 190,
+      "length": 0.289
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 192,
-      "begin_shape_index": 191
+      "begin_shape_index": 191,
+      "length": 0.32
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 194,
-      "begin_shape_index": 192
+      "begin_shape_index": 192,
+      "length": 0.566
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 195,
-      "begin_shape_index": 194
+      "begin_shape_index": 194,
+      "length": 0.076
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 196,
-      "begin_shape_index": 195
+      "begin_shape_index": 195,
+      "length": 0.347
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 198,
-      "begin_shape_index": 196
+      "begin_shape_index": 196,
+      "length": 0.843
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 202,
-      "begin_shape_index": 198
+      "begin_shape_index": 198,
+      "length": 0.595
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 203,
-      "begin_shape_index": 202
+      "begin_shape_index": 202,
+      "length": 0.042
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 216,
-      "begin_shape_index": 203
+      "begin_shape_index": 203,
+      "length": 0.526
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 220,
-      "begin_shape_index": 216
+      "begin_shape_index": 216,
+      "length": 0.131
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 227,
-      "begin_shape_index": 220
+      "begin_shape_index": 220,
+      "length": 0.339
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 228,
-      "begin_shape_index": 227
+      "begin_shape_index": 227,
+      "length": 0.015
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 229,
-      "begin_shape_index": 228
+      "begin_shape_index": 228,
+      "length": 0.026
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 232,
-      "begin_shape_index": 229
+      "begin_shape_index": 229,
+      "length": 0.158
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 234,
-      "begin_shape_index": 232
+      "begin_shape_index": 232,
+      "length": 0.069
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 235,
-      "begin_shape_index": 234
+      "begin_shape_index": 234,
+      "length": 0.088
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 236,
-      "begin_shape_index": 235
+      "begin_shape_index": 235,
+      "length": 0.023
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 237,
-      "begin_shape_index": 236
+      "begin_shape_index": 236,
+      "length": 0.119
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 238,
-      "begin_shape_index": 237
+      "begin_shape_index": 237,
+      "length": 0.053
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 239,
-      "begin_shape_index": 238
+      "begin_shape_index": 238,
+      "length": 0.011
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 240,
-      "begin_shape_index": 239
+      "begin_shape_index": 239,
+      "length": 0.039
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 241,
-      "begin_shape_index": 240
+      "begin_shape_index": 240,
+      "length": 0.032
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 242,
-      "begin_shape_index": 241
+      "begin_shape_index": 241,
+      "length": 0.116
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 243,
-      "begin_shape_index": 242
+      "begin_shape_index": 242,
+      "length": 0.007
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 244,
-      "begin_shape_index": 243
+      "begin_shape_index": 243,
+      "length": 0.06
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 245,
-      "begin_shape_index": 244
+      "begin_shape_index": 244,
+      "length": 0.039
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 246,
-      "begin_shape_index": 245
+      "begin_shape_index": 245,
+      "length": 0.051
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 247,
-      "begin_shape_index": 246
+      "begin_shape_index": 246,
+      "length": 0.034
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 248,
-      "begin_shape_index": 247
+      "begin_shape_index": 247,
+      "length": 0.031
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 249,
-      "begin_shape_index": 248
+      "begin_shape_index": 248,
+      "length": 0.076
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 250,
-      "begin_shape_index": 249
+      "begin_shape_index": 249,
+      "length": 0.11
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 251,
-      "begin_shape_index": 250
+      "begin_shape_index": 250,
+      "length": 0.009
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 252,
-      "begin_shape_index": 251
+      "begin_shape_index": 251,
+      "length": 0.065
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 253,
-      "begin_shape_index": 252
+      "begin_shape_index": 252,
+      "length": 0.041
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 254,
-      "begin_shape_index": 253
+      "begin_shape_index": 253,
+      "length": 0.017
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 256,
-      "begin_shape_index": 254
+      "begin_shape_index": 254,
+      "length": 0.104
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 257,
-      "begin_shape_index": 256
+      "begin_shape_index": 256,
+      "length": 0.065
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 258,
-      "begin_shape_index": 257
+      "begin_shape_index": 257,
+      "length": 0.036
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 259,
-      "begin_shape_index": 258
+      "begin_shape_index": 258,
+      "length": 0.061
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 261,
-      "begin_shape_index": 259
+      "begin_shape_index": 259,
+      "length": 0.027
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 262,
-      "begin_shape_index": 261
+      "begin_shape_index": 261,
+      "length": 0.003
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 263,
-      "begin_shape_index": 262
+      "begin_shape_index": 262,
+      "length": 0.032
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 265,
-      "begin_shape_index": 263
+      "begin_shape_index": 263,
+      "length": 0.029
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 267,
-      "begin_shape_index": 265
+      "begin_shape_index": 265,
+      "length": 0.032
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 268,
-      "begin_shape_index": 267
+      "begin_shape_index": 267,
+      "length": 0.019
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 269,
-      "begin_shape_index": 268
+      "begin_shape_index": 268,
+      "length": 0.022
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 270,
-      "begin_shape_index": 269
+      "begin_shape_index": 269,
+      "length": 0.065
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 271,
-      "begin_shape_index": 270
+      "begin_shape_index": 270,
+      "length": 0.004
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 272,
-      "begin_shape_index": 271
+      "begin_shape_index": 271,
+      "length": 0.05
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 273,
-      "begin_shape_index": 272
+      "begin_shape_index": 272,
+      "length": 0.027
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 274,
-      "begin_shape_index": 273
+      "begin_shape_index": 273,
+      "length": 0.008
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 275,
-      "begin_shape_index": 274
+      "begin_shape_index": 274,
+      "length": 0.007
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 276,
-      "begin_shape_index": 275
+      "begin_shape_index": 275,
+      "length": 0.029
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 277,
-      "begin_shape_index": 276
+      "begin_shape_index": 276,
+      "length": 0.051
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 278,
-      "begin_shape_index": 277
+      "begin_shape_index": 277,
+      "length": 0.003
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 279,
-      "begin_shape_index": 278
+      "begin_shape_index": 278,
+      "length": 0.054
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 280,
-      "begin_shape_index": 279
+      "begin_shape_index": 279,
+      "length": 0.109
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 281,
-      "begin_shape_index": 280
+      "begin_shape_index": 280,
+      "length": 0.018
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 282,
-      "begin_shape_index": 281
+      "begin_shape_index": 281,
+      "length": 0.051
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 283,
-      "begin_shape_index": 282
+      "begin_shape_index": 282,
+      "length": 0.023
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 285,
-      "begin_shape_index": 283
+      "begin_shape_index": 283,
+      "length": 0.306
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 288,
-      "begin_shape_index": 285
+      "begin_shape_index": 285,
+      "length": 0.139
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 290,
-      "begin_shape_index": 288
+      "begin_shape_index": 288,
+      "length": 0.108
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 292,
-      "begin_shape_index": 290
+      "begin_shape_index": 290,
+      "length": 0.093
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 293,
-      "begin_shape_index": 292
+      "begin_shape_index": 292,
+      "length": 0.045
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 294,
-      "begin_shape_index": 293
+      "begin_shape_index": 293,
+      "length": 0.018
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 297,
-      "begin_shape_index": 294
+      "begin_shape_index": 294,
+      "length": 0.131
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 298,
-      "begin_shape_index": 297
+      "begin_shape_index": 297,
+      "length": 0.012
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 300,
-      "begin_shape_index": 298
+      "begin_shape_index": 298,
+      "length": 0.037
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 301,
-      "begin_shape_index": 300
+      "begin_shape_index": 300,
+      "length": 0.176
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 303,
-      "begin_shape_index": 301
+      "begin_shape_index": 301,
+      "length": 0.19
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 304,
-      "begin_shape_index": 303
+      "begin_shape_index": 303,
+      "length": 0.01
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 305,
-      "begin_shape_index": 304
+      "begin_shape_index": 304,
+      "length": 0.039
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 307,
-      "begin_shape_index": 305
+      "begin_shape_index": 305,
+      "length": 0.263
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 308,
-      "begin_shape_index": 307
+      "begin_shape_index": 307,
+      "length": 0.212
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 311,
-      "begin_shape_index": 308
+      "begin_shape_index": 308,
+      "length": 0.036
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 312,
-      "begin_shape_index": 311
+      "begin_shape_index": 311,
+      "length": 0.065
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 314,
-      "begin_shape_index": 312
+      "begin_shape_index": 312,
+      "length": 0.095
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 316,
-      "begin_shape_index": 314
+      "begin_shape_index": 314,
+      "length": 0.102
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 317,
-      "begin_shape_index": 316
+      "begin_shape_index": 316,
+      "length": 0.215
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 318,
-      "begin_shape_index": 317
+      "begin_shape_index": 317,
+      "length": 0.032
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 319,
-      "begin_shape_index": 318
+      "begin_shape_index": 318,
+      "length": 0.078
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 320,
-      "begin_shape_index": 319
+      "begin_shape_index": 319,
+      "length": 0.031
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 321,
-      "begin_shape_index": 320
+      "begin_shape_index": 320,
+      "length": 0.058
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 323,
-      "begin_shape_index": 321
+      "begin_shape_index": 321,
+      "length": 0.222
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 325,
-      "begin_shape_index": 323
+      "begin_shape_index": 323,
+      "length": 0.311
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 327,
-      "begin_shape_index": 325
+      "begin_shape_index": 325,
+      "length": 0.448
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 329,
-      "begin_shape_index": 327
+      "begin_shape_index": 327,
+      "length": 0.259
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 330,
-      "begin_shape_index": 329
+      "begin_shape_index": 329,
+      "length": 0.239
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 332,
-      "begin_shape_index": 330
+      "begin_shape_index": 330,
+      "length": 0.291
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 333,
-      "begin_shape_index": 332
+      "begin_shape_index": 332,
+      "length": 0.086
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 334,
-      "begin_shape_index": 333
+      "begin_shape_index": 333,
+      "length": 0.202
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 340,
-      "begin_shape_index": 334
+      "begin_shape_index": 334,
+      "length": 0.278
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 342,
-      "begin_shape_index": 340
+      "begin_shape_index": 340,
+      "length": 0.057
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 344,
-      "begin_shape_index": 342
+      "begin_shape_index": 342,
+      "length": 0.182
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 345,
-      "begin_shape_index": 344
+      "begin_shape_index": 344,
+      "length": 0.12
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 347,
-      "begin_shape_index": 345
+      "begin_shape_index": 345,
+      "length": 0.031
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 348,
-      "begin_shape_index": 347
+      "begin_shape_index": 347,
+      "length": 0.026
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 356,
-      "begin_shape_index": 348
+      "begin_shape_index": 348,
+      "length": 0.286
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 361,
-      "begin_shape_index": 356
+      "begin_shape_index": 356,
+      "length": 0.319
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 363,
-      "begin_shape_index": 361
+      "begin_shape_index": 361,
+      "length": 0.189
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 364,
-      "begin_shape_index": 363
+      "begin_shape_index": 363,
+      "length": 0.093
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 365,
-      "begin_shape_index": 364
+      "begin_shape_index": 364,
+      "length": 0.303
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 366,
-      "begin_shape_index": 365
+      "begin_shape_index": 365,
+      "length": 0.245
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 367,
-      "begin_shape_index": 366
+      "begin_shape_index": 366,
+      "length": 0.038
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 368,
-      "begin_shape_index": 367
+      "begin_shape_index": 367,
+      "length": 0.017
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 369,
-      "begin_shape_index": 368
+      "begin_shape_index": 368,
+      "length": 0.028
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 370,
-      "begin_shape_index": 369
+      "begin_shape_index": 369,
+      "length": 0.282
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 372,
-      "begin_shape_index": 370
+      "begin_shape_index": 370,
+      "length": 0.243
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 375,
-      "begin_shape_index": 372
+      "begin_shape_index": 372,
+      "length": 0.286
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 376,
-      "begin_shape_index": 375
+      "begin_shape_index": 375,
+      "length": 0.263
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 377,
-      "begin_shape_index": 376
+      "begin_shape_index": 376,
+      "length": 0.041
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 379,
-      "begin_shape_index": 377
+      "begin_shape_index": 377,
+      "length": 0.034
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 380,
-      "begin_shape_index": 379
+      "begin_shape_index": 379,
+      "length": 0.039
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 383,
-      "begin_shape_index": 380
+      "begin_shape_index": 380,
+      "length": 0.089
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 386,
-      "begin_shape_index": 383
+      "begin_shape_index": 383,
+      "length": 0.182
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 387,
-      "begin_shape_index": 386
+      "begin_shape_index": 386,
+      "length": 0.026
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 388,
-      "begin_shape_index": 387
+      "begin_shape_index": 387,
+      "length": 0.03
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 390,
-      "begin_shape_index": 388
+      "begin_shape_index": 388,
+      "length": 0.065
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 392,
-      "begin_shape_index": 390
+      "begin_shape_index": 390,
+      "length": 0.056
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 393,
-      "begin_shape_index": 392
+      "begin_shape_index": 392,
+      "length": 0.029
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 400,
-      "begin_shape_index": 393
+      "begin_shape_index": 393,
+      "length": 0.186
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 401,
-      "begin_shape_index": 400
+      "begin_shape_index": 400,
+      "length": 0.028
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 403,
-      "begin_shape_index": 401
+      "begin_shape_index": 401,
+      "length": 0.052
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 405,
-      "begin_shape_index": 403
+      "begin_shape_index": 403,
+      "length": 0.046
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 410,
-      "begin_shape_index": 405
+      "begin_shape_index": 405,
+      "length": 0.143
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 411,
-      "begin_shape_index": 410
+      "begin_shape_index": 410,
+      "length": 0.067
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 412,
-      "begin_shape_index": 411
+      "begin_shape_index": 411,
+      "length": 0.046
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 413,
-      "begin_shape_index": 412
+      "begin_shape_index": 412,
+      "length": 0.062
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 414,
-      "begin_shape_index": 413
+      "begin_shape_index": 413,
+      "length": 0.028
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 420,
-      "begin_shape_index": 414
+      "begin_shape_index": 414,
+      "length": 0.225
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 423,
-      "begin_shape_index": 420
+      "begin_shape_index": 420,
+      "length": 0.368
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 424,
-      "begin_shape_index": 423
+      "begin_shape_index": 423,
+      "length": 0.399
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 425,
-      "begin_shape_index": 424
+      "begin_shape_index": 424,
+      "length": 0.126
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 431,
-      "begin_shape_index": 425
+      "begin_shape_index": 425,
+      "length": 0.06
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 432,
-      "begin_shape_index": 431
+      "begin_shape_index": 431,
+      "length": 0.007
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 439,
-      "begin_shape_index": 432
+      "begin_shape_index": 432,
+      "length": 0.254
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 440,
-      "begin_shape_index": 439
+      "begin_shape_index": 439,
+      "length": 0.022
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 441,
-      "begin_shape_index": 440
+      "begin_shape_index": 440,
+      "length": 0.07
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 442,
-      "begin_shape_index": 441
+      "begin_shape_index": 441,
+      "length": 0.016
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 449,
-      "begin_shape_index": 442
+      "begin_shape_index": 442,
+      "length": 0.415
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 503,
-      "begin_shape_index": 449
+      "begin_shape_index": 449,
+      "length": 1.258
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 513,
-      "begin_shape_index": 503
+      "begin_shape_index": 503,
+      "length": 0.557
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 536,
-      "begin_shape_index": 513
+      "begin_shape_index": 513,
+      "length": 0.593
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 543,
-      "begin_shape_index": 536
+      "begin_shape_index": 536,
+      "length": 0.28
     },
     {
       "surface": "paved_smooth",
       "end_shape_index": 552,
-      "begin_shape_index": 543
+      "begin_shape_index": 543,
+      "length": 0.361
     },
     {
       "surface": "gravel",
       "end_shape_index": 571,
-      "begin_shape_index": 552
+      "begin_shape_index": 552,
+      "length": 0.791,
+      "target_percent_along": 0.616
     }
   ],
   "alternate_paths": []

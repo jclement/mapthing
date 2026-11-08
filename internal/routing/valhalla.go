@@ -120,9 +120,10 @@ type vRouteResponse struct {
 
 type vTraceResponse struct {
 	Edges []struct {
-		Surface         string `json:"surface"`
-		BeginShapeIndex int    `json:"begin_shape_index"`
-		EndShapeIndex   int    `json:"end_shape_index"`
+		Surface         string  `json:"surface"`
+		Length          float64 `json:"length"` // km
+		BeginShapeIndex int     `json:"begin_shape_index"`
+		EndShapeIndex   int     `json:"end_shape_index"`
 	} `json:"edges"`
 }
 
@@ -380,8 +381,11 @@ func SurfaceClass(s string) string {
 	return SurfaceUnknown
 }
 
-// addSurfaces walks the route's own shape with trace_attributes to learn the surface of
-// every edge, then fills Surfaces and SurfaceBreakdown. A failure leaves the whole
+// addSurfaces asks trace_attributes for the surface of every edge under the route's own
+// shape, then fills Surfaces and SurfaceBreakdown. It first walks the shape edge by edge
+// (exact, and its shape indices line up with Route.Geometry); when Valhalla cannot
+// edge-walk a shape (error 443, seen on a few percent of routes) it map-matches instead,
+// which gives a breakdown but no per-vertex spans. A failure of both leaves the whole
 // distance as unknown rather than failing the route.
 func (c *Client) addSurfaces(ctx context.Context, rt *Route, costing string) {
 	rt.SurfaceBreakdown = map[string]float64{SurfaceUnknown: rt.DistanceM}
@@ -393,19 +397,28 @@ func (c *Client) addSurfaces(ctx context.Context, rt *Route, costing string) {
 		"encoded_polyline": EncodePolyline(rt.Geometry, 6),
 		"shape_match":      "edge_walk",
 		"costing":          costing,
+		"units":            "kilometers",
 		"filters": map[string]any{
-			"attributes": []string{"edge.surface", "edge.begin_shape_index", "edge.end_shape_index"},
+			"attributes": []string{"edge.surface", "edge.length", "edge.begin_shape_index", "edge.end_shape_index"},
 			"action":     "include",
 		},
 	}
 	var tr vTraceResponse
-	if err := c.post(ctx, "trace_attributes", body, &tr); err != nil || len(tr.Edges) == 0 {
-		c.Log.Debug("routing: surface lookup failed; reporting unknown", "err", err)
+	err := c.post(ctx, "trace_attributes", body, &tr)
+	if err == nil && len(tr.Edges) > 0 {
+		applySurfaces(rt, tr)
 		return
 	}
-	applySurfaces(rt, tr)
+	body["shape_match"] = "map_snap"
+	tr = vTraceResponse{}
+	if err2 := c.post(ctx, "trace_attributes", body, &tr); err2 != nil || len(tr.Edges) == 0 {
+		c.Log.Debug("routing: surface lookup failed; reporting unknown", "edge_walk", err, "map_snap", err2)
+		return
+	}
+	applyMatchedSurfaces(rt, tr)
 }
 
+// applySurfaces uses edge-walk results, whose shape indices index Route.Geometry.
 func applySurfaces(rt *Route, tr vTraceResponse) {
 	spans := make([]SurfaceSpan, 0, len(tr.Edges))
 	raw := map[string]float64{}
@@ -421,17 +434,36 @@ func applySurfaces(rt *Route, tr vTraceResponse) {
 		raw[cls] += d
 		total += d
 	}
-	if total <= 0 {
-		return
+	if setBreakdown(rt, raw, total) {
+		rt.Surfaces = spans
 	}
-	// Scale the shape-measured lengths to the engine's reported distance.
+}
+
+// applyMatchedSurfaces uses map-matched results: edge lengths only, no usable indices.
+func applyMatchedSurfaces(rt *Route, tr vTraceResponse) {
+	raw := map[string]float64{}
+	var total float64
+	for _, e := range tr.Edges {
+		raw[SurfaceClass(e.Surface)] += e.Length * 1000
+		total += e.Length * 1000
+	}
+	setBreakdown(rt, raw, total)
+}
+
+// setBreakdown scales measured lengths to the engine's reported route distance.
+func setBreakdown(rt *Route, raw map[string]float64, total float64) bool {
+	if total <= 0 {
+		return false
+	}
 	k := rt.DistanceM / total
 	rt.SurfaceBreakdown = map[string]float64{}
 	for cls, d := range raw {
 		rt.SurfaceBreakdown[cls] = round1(d * k)
 	}
-	rt.Surfaces = spans
+	return true
 }
+
+func round6(v float64) float64 { return math.Round(v*1e6) / 1e6 }
 
 func round1(v float64) float64 {
 	if v < 0 {
@@ -482,7 +514,7 @@ func (c *Client) Locate(ctx context.Context, locs []Location, costing string) ([
 				best = e
 			}
 		}
-		s := &Snap{Lon: best.CorrelatedLon, Lat: best.CorrelatedLat}
+		s := &Snap{Lon: round6(best.CorrelatedLon), Lat: round6(best.CorrelatedLat)}
 		s.DistanceM = haversine([2]float64{locs[i].Lon, locs[i].Lat}, [2]float64{s.Lon, s.Lat})
 		if r := locs[i].RadiusM; r > 0 && s.DistanceM > r {
 			continue

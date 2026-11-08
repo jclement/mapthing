@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -428,8 +429,14 @@ func orsSurfaceExtra(rt *Route, k float64) map[string]any {
 		dist[code] += d
 		total += d
 	}
+	codes := make([]int, 0, len(dist))
+	for code := range dist {
+		codes = append(codes, code)
+	}
+	sort.Ints(codes)
 	summary := []any{}
-	for code, d := range dist {
+	for _, code := range codes {
+		d := dist[code]
 		amount := 0.0
 		if total > 0 {
 			amount = r2(d / total * 100)

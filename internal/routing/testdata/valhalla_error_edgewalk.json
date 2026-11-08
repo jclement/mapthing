@@ -1,0 +1,6 @@
+{
+  "error_code": 443,
+  "error": "Exact route match algorithm failed to find path: edge_walk algorithm failed to find exact route match.  Try using shape_match:'walk_or_snap' to fallback to map-matching algorithm",
+  "status_code": 400,
+  "status": "Bad Request"
+}

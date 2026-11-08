@@ -67,13 +67,13 @@ UI's own map needs no key. `/healthz` and `/readyz` are open.
 | GET | `/tiles/imagery/{z}/{x}/{y}.jpg` | satellite imagery, proxied from the configured open source and cached |
 | GET | `/styles/{name}/{tilesize}/{z}/{x}/{y}[@2x].png` | **raster** tiles rendered from a style (`tilesize` 256 or 512). Mirrors the Mapbox Static Tiles URL shape so swapping is a host change. |
 | GET | `/packs/extract.pmtiles?bbox=w,s,e,n&minzoom=&maxzoom=` | offline pack (PMTiles subset of the basemap); `format=mbtiles` also |
-| POST | `/api/v1/route` | `{"locations":[{"lat":..,"lon":..},..],"profile":"auto"|"truck","avoid_unpaved":false}` → GeoJSON LineString, `distance_m`, `duration_s`, legs, maneuvers, `surface_breakdown` |
-| ANY | `/api/v1/valhalla/{action}` | pass-through to Valhalla (`route`, `isochrone`, `trace_route`, `locate`, …) |
+| POST | `/api/v1/route` | `{"locations":[{"lat":..,"lon":..,"radius_m":..},..],"profile":"auto\|truck","avoid_unpaved":false,"avoid_highways","avoid_tolls","avoid_ferries","shortest","alternates":n}` → GeoJSON Feature (LineString) with properties `distance_m`, `duration_s`, `legs[]` (maneuvers), `surface_breakdown` (metres by `paved`/`gravel`/`dirt`/`unknown`), `alternates[]`. Errors: `{"error":{"code":"no_road\|no_route\|limit\|bad_request\|unavailable","message","location_index"}}` (404 for no_road/no_route) |
+| GET/POST | `/api/v1/valhalla/{action}` | pass-through to Valhalla; allowlisted actions: `route`, `optimized_route`, `sources_to_targets`, `isochrone`, `trace_route`, `trace_attributes`, `locate`, `height`, `expansion`, `centroid`, `status` |
 | POST/GET | `/api/v1/elevation` | `{"points":[[lon,lat],..]}` → elevations (m) + source per point |
 | POST | `/api/v1/elevation/profile` | `{"path":[[lon,lat],..] or "polyline":"…","interval_m":30}` → samples (distance, lon, lat, elevation, source), `gain_m`, `loss_m`, min/max |
 | GET | `/maps/api/elevation/json` | **Google Elevation API compatible** (`locations=` or `path=` + `samples=`; plain or `enc:` polyline). Same response shape. |
-| POST | `/directions/v2:computeRoutes` | **Google Routes API compatible** subset (origin, destination, intermediates; `travelMode` DRIVE; `polylineQuality`; returns `routes[].distanceMeters`, `duration`, `polyline.encodedPolyline`). Honours `X-Goog-FieldMask` loosely. |
-| POST | `/ors/v2/directions/{profile}/geojson`, `/ors/v2/matrix/{profile}`, `/ors/v2/snap/{profile}`, `/ors/v2/isochrones/{profile}` | **OpenRouteService compatible** subset (`driving-car`, `driving-hgv`), `radiuses` honoured (snap up to 10 km), ORS error codes (2010 no routable point, 2009 no route) and response shapes. Key accepted as `Authorization: <key>` too. |
+| POST | `/directions/v2:computeRoutes` | **Google Routes API compatible** subset (origin, destination, intermediates as `location.latLng`; `travelMode` DRIVE; `polylineQuality`, `polylineEncoding`, `computeAlternativeRoutes`, `routeModifiers.avoidTolls/avoidHighways/avoidFerries`; returns `routes[].distanceMeters`, `duration`, `staticDuration`, `polyline`, `legs[]`, `viewport`, `routeLabels`; no route → `{}`). Honours `X-Goog-FieldMask` (or `$fields`); missing mask = all fields. `?profile=truck` selects truck costing (Google has no truck mode). |
+| POST | `/ors/v2/directions/{profile}` (also `…/json`, `…/geojson`, and GET `?start=&end=`), `/ors/v2/matrix/{profile}[/json]`, `/ors/v2/snap/{profile}[/json]`, `/ors/v2/isochrones/{profile}[/geojson]` | **OpenRouteService compatible** subset (`driving-car`, `driving-hgv`), `radiuses` honoured (snap up to 10 km), ORS error codes (2010 no routable point, 2009 no route) and response shapes. Key accepted as `Authorization: <key>` too. |
 | GET | `/healthz`, `/readyz` | liveness; readiness = a generation is live and the subprocesses are up |
 
 Admin (session cookie):
@@ -137,6 +137,22 @@ Valhalla, built from the same merged extract. Profiles: `auto` and `truck` by de
 `track` and `unpaved` roads are allowed (oilfield lease roads matter), with penalties instead of
 exclusions, and the response reports a surface breakdown so a client can tell paved from
 gravel/dirt.
+
+- Engine: Valhalla 3.9.1. Config = `valhalla_build_config` output deep-merged with
+  `docker/valhalla/overrides.json`; the image carries `docker/valhalla/` at
+  `/usr/local/share/mapthing/valhalla/` (the overrides reference `default_speeds.json` there).
+  Build steps, paths and the reason for each override: `docker/valhalla/README.md`.
+- valhalla_service listens on `127.0.0.1:8002`; the Go client reads `MAPTHING_VALHALLA_URL`
+  (default `http://127.0.0.1:8002`).
+- Tracks get `use_tracks` 0.3 (penalised, still routable); `avoid_unpaved` sets
+  `exclude_unpaved` (unpaved still allowed at the first and last edge, so a lease site stays
+  reachable). Private tracks are destination-only.
+- Surface breakdown: `trace_attributes` over the route's own shape (edge walk, falling back to
+  map matching), Valhalla surfaces mapped to paved / gravel (compacted, gravel) / dirt (dirt,
+  path) / unknown.
+- Wiring: `routing.NewHandlers(routing.New(url)).Mount(mux, wrap)` where
+  `wrap func(kind string, h http.Handler) http.Handler` applies auth and accounting; kinds are
+  `route`, `matrix`, `isochrone`, `snap`, `valhalla`.
 
 ## Attribution and licences
 

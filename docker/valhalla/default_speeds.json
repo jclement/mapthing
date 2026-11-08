@@ -1,0 +1,124 @@
+[
+  {
+    "rural": {
+      "way": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        30
+      ],
+      "link_exiting": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "link_turning": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "roundabout": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "driveway": null,
+      "alley": null,
+      "parking_aisle": null,
+      "drive-through": null
+    },
+    "suburban": {
+      "way": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        25
+      ],
+      "link_exiting": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "link_turning": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "roundabout": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "driveway": null,
+      "alley": null,
+      "parking_aisle": null,
+      "drive-through": null
+    },
+    "urban": {
+      "way": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "link_exiting": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "link_turning": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "roundabout": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "driveway": null,
+      "alley": null,
+      "parking_aisle": null,
+      "drive-through": null
+    }
+  }
+]

@@ -39,7 +39,9 @@ jq -s '.[0] * .[1] * .[2]' "$OUT/base.json" "$ROOT/docker/valhalla/overrides.jso
 }}
 JSON
 
-run() { docker run --rm --user "$(id -u):$(id -g)" -v "$OUT:/v" -w /v "$IMAGE" "$@"; }
+# The overrides point default_speeds_config at the path the production image copies
+# docker/valhalla/ to; mount the same files there.
+run() { docker run --rm --user "$(id -u):$(id -g)" -v "$OUT:/v" -v "$ROOT/docker/valhalla:/usr/local/share/mapthing/valhalla:ro" -w /v "$IMAGE" "$@"; }
 pbf=/v/$(basename "$PBF")
 
 # Timezones: downloaded from timezone-boundary-builder by the tool itself; optional (only

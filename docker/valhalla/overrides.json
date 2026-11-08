@@ -21,7 +21,8 @@
       "infer_turn_channels": true,
       "allow_alt_name": true,
       "use_direction_on_ways": false
-    }
+    },
+    "default_speeds_config": "/usr/local/share/mapthing/valhalla/default_speeds.json"
   },
   "loki": {
     "service_defaults": {
@@ -46,7 +47,7 @@
     "isochrone": {
       "max_contours": 5,
       "max_time_contour": 120,
-      "max_distance": 200000.0,
+      "max_distance": 25000.0,
       "max_locations": 1,
       "max_distance_contour": 200
     },

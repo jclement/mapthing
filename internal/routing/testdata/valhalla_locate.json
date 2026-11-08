@@ -42,7 +42,7 @@
             "value": 12488161810
           },
           "speeds": {
-            "default": 2,
+            "default": 30,
             "type": "classified",
             "free_flow": 0,
             "constrained_flow": 0,
@@ -172,7 +172,7 @@
             "value": 12320389650
           },
           "speeds": {
-            "default": 2,
+            "default": 30,
             "type": "classified",
             "free_flow": 0,
             "constrained_flow": 0,
