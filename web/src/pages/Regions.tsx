@@ -9,7 +9,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import {
   api,
@@ -608,8 +608,11 @@ function BBoxInputs({
   onChange: (b: BBox | null) => void;
 }) {
   const [text, setText] = useState("");
+  // Only rewrite the text when the box comes from elsewhere (drawn on the map), never while
+  // the user is typing: "…, 33" is already a valid box, and reformatting it would eat ".1".
+  const typed = useRef<BBox | null>(null);
   useEffect(() => {
-    if (value) setText(value.map((v) => v.toFixed(4)).join(", "));
+    if (value && value !== typed.current) setText(value.map((v) => v.toFixed(4)).join(", "));
   }, [value]);
   const parsed = text
     .split(/[\s,]+/)
@@ -641,7 +644,8 @@ function BBoxInputs({
               .filter(Boolean)
               .map(Number);
             const ok = p.length === 4 && p.every(Number.isFinite) && p[0] < p[2] && p[1] < p[3];
-            onChange(ok ? (p as BBox) : null);
+            typed.current = ok ? (p as BBox) : null;
+            onChange(typed.current);
           }}
         />
       )}

@@ -34,13 +34,15 @@ describe("add region flow", () => {
     const { user } = renderApp("/regions?add=1", { authed: true });
     const dialog = await screen.findByRole("dialog", { name: "Add a region" });
     await user.click(within(dialog).getByRole("radio", { name: /Draw a box/ }));
-    await user.type(within(dialog).getByLabelText("Name"), "Permian north");
+    await user.type(await within(dialog).findByLabelText("Name"), "Permian north");
     await user.type(within(dialog).getByLabelText(/Bounding box/), "-103.8, 31.9, -102.1, 33.1");
     const est = within(dialog).getByTestId("estimate");
     expect(est).toHaveTextContent("Permian north");
     expect(est).toHaveTextContent("Clipped from Texas");
     await user.click(within(dialog).getByRole("button", { name: "Add only" }));
-    expect(await screen.findByText("Permian north")).toBeInTheDocument();
-    expect(screen.getByText(/added but not built yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/added but not built yet/)).toBeInTheDocument();
+    // in the banner and in the table
+    expect(screen.getAllByText("Permian north")).toHaveLength(2);
+    expect(screen.getByText("Not built")).toBeInTheDocument();
   });
 });

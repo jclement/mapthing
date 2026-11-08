@@ -59,63 +59,60 @@ function regionsFC(regions: Region[]): FeatureCollection {
   };
 }
 
-function cssVar(name: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#0d9488";
+// MapLibre style colours must be hex/rgb (no oklch), so overlays use fixed hex values.
+const REGION_COLOR = "#0d9488";
+const PENDING_COLOR = "#0ea5e9";
+
+function setOrAdd(m: MlMap, id: string, data: GeoJSON.GeoJSON) {
+  const src = m.getSource(id) as GeoJSONSource | undefined;
+  if (src) src.setData(data);
+  else m.addSource(id, { type: "geojson", data });
+}
+
+function ensureLayer(m: MlMap, layer: Parameters<MlMap["addLayer"]>[0]) {
+  if (!m.getLayer(layer.id)) m.addLayer(layer);
 }
 
 function addOverlays(m: MlMap, d: { regions: FeatureCollection; route: LineString | null }) {
-  const accent = cssVar("--color-accent");
   const empty: FeatureCollection = { type: "FeatureCollection", features: [] };
-  const regionsSrc = m.getSource("mt-regions") as GeoJSONSource | undefined;
-  if (regionsSrc) regionsSrc.setData(d.regions);
-  else {
-    m.addSource("mt-regions", { type: "geojson", data: d.regions });
-    m.addLayer({
-      id: "mt-regions-fill",
-      type: "fill",
-      source: "mt-regions",
-      paint: {
-        "fill-color": accent,
-        "fill-opacity": ["case", ["==", ["get", "status"], "pending"], 0.08, 0.03],
-      },
-    });
-    m.addLayer({
-      id: "mt-regions-line",
-      type: "line",
-      source: "mt-regions",
-      paint: {
-        "line-color": accent,
-        "line-width": 1.5,
-        "line-opacity": 0.8,
-        "line-dasharray": [
-          "case",
-          ["==", ["get", "status"], "pending"],
-          ["literal", [2, 2]],
-          ["literal", [1, 0]],
-        ],
-      },
-    });
-  }
-  const routeData: FeatureCollection | LineString = d.route ?? empty;
-  const routeSrc = m.getSource("mt-route") as GeoJSONSource | undefined;
-  if (routeSrc) routeSrc.setData(routeData);
-  else {
-    m.addSource("mt-route", { type: "geojson", data: routeData });
-    m.addLayer({
-      id: "mt-route-casing",
-      type: "line",
-      source: "mt-route",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#ffffff", "line-width": 8, "line-opacity": 0.9 },
-    });
-    m.addLayer({
-      id: "mt-route-line",
-      type: "line",
-      source: "mt-route",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#2563eb", "line-width": 4.5 },
-    });
-  }
+  setOrAdd(m, "mt-regions", d.regions);
+  const pending: maplibregl.FilterSpecification = ["==", ["get", "status"], "pending"];
+  const built: maplibregl.FilterSpecification = ["!=", ["get", "status"], "pending"];
+  ensureLayer(m, {
+    id: "mt-regions-fill",
+    type: "fill",
+    source: "mt-regions",
+    paint: { "fill-color": REGION_COLOR, "fill-opacity": 0.04 },
+  });
+  ensureLayer(m, {
+    id: "mt-regions-line",
+    type: "line",
+    source: "mt-regions",
+    filter: built,
+    paint: { "line-color": REGION_COLOR, "line-width": 1.5, "line-opacity": 0.85 },
+  });
+  ensureLayer(m, {
+    id: "mt-regions-pending",
+    type: "line",
+    source: "mt-regions",
+    filter: pending,
+    paint: { "line-color": PENDING_COLOR, "line-width": 1.5, "line-dasharray": [2, 2] },
+  });
+  setOrAdd(m, "mt-route", d.route ?? empty);
+  ensureLayer(m, {
+    id: "mt-route-casing",
+    type: "line",
+    source: "mt-route",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": "#ffffff", "line-width": 8, "line-opacity": 0.9 },
+  });
+  ensureLayer(m, {
+    id: "mt-route-line",
+    type: "line",
+    source: "mt-route",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": "#2563eb", "line-width": 4.5 },
+  });
 }
 
 export function MapPage() {

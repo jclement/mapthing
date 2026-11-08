@@ -403,13 +403,18 @@ export function Modal({
   dismissable?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const dismissRef = useRef(dismissable);
+  dismissRef.current = dismissable;
+  // Escape closes; focus the first control once when the dialog opens (not on every render).
   useEffect(() => {
     if (!open) return;
-    const fn = (e: KeyboardEvent) => e.key === "Escape" && dismissable && onClose();
+    const fn = (e: KeyboardEvent) => e.key === "Escape" && dismissRef.current && closeRef.current();
     window.addEventListener("keydown", fn);
     ref.current?.querySelector<HTMLElement>("input,button,textarea,select")?.focus();
     return () => window.removeEventListener("keydown", fn);
-  }, [open, onClose, dismissable]);
+  }, [open]);
   if (!open) return null;
   const w = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" }[size];
   return (

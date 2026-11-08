@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 import { previewCron } from "../lib/cron";
 import { CronEditor } from "../pages/Schedule";
 
+function Harness() {
+  const [v, setV] = useState("0 3 * * 0");
+  return <CronEditor value={v} onChange={setV} />;
+}
+
 describe("previewCron", () => {
   const from = new Date("2026-11-08T12:00:00Z"); // a Sunday
 
@@ -38,11 +43,6 @@ describe("previewCron", () => {
 });
 
 describe("CronEditor", () => {
-  function Harness() {
-    const [v, setV] = useState("0 3 * * 0");
-    return <CronEditor value={v} onChange={setV} />;
-  }
-
   it("switches presets and previews custom expressions", async () => {
     const user = userEvent.setup();
     render(<Harness />);
