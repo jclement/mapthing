@@ -137,7 +137,8 @@ and `RegisterElevationCheck(ctx, terrainPath, pts)` (verify). It needs the GDAL 
 - Max zoom: the coarsest zoom whose pixel is ≤ 1.7 × the best source resolution at the area's
   latitude, capped at 13. That gives z13 for 3DEP and HRDEM areas and z12 for 30 m-only areas.
   The zoom is lowered while the max-zoom tile count exceeds `MAPTHING_TERRAIN_MAX_TILES`
-  (default 450 000). `MAPTHING_TERRAIN_MAXZOOM` forces a zoom.
+  (default 400 000 ≈ 20 GB at the measured ~50 KB per max-zoom tile including lower zooms).
+  `MAPTHING_TERRAIN_MAXZOOM` forces a zoom.
 - Sources are COGs read by HTTP range. Windows (1° cells clipped to the region bbox plus one max-zoom tile,
   at 0.8 × the max-zoom pixel size, LERC-compressed with ≤ 5 cm error) are cached in
   `/data/elevation/cache/<source>/<cell>_<hash>.tif`, with a `.json` sidecar holding the
@@ -153,7 +154,11 @@ and `RegisterElevationCheck(ctx, terrainPath, pts)` (verify). It needs the GDAL 
   counts, pieces fetched or reused, and duration.
 
 **`terrain.pmtiles`**: tile type PNG, **256 px Terrarium** (`elevation = R·256 + G + B/256 −
-32768`, 1/256 m steps). Pixels with no source are encoded as 0 m so hillshading stays calm at
+32768`). Elevations are rounded before encoding: **0.25 m at max zoom**, doubling for each zoom
+out (0.5 m at max−1, 1 m at max−2, …, capped at 8 m), which keeps slope precision per pixel
+constant. The rounding step is `MAPTHING_TERRAIN_QUANTUM_M` (default 0.25). Full 1/256 m
+precision is incompressible noise and cost 2.3–3.2× more disk; see
+[elevation-sources.md](elevation-sources.md#tile-size). Pixels with no source are encoded as 0 m so hillshading stays calm at
 coverage edges. Max-zoom tiles also carry a private ancillary PNG chunk `mtSr`
 (zlib-compressed 256×256 bytes: per-pixel source index, 0 = no data). Browsers and MapLibre
 ignore it; the elevation API uses it for nodata and per-sample `source`. The PMTiles JSON

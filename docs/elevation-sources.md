@@ -169,3 +169,41 @@ Terrain tiles are 256 px Terrarium tiles in Web Mercator. One pixel is
 The build picks the maxzoom from the best source's resolution (z13 for 10 m sources such as
 3DEP and for read-down LiDAR; z12 for 30 m-only areas), then drops a zoom while the estimated
 archive exceeds the tile budget. See `internal/build/terrain.go`.
+
+## Tile size
+
+Terrarium stores elevation as a 24-bit integer in 1/256 m units, so at full precision the low
+byte is sub-centimetre noise that PNG cannot compress. The build therefore rounds elevations
+before encoding:
+
+- **0.25 m at max zoom.** The worst-case rounding error, 12.5 cm, is below the vertical
+  accuracy of any source used here.
+- **Doubling for each zoom out** (0.5 m, 1 m, …, capped at 8 m). The step stays in proportion
+  to the pixel size, so hillshading looks the same at every zoom.
+
+The steps are powers of two, so the unused low bits are exactly zero: 0.1 m compresses
+*worse* than 1/8 m. At 3× vertical exaggeration over Haynesville, a 0.25 m hillshade is
+indistinguishable from full precision; 0.5 m shows faint texture on the flattest ground.
+
+Archive bytes per max-zoom tile, lower zooms included (256 px PNG, z13 except Riyadh at z12),
+measured on a 10-core x86 test machine:
+
+| Area (source) | Full precision | 1/8 m | 1/4 m, doubling per zoom out (default) |
+|---|---|---|---|
+| Delaware coastal plain (3DEP) | ~105 KB (71 KB max-zoom tile alone) | 40.4 KB | 27.7 KB |
+| Permian, 1° (3DEP) | – | 41.0 KB | 26.7 KB |
+| Haynesville (3DEP) | 129.7 KB | – | 40.6 KB |
+| Grande Prairie (HRDEM) | – | 57.6 KB | 35.7 KB |
+| Hinton foothills (HRDEM/MRDEM) | 151.4 KB | 77.1 KB | 54.4 KB |
+| BC Coast Mountains (MRDEM) | 170.2 KB | – | 73.9 KB |
+| Riyadh (GLO-30 DSM) | – | 96.2 KB | 71.9 KB |
+
+The planning figure is ~50 KB per max-zoom tile. After rounding, the values still match the
+native source rasters within 0.15 m: Delaware, Haynesville and Grande Prairie checked with
+`gdallocationinfo -r bilinear` on the original COGs.
+
+**Lossless WebP was tried and rejected.** A pure-Go VP8L encoder was compared with Go's PNG
+encoder (best compression) on the same rounded tiles. WebP saved at most 4% on plains and was
+5–25% *larger* in hills, mountains and desert. MapLibre GL JS and Mapbox GL 1.13 hand raster-dem images
+to the browser to decode, so both should accept WebP (not tested), but the saving does not
+justify a second format.

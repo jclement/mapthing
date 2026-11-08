@@ -50,25 +50,31 @@ const (
 	envMaxZoom  = "MAPTHING_TERRAIN_MAXZOOM"   // force a max zoom
 	envMaxTiles = "MAPTHING_TERRAIN_MAX_TILES" // tile budget at max zoom
 	envWorkers  = "MAPTHING_TERRAIN_WORKERS"
-	envCacheDir = "MAPTHING_ELEVATION_CACHE" // default <MAPTHING_DATA>/elevation/cache
+	envQuantum  = "MAPTHING_TERRAIN_QUANTUM_M" // elevation rounding step, metres
+	envCacheDir = "MAPTHING_ELEVATION_CACHE"   // default <MAPTHING_DATA>/elevation/cache
 
 	// DefaultTerrainMaxZoom caps auto zoom selection (~16 m pixels at 30°N, 11 m at 55°N).
 	DefaultTerrainMaxZoom = 13
-	// DefaultTerrainMaxTiles is the default max-zoom tile budget: at the
-	// ~40 KB per max-zoom tile measured (with its share of lower zooms) about
-	// 18 GB. Texas+Alberta+BC by polygon fit at z13; by bbox they would not.
-	DefaultTerrainMaxTiles = 450000
+	// DefaultTerrainMaxTiles is the default max-zoom tile budget. Measured
+	// archive bytes per max-zoom tile (lower zooms included): 27 KB on plains,
+	// 41–54 KB in hills and foothills, 72–74 KB in mountains and desert DSM;
+	// planning figure 50 KB, so the default is about 20 GB.
+	DefaultTerrainMaxTiles = 400000
 	// chunkShift: chunks are 2^chunkShift max-zoom tiles square.
 	chunkShift = 4
 	// cacheResFactor: cache windows hold pixels this fraction of the max-zoom pixel size.
 	cacheResFactor = 0.8
-	// TerrainQuantumM: elevations are rounded to this step before Terrarium
-	// encoding. 1/8 m (≤ 6 cm error, far below DEM accuracy) makes PNG tiles
-	// ~2.5× smaller than full 1/256 m precision (measured: 71 KB → 28.5 KB per
-	// z13 tile over Delaware). A power of two keeps the low bits of B zero.
-	TerrainQuantumM = 0.125
+	// TerrainQuantumM: max-zoom elevations are rounded to this step before
+	// Terrarium encoding (≤ 12.5 cm error, below DEM accuracy). Terrarium's
+	// low byte at full 1/256 m precision is noise PNG cannot compress; 1/4 m
+	// cuts max-zoom tiles 2.4–3× (measured in docs/elevation-sources.md).
+	// Steps are powers of two so unused low bits stay zero; 0.1 m compresses
+	// worse than 1/8 m. Each lower zoom doubles the step (constant slope
+	// precision, so hillshade looks the same) up to terrainQuantumMaxM.
+	TerrainQuantumM    = 0.25
+	terrainQuantumMaxM = 8.0
 	// estBytesPerTile is the planning figure for disk estimates.
-	estBytesPerTile = 30000 // measured 29–30 KB/tile at z13 (Delaware, Permian)
+	estBytesPerTile = 37500 // max-zoom tile alone; ×4/3 for lower zooms ≈ 50 KB (see DefaultTerrainMaxTiles)
 )
 
 // TerrainResult summarises a build; it is also written to <out>.json.
@@ -97,6 +103,7 @@ type terrainOpts struct {
 	minZoom  int
 	maxTiles int
 	workers  int
+	quantum  float64 // rounding step before encoding, metres
 	cacheDir string
 }
 
@@ -110,6 +117,10 @@ func terrainOptsFromEnv() terrainOpts {
 	}
 	if v, err := strconv.Atoi(os.Getenv(envWorkers)); err == nil && v > 0 {
 		o.workers = v
+	}
+	o.quantum = TerrainQuantumM
+	if v, err := strconv.ParseFloat(os.Getenv(envQuantum), 64); err == nil && v > 0 && v <= 10 {
+		o.quantum = v
 	}
 	o.cacheDir = os.Getenv(envCacheDir)
 	if o.cacheDir == "" {
@@ -612,7 +623,7 @@ func (b *builder) processChunk(ctx context.Context, c chunk) error {
 				if !b.tileWanted(z, x, y) {
 					continue
 				}
-				data, err := elevation.EncodeTile(quantize(te), ts)
+				data, err := elevation.EncodeTile(quantize(te, b.stepFor(z)), ts)
 				if err != nil {
 					return err
 				}
@@ -655,14 +666,31 @@ func cutTile(r []float32, size, tx, ty int, src []uint8, withSrc bool) ([]float3
 	return te, tsrc, any
 }
 
-// quantize rounds valid elevations to TerrainQuantumM, in place.
-func quantize(e []float32) []float32 {
-	for i, v := range e {
-		if !math.IsNaN(float64(v)) {
-			e[i] = float32(math.Round(float64(v)/TerrainQuantumM) * TerrainQuantumM)
-		}
+// stepFor returns the rounding step for zoom z: the base step at max zoom,
+// doubling per zoom out, capped.
+func (b *builder) stepFor(z int) float64 {
+	base := b.o.quantum
+	if base <= 0 {
+		base = TerrainQuantumM
 	}
-	return e
+	return math.Min(base*math.Exp2(float64(b.z-z)), math.Max(base, terrainQuantumMaxM))
+}
+
+// quantize returns a copy of e with valid elevations rounded to step metres
+// (the input stays unrounded: it also feeds the lower zooms).
+func quantize(e []float32, step float64) []float32 {
+	if step <= 0 {
+		step = TerrainQuantumM
+	}
+	out := make([]float32, len(e))
+	for i, v := range e {
+		if math.IsNaN(float64(v)) {
+			out[i] = v
+			continue
+		}
+		out[i] = float32(math.Round(float64(v)/step) * step)
+	}
+	return out
 }
 
 // downsample halves a square raster by averaging valid pixels of each 2×2 block.
@@ -716,7 +744,7 @@ func (b *builder) lowZooms() error {
 			}
 			t := &elevTile{elev: downsample(big, 2*ts)}
 			parents[p] = t
-			data, err := elevation.EncodeTile(quantize(t.elev), nil)
+			data, err := elevation.EncodeTile(quantize(t.elev, b.stepFor(z)), nil)
 			if err != nil {
 				return err
 			}

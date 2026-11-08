@@ -111,3 +111,17 @@ func TestCellsTouching(t *testing.T) {
 		}
 	}
 }
+
+func TestQuantizeSteps(t *testing.T) {
+	b := &builder{z: 13, o: terrainOpts{quantum: 0.25}}
+	for z, want := range map[int]float64{13: 0.25, 12: 0.5, 11: 1, 9: 4, 8: 8, 2: 8} {
+		if got := b.stepFor(z); got != want {
+			t.Errorf("stepFor(%d) = %v want %v", z, got, want)
+		}
+	}
+	in := []float32{100.13, 100.37, float32(math.NaN())}
+	out := quantize(in, 0.25)
+	if out[0] != 100.25 || out[1] != 100.25 || !math.IsNaN(float64(out[2])) || in[0] != 100.13 {
+		t.Errorf("quantize = %v (input %v)", out, in)
+	}
+}
