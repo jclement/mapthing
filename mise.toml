@@ -6,8 +6,7 @@ golangci-lint = "2"
 [env]
 MAPTHING_DATA = "{{config_root}}/data"
 MAPTHING_LISTEN = ":8080"
-# ADMIN_USER / ADMIN_PASSWORD for local dev live in mise.local.toml or .env (both gitignored).
-_.file = ".env"
+# ADMIN_USER / ADMIN_PASSWORD for local dev: put them in mise.local.toml (gitignored).
 
 [tasks.setup]
 description = "Install Go and web dependencies (idempotent)"
