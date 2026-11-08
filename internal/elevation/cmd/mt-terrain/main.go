@@ -91,6 +91,59 @@ func main() {
 			}
 			_ = enc.Encode(s)
 		}
+	case "profile":
+		// Prints gain/loss for one path under several sampling and smoothing settings.
+		fs := flag.NewFlagSet("profile", flag.ExitOnError)
+		in := fs.String("in", "data/terrain/terrain.pmtiles", "archive")
+		polyFile := fs.String("polyline", "", "file holding an encoded polyline (precision 5) instead of lon,lat args")
+		_ = fs.Parse(os.Args[2:])
+		a, err := elevation.OpenArchive(*in, 0)
+		if err != nil {
+			fail(err)
+		}
+		defer func() { _ = a.Close() }()
+		var path []elevation.LonLat
+		if *polyFile != "" {
+			b, err := os.ReadFile(*polyFile)
+			if err != nil {
+				fail(err)
+			}
+			if path, err = elevation.DecodePolyline(strings.TrimSpace(string(b)), 5); err != nil {
+				fail(err)
+			}
+		}
+		for _, arg := range fs.Args() {
+			p, err := parseFloats(arg, 2)
+			if err != nil {
+				fail(err)
+			}
+			path = append(path, elevation.LonLat{p[0], p[1]})
+		}
+		fmt.Printf("%-26s %8s %8s %8s %8s %8s\n", "sampling / smoothing", "samples", "gain", "loss", "raw gain", "raw loss")
+		for _, sm := range []struct {
+			name string
+			o    elevation.ProfileOptions
+		}{
+			{"30 m, hyst 2 (old)", elevation.ProfileOptions{IntervalM: 30, SmoothWindowM: -1, HysteresisM: 2}},
+			{"30 m, median 100 + h2", elevation.ProfileOptions{IntervalM: 30, SmoothWindowM: 100, HysteresisM: 2}},
+			{"30 m, median 150 + h2", elevation.ProfileOptions{IntervalM: 30, SmoothWindowM: 150, HysteresisM: 2}},
+			{"30 m, median 200 + h2", elevation.ProfileOptions{IntervalM: 30, SmoothWindowM: 200, HysteresisM: 2}},
+			{"30 m, median 300 + h2", elevation.ProfileOptions{IntervalM: 30, SmoothWindowM: 300, HysteresisM: 2}},
+			{"10 m, hyst 2 (old)", elevation.ProfileOptions{IntervalM: 10, SmoothWindowM: -1, HysteresisM: 2}},
+			{"10 m, default", elevation.ProfileOptions{IntervalM: 10}},
+			{"30 m, default", elevation.ProfileOptions{IntervalM: 30}},
+			{"100 m, default", elevation.ProfileOptions{IntervalM: 100}},
+			{"256 samples, raw", elevation.ProfileOptions{Samples: 256, SmoothWindowM: -1, HysteresisM: -1}},
+			{"256 samples, hyst 2 (old)", elevation.ProfileOptions{Samples: 256, SmoothWindowM: -1, HysteresisM: 2}},
+			{"256 samples, default", elevation.ProfileOptions{Samples: 256}},
+			{"512 samples, raw", elevation.ProfileOptions{Samples: 512, SmoothWindowM: -1, HysteresisM: -1}},
+		} {
+			p, err := elevation.ProfileArchive(ctx, a, path, sm.o)
+			if err != nil {
+				fail(err)
+			}
+			fmt.Printf("%-26s %8d %8.1f %8.1f %8.1f %8.1f\n", sm.name, len(p.Samples), p.GainM, p.LossM, p.GainRawM, p.LossRawM)
+		}
 	default:
 		fail(fmt.Errorf("unknown command %q", os.Args[1]))
 	}

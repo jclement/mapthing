@@ -21,9 +21,15 @@ type Sample struct {
 type ProfileOptions struct {
 	IntervalM float64 // sample spacing along the path; 0 = default (30 m)
 	Samples   int     // if > 0, exactly this many evenly spaced samples (Google semantics)
-	// HysteresisM is the threshold for the smoothed gain/loss: a climb or
+	// SmoothWindowM is the width of the running-median filter applied to the
+	// elevation series before gain/loss (by along-path distance, centred).
+	// It removes narrow features a vehicle does not climb: bridge and culvert
+	// dips in a bare-earth DEM, embankment edges, single-pixel noise.
+	// 0 = default (DefaultSmoothWindowM); negative = off.
+	SmoothWindowM float64
+	// HysteresisM is the threshold applied after the median: a climb or
 	// descent only counts once it exceeds this many metres. 0 = default (2 m);
-	// negative = no smoothing (smoothed equals raw).
+	// negative = off.
 	HysteresisM float64
 }
 
@@ -31,17 +37,20 @@ type ProfileOptions struct {
 type Profile struct {
 	Samples []Sample `json:"samples"`
 	LengthM float64  `json:"length_m"`
-	// GainM and LossM are smoothed with ProfileOptions.HysteresisM so DEM
-	// noise on flat ground does not add up; GainRawM and LossRawM sum every
-	// sample-to-sample change.
-	GainM       float64  `json:"gain_m"`
-	LossM       float64  `json:"loss_m"`
-	GainRawM    float64  `json:"gain_raw_m"`
-	LossRawM    float64  `json:"loss_raw_m"`
-	HysteresisM float64  `json:"hysteresis_m"`
-	MinM        float64  `json:"min_m"`
-	MaxM        float64  `json:"max_m"`
-	Sources     []string `json:"sources"`
+	// GainM and LossM are computed from the elevation series after a running
+	// median over SmoothWindowM metres and then HysteresisM hysteresis, so
+	// DEM noise and bridge dips do not add up; GainRawM and LossRawM sum
+	// every sample-to-sample change of the unsmoothed series. Samples always
+	// carry the unsmoothed elevations.
+	GainM         float64  `json:"gain_m"`
+	LossM         float64  `json:"loss_m"`
+	GainRawM      float64  `json:"gain_raw_m"`
+	LossRawM      float64  `json:"loss_raw_m"`
+	SmoothWindowM float64  `json:"smooth_window_m"`
+	HysteresisM   float64  `json:"hysteresis_m"`
+	MinM          float64  `json:"min_m"`
+	MaxM          float64  `json:"max_m"`
+	Sources       []string `json:"sources"`
 }
 
 // SourceInfo describes one DEM source available in the live generation.
