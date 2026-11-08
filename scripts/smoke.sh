@@ -126,14 +126,15 @@ log "waiting for build (timeout ${BUILD_TIMEOUT}s)"
 start=$(date +%s)
 last=""
 while :; do
-  J=$(admin GET "/admin/api/jobs/$JOB?tail=40")   # {"job": row, "log": [{line}]}
-  status=$(jq -r '.job.status' <<<"$J")
-  stage=$(jq -r '.job.stage // ""' <<<"$J")
+  # Job JSON: top-level {status, stages:[{name,status}], log:[{msg}]} (older core: {job:{status,stage}, log:[{line}]}).
+  J=$(admin GET "/admin/api/jobs/$JOB?tail=40")
+  status=$(jq -r '.status // .job.status // "unknown"' <<<"$J")
+  stage=$(jq -r '([.stages[]? | select(.status=="running") | .name] | first) // .stage // .job.stage // ""' <<<"$J")
   [[ "$stage" != "$last" ]] && { log "  stage: $stage"; last=$stage; }
   case "$status" in
     succeeded) break ;;
     failed|cancelled)
-      jq -r '.job.error, (.log[]?.line)' <<<"$J" | tail -40 | sed 's/^/    /'
+      jq -r '(.error // .job.error // empty), (.log[]? | .msg // .line)' <<<"$J" | tail -40 | sed 's/^/    /'
       die "build $status at stage $stage" ;;
   esac
   (( $(date +%s) - start > BUILD_TIMEOUT )) && die "build timed out"
