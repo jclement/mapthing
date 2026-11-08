@@ -434,8 +434,8 @@
      15,
      0.25
     ],
-    "hillshade-shadow-color": "rgba(0, 0, 0, 0.5)",
-    "hillshade-highlight-color": "rgba(255, 255, 255, 0.05)",
+    "hillshade-shadow-color": "rgba(0, 0, 0, 0.65)",
+    "hillshade-highlight-color": "rgba(255, 255, 255, 0.09)",
     "hillshade-accent-color": "rgba(0, 0, 0, 0.2)",
     "hillshade-illumination-direction": 335
    }
@@ -1512,7 +1512,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#33373b",
+    "line-color": "#3a3e42",
     "line-width": [
      "interpolate",
      [
@@ -1558,7 +1558,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#3a3f43",
+    "line-color": "#42474c",
     "line-width": [
      "interpolate",
      [
@@ -2265,7 +2265,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#3a3f43",
+    "line-color": "#42474c",
     "line-width": [
      "interpolate",
      [
@@ -2304,7 +2304,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#3a3f43",
+    "line-color": "#42474c",
     "line-width": [
      "interpolate",
      [

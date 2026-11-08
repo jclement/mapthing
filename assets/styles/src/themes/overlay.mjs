@@ -4,7 +4,7 @@
 // Labels stay >= 4.5:1 for places and >= 3:1 for roads. POI icons are off.
 import { base } from "./_base.mjs";
 
-const casing = { minor: "#c2c9ce", service: "#ccd2d6", major: "#b0b8be", highway: "#9ea7ae", link: "#b6bec4" };
+const casing = { minor: "#b3bcc2", service: "#bec6cb", major: "#a6afb6", highway: "#959fa7", link: "#abb4ba" };
 
 export default {
   ...base,
@@ -14,7 +14,7 @@ export default {
   sprite: "outdoors",
   flavorOverrides: {
     background: "#e6e9ea",
-    earth: "#eef0f0",
+    earth: "#eaeded",
     park_a: "#e3e9e5",
     park_b: "#d9e3dc",
     wood_a: "#e2e8e3",
@@ -110,7 +110,7 @@ export default {
   hillshade: {
     ...base.hillshade,
     exaggeration: [4, 0.4, 10, 0.3, 15, 0.2],
-    shadow: "rgba(45, 55, 65, 0.24)",
+    shadow: "rgba(45, 55, 65, 0.28)",
     highlight: "rgba(255, 255, 255, 0.35)",
     accent: "rgba(45, 55, 65, 0.08)",
   },
