@@ -65,6 +65,8 @@ run = [
   "golangci-lint run ./...",
   "[ ! -f web/package.json ] || (cd web && npm run lint)",
   "cd assets/styles && npm run -s check",
+  "for f in scripts/*.sh; do bash -n \"$f\" || exit 1; done",
+  "python3 -c 'import ast,glob; [ast.parse(open(f).read(), f) for f in glob.glob(\"scripts/*.py\")]'",
 ]
 
 [tasks.fmt]

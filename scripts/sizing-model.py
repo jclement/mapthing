@@ -1,170 +1,225 @@
 #!/usr/bin/env python3
-"""Fit simple build-cost models to measured region builds and extrapolate to whole countries.
+"""Turn the sizing measurements into per-country estimates.
 
     scripts/sizing-model.py [--json out.json]
 
-Reads docs/sizing/measurements.csv (from scripts/measure-build.sh), docs/sizing/terrain.csv
-(from scripts/measure-terrain.sh, optional), docs/sizing/inputs.json (published facts), and
-prints the fitted models plus a per-country table. Every number carries a basis:
-  measured      a build on the reference machine
-  extrapolated  a fit to measured builds, evaluated outside the measured range
-  published     taken from a source's published data (sizes, benchmarks)
+Inputs (all under docs/sizing/):
+  measurements.csv     region builds on the reference machine (scripts/measure-build.sh)
+  terrain.csv          terrain builds of 1x1 degree boxes (scripts/measure-terrain.sh)
+  planet-extracts.csv  basemap sizes cut from the published Protomaps planet build
+                       (`pmtiles extract --dry-run`), validated against our own builds
+  packs.csv, raster.csv, inputs.json (published facts: PBF sizes, areas, DEM volumes)
 
-Fits (least squares, stdlib only):
-  sizes  ~ a * pbf^b            (log-log; output size grows a little sub/super-linearly)
-  times  ~ c + k * pbf          (a fixed per-build overhead plus a per-byte cost)
-Error bands are the min/max ratio measured/fitted across the measured regions, widened by
-50% beyond the largest measured input (extrapolation risk), never narrower than +/-20%.
+Every figure carries a basis:
+  measured     built and measured on the reference machine
+  published    taken or cut from published data (a HEAD, an S3 listing, the planet build)
+  extrapolated a ratio or fit from measured builds applied outside the measured range
+Ranges are the spread of the measured ratios (min..max), so they say how much regions differ,
+not a statistical interval. Nothing here is a promise for a different machine.
 """
-import csv, json, math, os, sys
+import csv, json, math, os, statistics, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GB = 1e9
+D = os.path.join(ROOT, "docs", "sizing")
+GB, MB = 1e9, 1e6
+TERRAIN_BUDGET = 450_000  # internal/build/terrain.go DefaultTerrainMaxTiles
 
 
-def load_csv(path):
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        return list(csv.DictReader(f))
+def rows(name):
+    p = os.path.join(D, name)
+    return list(csv.DictReader(open(p))) if os.path.exists(p) else []
 
 
-def powfit(xs, ys):
-    lx = [math.log(x) for x in xs]
-    ly = [math.log(y) for y in ys]
-    n = len(xs)
-    mx, my = sum(lx) / n, sum(ly) / n
-    sxx = sum((a - mx) ** 2 for a in lx)
-    b = sum((a - mx) * (c - my) for a, c in zip(lx, ly)) / sxx if sxx else 1.0
-    a = math.exp(my - b * mx)
-    return lambda x: a * x ** b, {"form": "a*pbf^b", "a": a, "b": b}
+def f(r, k):
+    try:
+        return float(r[k])
+    except (KeyError, ValueError, TypeError):
+        return 0.0
+
+
+def rng(vals):
+    vals = [v for v in vals if v > 0]
+    return {"low": min(vals), "mid": statistics.median(vals), "high": max(vals)}
+
+
+def scale(r, x):
+    return {k: v * x for k, v in r.items()}
+
+
+def add(*rs):
+    return {k: sum(r[k] for r in rs) for k in ("low", "mid", "high")}
 
 
 def linfit(xs, ys):
     n = len(xs)
     mx, my = sum(xs) / n, sum(ys) / n
     sxx = sum((x - mx) ** 2 for x in xs)
-    k = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx if sxx else 0.0
-    c = max(0.0, my - k * mx)
-    return lambda x: c + k * x, {"form": "c+k*pbf", "c": c, "k_per_gb": k * GB}
-
-
-def band(f, xs, ys, x):
-    rs = [y / f(xx) for xx, y in zip(xs, ys) if f(xx) > 0]
-    lo, hi = min(rs), max(rs)
-    if x > max(xs) * 1.5:
-        lo, hi = lo / 1.5, hi * 1.5
-    lo, hi = min(lo, 0.8), max(hi, 1.2)
-    return lo, hi
+    k = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    return my - k * mx, k
 
 
 def main():
-    out_json = None
-    if "--json" in sys.argv:
-        out_json = sys.argv[sys.argv.index("--json") + 1]
-    rows = load_csv(os.path.join(ROOT, "docs/sizing/measurements.csv"))
-    terr = load_csv(os.path.join(ROOT, "docs/sizing/terrain.csv"))
-    packs = load_csv(os.path.join(ROOT, "docs/sizing/packs.csv"))
-    inputs = json.load(open(os.path.join(ROOT, "docs/sizing/inputs.json")))
+    out_json = sys.argv[sys.argv.index("--json") + 1] if "--json" in sys.argv else None
+    inputs = json.load(open(os.path.join(D, "inputs.json")))
+    meas = rows("measurements.csv")
+    terr = rows("terrain.csv")
+    planet = rows("planet-extracts.csv")
 
-    # One row per label: the latest run with sources already cached (clean timing).
-    by = {}
-    for r in rows:
-        if r["sources_cached"] != "1" or "first run" in r["note"]:
-            continue
-        by[r["label"]] = r
-    runs = list(by.values())
-    if len(runs) < 2:
-        sys.exit("need at least two measured regions")
-    x = [float(r["pbf_bytes"]) for r in runs]
+    # Latest clean run per region (sources already cached, not the first run).
+    runs = {}
+    for r in meas:
+        if r["sources_cached"] == "1" and "first run" not in r["note"]:
+            runs[r["label"]] = r
+    # Ratios use regions above 100 MB of PBF: below that, fixed per-build costs dominate.
+    runs = [r for r in runs.values() if f(r, "pbf_bytes") > 1e8]
+    pbf = [f(r, "pbf_bytes") for r in runs]
 
-    def col(name, scale=1.0):
-        return [float(r[name]) * scale for r in runs]
+    # --- ratios and rates from measured builds
+    m = {}
+    m["dl_Bps"] = rng([f(r, "pbf_bytes") / f(r, "t_download_s") for r in runs if f(r, "t_download_s") > 5])
+    m["valhalla_tar_per_pbf"] = rng([f(r, "valhalla_tar_bytes") / f(r, "pbf_bytes") for r in runs])
+    m["valhalla_s_per_gb"] = rng([f(r, "t_valhalla_s") / (f(r, "pbf_bytes") / GB) for r in runs if f(r, "pbf_bytes") > 1e8])
+    c, k = linfit(pbf, [f(r, "t_planetiler_s") for r in runs])
+    m["planetiler_fit"] = {"fixed_s": c, "s_per_gb": k * GB}
+    m["planetiler_s_per_gb"] = rng([(f(r, "t_planetiler_s") - c) / (f(r, "pbf_bytes") / GB) for r in runs if f(r, "pbf_bytes") > 1e8])
+    # Scratch beyond inputs and outputs: Planetiler temp files and Valhalla's loose tiles.
+    m["scratch_per_pbf"] = rng([
+        (f(r, "peak_disk_above_base_mb") * 1048576 - f(r, "pbf_bytes") - f(r, "basemap_bytes") - f(r, "valhalla_tar_bytes"))
+        / f(r, "pbf_bytes") for r in runs if f(r, "pbf_bytes") > 1e8])
+    m["anon_peak_mb"] = rng([f(r, "cgroup_anon_peak_mb") for r in runs])
 
-    models = {}
-    specs = {
-        "basemap_bytes": ("basemap_bytes", powfit, 1.0),
-        "valhalla_tar_bytes": ("valhalla_tar_bytes", powfit, 1.0),
-        "peak_scratch_bytes": ("peak_disk_above_base_mb", powfit, 1048576.0),
-        "t_basemap_s": ("t_basemap_s", linfit, 1.0),
-        "t_valhalla_s": ("t_valhalla_s", linfit, 1.0),
-        "t_verify_s": ("t_verify_s", linfit, 1.0),
-        "rss_valhalla_bytes": ("rss_valhalla_mb", powfit, 1048576.0),
-    }
-    for key, (c, fit, scale) in specs.items():
-        ys = col(c, scale)
-        pairs = [(a, b) for a, b in zip(x, ys) if b > 0]
-        if len(pairs) < 2:
-            continue
-        xs_, ys_ = zip(*pairs)
-        f, params = fit(list(xs_), list(ys_))
-        models[key] = (f, params, list(xs_), list(ys_))
-
-    # Download throughput: measured from the download stage of the larger extracts.
-    dl = [(float(r["pbf_bytes"]), float(r["t_download_s"])) for r in runs if float(r["t_download_s"]) > 5]
-    dl_bps = sum(b for b, _ in dl) / sum(t for _, t in dl) if dl else None
-
-    print("== measured regions (clean runs)")
-    for r in sorted(runs, key=lambda r: float(r["pbf_bytes"])):
-        print(f"  {r['label']:14s} pbf {float(r['pbf_bytes'])/1e6:8.1f} MB  basemap {float(r['basemap_bytes'])/1e6:8.1f} MB  "
-              f"valhalla {float(r['valhalla_tar_bytes'])/1e6:8.1f} MB  t_basemap {float(r['t_basemap_s']):7.1f}s  "
-              f"t_valhalla {float(r['t_valhalla_s']):7.1f}s  peak+ {float(r['peak_disk_above_base_mb']):7.0f} MB  "
-              f"rss_v {r['rss_valhalla_mb']} MB  cg {r['cgroup_mem_peak_mb']} MB")
-    print("== fits")
-    for k, (_, p, xs_, ys_) in models.items():
-        print(f"  {k:20s} {p}")
-    if dl_bps:
-        print(f"  download throughput {dl_bps/1e6:.1f} MB/s (Geofabrik, this network)")
-
-    # Terrain: bytes and seconds per max-zoom tile, by source.
+    # --- terrain per max-zoom tile, by source family (1-degree boxes; cold cache rows)
+    fam = {"us": ("permian", "haynesville"), "canada": ("alberta",), "saudi": ("saudi",)}
     tstats = {}
-    for t in terr:
-        s = t["source"]
-        tiles = float(t["maxzoom_tiles"]) or 1
-        d = tstats.setdefault(s, {"bytes_per_tile": [], "s_per_tile": [], "fetch_per_tile": [], "rss_mb": []})
-        d["bytes_per_tile"].append(float(t["archive_bytes"]) / tiles)
-        d["s_per_tile"].append(float(t["t_s"]) / tiles)
-        d["fetch_per_tile"].append(float(t["cache_bytes"]) / tiles)
-        d["rss_mb"].append(float(t["peak_rss_mb"]))
-    if tstats:
-        print("== terrain per max-zoom tile (includes lower zooms)")
-        for s, d in tstats.items():
-            print(f"  {s:8s} bytes/tile {min(d['bytes_per_tile'])/1e3:.1f}-{max(d['bytes_per_tile'])/1e3:.1f} KB  "
-                  f"s/tile {min(d['s_per_tile'])*1e3:.1f}-{max(d['s_per_tile'])*1e3:.1f} ms  "
-                  f"fetched/tile {min(d['fetch_per_tile'])/1e3:.1f}-{max(d['fetch_per_tile'])/1e3:.1f} KB")
+    for key, needle in fam.items():
+        sel = [t for t in terr if any(n in t["label"] for n in needle) and "deg" in t["label"] and "warm" not in t["note"]]
+        if not sel:
+            continue
+        tstats[key] = {
+            "bytes_per_tile": rng([f(t, "archive_bytes") / f(t, "maxzoom_tiles") for t in sel]),
+            "s_per_tile": rng([f(t, "t_s") / f(t, "maxzoom_tiles") for t in sel]),
+            "fetch_per_tile": rng([f(t, "cache_bytes") / f(t, "maxzoom_tiles") for t in sel]),
+            "peak_rss_mb": rng([f(t, "peak_rss_mb") for t in sel]),
+            "boxes": [t["label"] for t in sel],
+        }
+    warm = [t for t in terr if "warm" in t["note"]]
+    cold = {t["label"]: t for t in terr if "warm" not in t["note"]}
+    warm_ratio = None
+    if warm:
+        w = warm[-1]
+        cl = cold.get(w["label"])
+        if cl:
+            warm_ratio = f(w, "t_s") / f(cl, "t_s")
 
-    maxx = max(x)
-    result = {"generated_from": "docs/sizing/measurements.csv + inputs.json", "models": {k: v[1] for k, v in models.items()},
-              "download_MBps": dl_bps / 1e6 if dl_bps else None, "countries": {}}
-    print("== countries")
-    for cid, c in inputs["countries"].items():
-        pbf = float(c["pbf_bytes"])
-        basis = "measured-range" if pbf <= maxx else "extrapolated"
-        est = {"pbf_bytes": pbf, "basis": basis}
-        for k, (f, p, xs_, ys_) in models.items():
-            v = f(pbf)
-            lo, hi = band(f, xs_, ys_, pbf)
-            est[k] = {"value": v, "low": v * lo, "high": v * hi}
-        if dl_bps:
-            est["t_download_s"] = {"value": pbf / dl_bps}
-        result["countries"][cid] = est
-        def fmt(k, unit):
-            e = est.get(k)
-            if not e:
-                return "n/a"
-            if unit == "GB":
-                return f"{e['value']/GB:.1f} GB ({e['low']/GB:.1f}-{e['high']/GB:.1f})"
-            return f"{e['value']/60:.0f} min ({e['low']/60:.0f}-{e['high']/60:.0f})"
-        print(f"  {c['name']} [{basis}] pbf {pbf/GB:.2f} GB")
-        print(f"     basemap {fmt('basemap_bytes','GB')}  valhalla {fmt('valhalla_tar_bytes','GB')}  scratch {fmt('peak_scratch_bytes','GB')}")
-        print(f"     t_basemap {fmt('t_basemap_s','min')}  t_valhalla {fmt('t_valhalla_s','min')}  rss_valhalla {fmt('rss_valhalla_bytes','GB')}")
+    pe = {(r["region"], int(r["maxzoom"])): f(r, "bytes") for r in planet}
+    pe_key = {"us": "us", "canada": "canada", "saudi": "saudi"}
 
-    result["packs"] = packs
-    result["terrain"] = {s: {k: [min(v), max(v)] for k, v in d.items()} for s, d in tstats.items()}
+    out = {"basis_legend": {"measured": "built on the reference machine", "published": "from published data",
+                            "extrapolated": "measured ratio applied outside the measured range"},
+           "measured_ratios": m, "terrain_per_tile": tstats, "terrain_warm_over_cold": warm_ratio,
+           "countries": {}}
+
+    for cid, cinfo in inputs["countries"].items():
+        p = float(cinfo["pbf_bytes"])
+        e = {"name": cinfo["name"], "pbf_bytes": p}
+        e["download_s"] = scale({k: 1 / v for k, v in m["dl_Bps"].items()}, p)
+        e["download_s"] = {"low": e["download_s"]["high"], "mid": e["download_s"]["mid"], "high": e["download_s"]["low"]}
+        e["basemap_bytes_z15"] = pe.get((pe_key[cid], 15))
+        e["basemap_bytes_z14"] = pe.get((pe_key[cid], 14))
+        e["planetiler_s"] = {k: c + v * p / GB for k, v in m["planetiler_s_per_gb"].items()}
+        e["valhalla_tar_bytes"] = scale(m["valhalla_tar_per_pbf"], p)
+        e["valhalla_s"] = scale(m["valhalla_s_per_gb"], p / GB)
+        # Terrain as the build would choose it today: native zoom, then the tile budget over the
+        # region's polygon (Geofabrik polygons include a coastal buffer).
+        native = 12 if cid == "saudi" else 13
+        z10 = cinfo["z10_tiles"]
+        z = native
+        while z10 * 4 ** (z - 10) > TERRAIN_BUDGET and z > 8:
+            z -= 1
+        today_tiles = z10 * 4 ** (z - 10)
+        full_z = 12 if cid in ("canada", "saudi") else 13
+        full_tiles = cinfo["terrain_land_z10_tiles_est"] * 4 ** (full_z - 10)
+        ts = tstats.get(cid)
+        if ts:
+            for tag, zz, n in (("today", z, today_tiles), ("full", full_z, full_tiles)):
+                e[f"terrain_{tag}"] = {
+                    "maxzoom": zz, "tiles": n,
+                    "bytes": scale(ts["bytes_per_tile"], n),
+                    "build_s_cold": scale(ts["s_per_tile"], n),
+                    "fetch_bytes": scale(ts["fetch_per_tile"], n),
+                }
+        # Disk: steady state keeps the download, two generations and the caches.
+        bm = e["basemap_bytes_z15"] or 0
+        tt = e.get("terrain_today", {}).get("bytes", {"low": 0, "mid": 0, "high": 0})
+        gen = add({"low": bm, "mid": bm, "high": bm}, e["valhalla_tar_bytes"], tt)
+        e["generation_bytes"] = gen
+        e["steady_disk_bytes"] = add({"low": p, "mid": p, "high": p}, scale(gen, 2),
+                                     e.get("terrain_today", {}).get("fetch_bytes", {"low": 0, "mid": 0, "high": 0}))
+        scratch = scale(m["scratch_per_pbf"], p)
+        e["build_peak_extra_bytes"] = add(gen, scratch)  # new generation + temp files, on top of steady
+        out["countries"][cid] = e
+
+    # --- chart-friendly summary (mid values, GB and hours) plus the raw tables
+    wr = warm_ratio or 1.0
+    summary = {}
+    for cid, e in out["countries"].items():
+        tt = e.get("terrain_today", {})
+        t_terr = tt.get("build_s_cold", {}).get("mid", 0)
+        build_h = (e["download_s"]["mid"] + e["planetiler_s"]["mid"] + e["valhalla_s"]["mid"] + t_terr) / 3600
+        refresh_h = (e["download_s"]["mid"] + e["planetiler_s"]["mid"] + e["valhalla_s"]["mid"] + t_terr * wr) / 3600
+        summary[cid] = {
+            "name": e["name"],
+            "pbf_gb": e["pbf_bytes"] / GB,
+            "storage_gb": {"basemap_z15": (e["basemap_bytes_z15"] or 0) / GB,
+                           "valhalla": e["valhalla_tar_bytes"]["mid"] / GB,
+                           "terrain_today": tt.get("bytes", {}).get("mid", 0) / GB},
+            "terrain_full_gb": e.get("terrain_full", {}).get("bytes", {}).get("mid", 0) / GB,
+            "steady_disk_gb": e["steady_disk_bytes"]["mid"] / GB,
+            "peak_disk_gb": (e["steady_disk_bytes"]["mid"] + e["build_peak_extra_bytes"]["mid"]) / GB,
+            "time_h": {"download": e["download_s"]["mid"] / 3600, "basemap": e["planetiler_s"]["mid"] / 3600,
+                       "routing": e["valhalla_s"]["mid"] / 3600, "terrain_cold": t_terr / 3600},
+            "full_build_h": build_h, "refresh_h": refresh_h,
+        }
+    out["summary"] = summary
+    out["packs"] = rows("packs.csv")
+    out["planet_extracts"] = planet
+    out["raster"] = rows("raster.csv")
+
+    # --- print
+    def g(v):
+        return f"{v/GB:,.1f} GB"
+
+    def r_(d, fn):
+        return f"{fn(d['mid'])} ({fn(d['low'])}–{fn(d['high'])})"
+
+    def mins(v):
+        return f"{v/60:,.0f} min"
+
+    print("measured ratios:")
+    for k, v in m.items():
+        print(f"  {k}: {v}")
+    print("terrain per max-zoom tile:")
+    for k, v in tstats.items():
+        print(f"  {k}: bytes {r_(v['bytes_per_tile'], lambda x: f'{x/1e3:.0f} KB')}  s {r_(v['s_per_tile'], lambda x: f'{x:.3f}')}  "
+              f"fetch {r_(v['fetch_per_tile'], lambda x: f'{x/1e3:.0f} KB')}  rss {r_(v['peak_rss_mb'], lambda x: f'{x:.0f} MB')}")
+    print(f"  warm/cold terrain time: {warm_ratio}")
+    for cid, e in out["countries"].items():
+        print(f"\n== {e['name']}  PBF {g(e['pbf_bytes'])}")
+        print(f"  download        {r_(e['download_s'], mins)}")
+        if e["basemap_bytes_z15"]:
+            print(f"  basemap z15     {g(e['basemap_bytes_z15'])} (published planet cut); z14 {g(e['basemap_bytes_z14'])}")
+        print(f"  planetiler      {r_(e['planetiler_s'], mins)}")
+        print(f"  valhalla tar    {r_(e['valhalla_tar_bytes'], g)}   time {r_(e['valhalla_s'], mins)}")
+        for tag in ("today", "full"):
+            t = e.get(f"terrain_{tag}")
+            if t:
+                print(f"  terrain {tag:5s}   z{t['maxzoom']} {t['tiles']:,} tiles  {r_(t['bytes'], g)}  build {r_(t['build_s_cold'], mins)}  fetch {r_(t['fetch_bytes'], g)}")
+        print(f"  generation      {r_(e['generation_bytes'], g)}")
+        print(f"  steady disk     {r_(e['steady_disk_bytes'], g)}  (+ build peak extra {r_(e['build_peak_extra_bytes'], g)})")
     if out_json:
         os.makedirs(os.path.dirname(out_json), exist_ok=True)
-        json.dump(result, open(out_json, "w"), indent=2, default=float)
-        print(f"wrote {out_json}")
+        json.dump(out, open(out_json, "w"), indent=2)
+        print(f"\nwrote {out_json}")
 
 
 if __name__ == "__main__":

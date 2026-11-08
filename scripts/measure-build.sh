@@ -146,7 +146,7 @@ CG=/sys/fs/cgroup/system.slice/docker-$CID.scope
 
 # Sampler: peak du, peak cgroup memory, abort on low disk.
 (
-  peak_du=0 peak_mem=0
+  peak_du=0 peak_mem=0 peak_anon=0
   while docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null | grep -q true; do
     d=$(du -sk "$DATA" 2>/dev/null | cut -f1); d=${d:-0}
     (( d > peak_du )) && peak_du=$d
@@ -154,8 +154,12 @@ CG=/sys/fs/cgroup/system.slice/docker-$CID.scope
     [[ -r $CG/memory.peak ]] && m=$(cat "$CG/memory.peak")
     [[ $m == 0 && -r $CG/memory.current ]] && m=$(cat "$CG/memory.current")
     (( m > peak_mem )) && peak_mem=$m
-    echo "$peak_du $peak_mem" > "$RUN/peaks"
-    echo "$(date +%s) $d $m" >> "$RUN/samples"
+    # anon = memory that cannot be dropped (heap, malloc); the rest of memory.current is page
+    # cache and file-backed mmap that the kernel reclaims under pressure.
+    a=$(awk '$1=="anon"{print $2}' "$CG/memory.stat" 2>/dev/null); a=${a:-0}
+    (( a > peak_anon )) && peak_anon=$a
+    echo "$peak_du $peak_mem $peak_anon" > "$RUN/peaks"
+    echo "$(date +%s) $d $m $a" >> "$RUN/samples"
     if (( $(free_kb) < MIN_FREE_GB * 1048576 )); then
       echo "free space below ${MIN_FREE_GB} GiB: aborting" > "$RUN/aborted"
       docker kill "$NAME" >/dev/null 2>&1 || true
@@ -176,7 +180,7 @@ cp "$RUN/log" "$DATA/../logs/$LABEL-$(date +%Y%m%dT%H%M%S).log"
 [[ -f $RUN/aborted ]] && { log "$(cat "$RUN/aborted")"; exit 4; }
 [[ $CODE == 0 ]] || { log "mapthing-build exited $CODE"; tail -40 "$RUN/log" >&2; exit 1; }
 
-read -r PEAK_DU PEAK_MEM < "$RUN/peaks"
+read -r PEAK_DU PEAK_MEM PEAK_ANON < "$RUN/peaks"
 # The manifest is the pretty-printed JSON object at the end of the log.
 python3 - "$RUN/log" > "$RUN/manifest.json" <<'EOF'
 import json, sys
@@ -188,10 +192,17 @@ M=$RUN/manifest.json
 stage() { jq -r --arg n "$1" --arg f "$2" '[.stages[] | select(.name == $n)][0][$f] // 0' "$M"; }
 art() { jq -r --arg n "$1" '.artifacts[$n] // 0' "$M"; }
 GEN_KB=$(du -sk "$DATA/current/" 2>/dev/null | cut -f1)
+IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$IMAGE" | cut -c8-19)
+# Split the basemap stage into fetching Planetiler's auxiliary sources and Planetiler itself,
+# from the build log's elapsed-seconds prefix: "### basemap" .. "$ java" .. "stage basemap done".
+read -r T_SOURCES T_PLANETILER < <(awk '
+  match($0, /^\[ *[0-9.]+s\]/) { t = substr($0, 2, RLENGTH - 3) + 0 }
+  /### basemap/ { b = t } /\$ java/ && !j { j = t } /stage basemap done/ { d = t }
+  END { if (!j) j = b; printf "%.1f %.1f\n", j - b, d - j }' "$RUN/log")
 LOAD1=$(cut -d' ' -f1 /proc/loadavg)
 
 if [[ ! -s $CSV ]]; then
-  echo "date,label,regions,pbf_bytes,area_km2,t_download_s,t_merge_s,t_basemap_s,t_valhalla_s,t_terrain_s,t_verify_s,t_total_s,wall_s,rss_basemap_mb,rss_valhalla_mb,rss_terrain_mb,cgroup_mem_peak_mb,peak_disk_mb,peak_disk_above_base_mb,basemap_bytes,valhalla_tar_bytes,terrain_bytes,generation_bytes,sources_cached,cpu,cores,ram_gb,disk,load_start,load_end,image,note" > "$CSV"
+  echo "date,label,regions,pbf_bytes,area_km2,t_download_s,t_merge_s,t_basemap_s,t_valhalla_s,t_terrain_s,t_verify_s,t_total_s,wall_s,rss_basemap_mb,rss_valhalla_mb,rss_terrain_mb,cgroup_mem_peak_mb,cgroup_anon_peak_mb,peak_disk_mb,peak_disk_above_base_mb,basemap_bytes,valhalla_tar_bytes,terrain_bytes,generation_bytes,sources_cached,cpu,cores,ram_gb,disk,load_start,load_end,image,note,image_id,t_sources_s,t_planetiler_s" > "$CSV"
 fi
 row=(
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LABEL" "$(IFS=' '; echo "${REGIONS[*]}")" "$PBF_BYTES" "$AREA_KM2"
@@ -199,9 +210,9 @@ row=(
   "$(stage valhalla duration_s)" "$(stage terrain duration_s)" "$(stage verify duration_s)"
   "$(jq -r '.total_s // 0' "$M")" "$WALL"
   "$(( $(stage basemap peak_rss_kb) / 1024 ))" "$(( $(stage valhalla peak_rss_kb) / 1024 ))" "$(( $(stage terrain peak_rss_kb) / 1024 ))"
-  "$(( PEAK_MEM / 1048576 ))" "$(( PEAK_DU / 1024 ))" "$(( (PEAK_DU - BASE_DU) / 1024 ))"
+  "$(( PEAK_MEM / 1048576 ))" "$(( ${PEAK_ANON:-0} / 1048576 ))" "$(( PEAK_DU / 1024 ))" "$(( (PEAK_DU - BASE_DU) / 1024 ))"
   "$(art basemap.pmtiles)" "$(art valhalla/tiles.tar)" "$(art terrain.pmtiles)" "$(( ${GEN_KB:-0} * 1024 ))"
-  "$have_sources" "$CPU_MODEL" "$CORES" "$RAM_GB" "$DISK" "$LOAD0" "$LOAD1" "$IMAGE" "${MEASURE_NOTE:-}"
+  "$have_sources" "$CPU_MODEL" "$CORES" "$RAM_GB" "$DISK" "$LOAD0" "$LOAD1" "$IMAGE" "${MEASURE_NOTE:-}" "$IMAGE_ID" "$T_SOURCES" "$T_PLANETILER"
 )
 ( IFS=,; for i in "${!row[@]}"; do row[$i]=${row[$i]//,/;}; done; echo "${row[*]}" ) >> "$CSV"
 cp "$M" "$DATA/../logs/$LABEL-manifest.json"

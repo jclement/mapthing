@@ -48,7 +48,8 @@ EOF
       done <<<"$tiles"
       stats=$(printf '%s\n' "${sizes[@]}" | sort -n | awk -v t="$(printf '%s ' "${times[@]}")" '
         {a[NR]=$1; s+=$1} END{split(t,tt," "); for(i in tt) ts+=tt[i];
-        printf "%d,%.0f,%.0f,%.0f,%.0f", NR, s/NR, a[int((NR+1)/2)], a[int(NR*0.9)>0?int(NR*0.9):1], ts/NR*1000}')
+        p = int(NR * 0.9); if (p < 1) p = 1; m = int((NR + 1) / 2);
+        printf "%d,%.0f,%.0f,%.0f,%.0f", NR, s/NR, a[m], a[p], ts/NR*1000}')
       echo "$LABEL,$style,$size,$z,$stats" | tee -a "$CSV" >&2
     done
   done
