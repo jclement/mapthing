@@ -1,0 +1,130 @@
+@import "tailwindcss";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic tokens: surfaces, text, lines, accent. Components use these, never raw greys. */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-bg: oklch(98.4% 0.003 247);
+  --color-panel: oklch(100% 0 0);
+  --color-sunken: oklch(96.5% 0.004 247);
+  --color-line: oklch(91.5% 0.006 247);
+  --color-line-strong: oklch(85% 0.008 247);
+  --color-fg: oklch(22% 0.015 255);
+  --color-muted: oklch(50% 0.016 255);
+  --color-faint: oklch(65% 0.012 255);
+
+  --color-accent: oklch(55% 0.11 182);
+  --color-accent-strong: oklch(48% 0.1 182);
+  --color-accent-soft: oklch(95% 0.035 182);
+  --color-accent-fg: oklch(99% 0.01 182);
+
+  --color-ok: oklch(60% 0.14 152);
+  --color-warn: oklch(72% 0.15 70);
+  --color-bad: oklch(58% 0.19 25);
+  --color-info: oklch(58% 0.13 250);
+
+  --color-s-paved: oklch(56% 0.03 255);
+  --color-s-gravel: oklch(72% 0.12 75);
+  --color-s-dirt: oklch(55% 0.09 50);
+  --color-s-unknown: oklch(84% 0.01 255);
+
+  --color-k1: oklch(58% 0.11 182);
+  --color-k2: oklch(62% 0.13 250);
+  --color-k3: oklch(70% 0.14 70);
+  --color-k4: oklch(60% 0.16 330);
+  --color-k5: oklch(64% 0.12 135);
+
+  --shadow-float: 0 1px 2px rgb(15 23 42 / 0.06), 0 8px 24px -6px rgb(15 23 42 / 0.14);
+  --radius-card: 0.75rem;
+}
+
+.dark {
+  --color-bg: oklch(17.5% 0.012 255);
+  --color-panel: oklch(21% 0.013 255);
+  --color-sunken: oklch(19% 0.012 255);
+  --color-line: oklch(29% 0.014 255);
+  --color-line-strong: oklch(36% 0.016 255);
+  --color-fg: oklch(94% 0.006 255);
+  --color-muted: oklch(72% 0.014 255);
+  --color-faint: oklch(56% 0.014 255);
+
+  --color-accent: oklch(72% 0.11 182);
+  --color-accent-strong: oklch(78% 0.1 182);
+  --color-accent-soft: oklch(30% 0.045 182);
+  --color-accent-fg: oklch(18% 0.03 182);
+
+  --color-s-paved: oklch(72% 0.02 255);
+  --color-s-unknown: oklch(42% 0.01 255);
+
+  --shadow-float: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px -8px rgb(0 0 0 / 0.55);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01", "tnum";
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* MapLibre controls follow the theme. */
+.dark .maplibregl-ctrl-group {
+  background: var(--color-panel);
+  box-shadow: 0 0 0 1px var(--color-line);
+}
+.dark .maplibregl-ctrl-group button + button {
+  border-top-color: var(--color-line);
+}
+.dark .maplibregl-ctrl button .maplibregl-ctrl-icon {
+  filter: invert(1) hue-rotate(180deg);
+}
+.dark .maplibregl-ctrl-attrib {
+  background: rgb(0 0 0 / 0.5);
+  color: #ddd;
+}
+.dark .maplibregl-ctrl-attrib a {
+  color: #eee;
+}
+.maplibregl-ctrl-attrib {
+  font-size: 11px;
+}
+
+@keyframes stripes {
+  to {
+    background-position: 24px 0;
+  }
+}
+.progress-live {
+  background-image: linear-gradient(
+    45deg,
+    rgb(255 255 255 / 0.18) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgb(255 255 255 / 0.18) 50%,
+    rgb(255 255 255 / 0.18) 75%,
+    transparent 75%
+  );
+  background-size: 24px 24px;
+  animation: stripes 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-live {
+    animation: none;
+  }
+}
