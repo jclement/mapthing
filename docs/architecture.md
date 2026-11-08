@@ -89,6 +89,7 @@ Admin (session cookie):
 |---|---|---|
 | POST | `/admin/api/login`, `/admin/api/logout` | session |
 | GET | `/admin/api/catalog` | regions you can install (id, name, parent, bbox, extract size, elevation sources available) |
+| POST | `/admin/api/catalog/estimate` | `{bbox}` or `{polygon:[[lon,lat],…]}` → the extracts a custom region would be clipped from: `{parents:[{id,name,bytes,estimated?}], total_bytes, estimated?, single_best?, elevation_sources}`; 400 `not_covered` |
 | GET/POST/DELETE | `/admin/api/regions[/{id}]` | installed regions; POST `{id}` or `{name, bbox|polygon}` |
 | POST | `/admin/api/build` | start a build now (refresh downloads optional) |
 | GET | `/admin/api/jobs[/{id}]`, `/admin/api/events` (SSE) | job progress, log tail |
@@ -404,6 +405,15 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   Route errors use codes `no_road` / `no_route`. `POST /api/v1/elevation` → `{results:[sample]}`; `POST /api/v1/elevation/profile` → the `elevation.Profile` JSON.
 
 ## Build pipeline interfaces
+
+**Custom regions are clipped from several extracts when they cross a boundary.** The catalog
+picks the cheapest set of Geofabrik extracts whose boundaries together cover the area (greedy
+weighted set cover on a dense sample of the area, pruned, compared with the best single
+extract), using HEAD sizes. A box across the Texas/New Mexico line downloads texas + new-mexico,
+not all of `us`. `catalog.Region.Custom.Parents` lists them. The build clips each parent with
+`osmium extract` and `osmium merge`s the clips. Each parent is downloaded once per build however
+many regions share it, and the disk guard counts it once. Custom regions in the regions API carry
+`parents` and `extract_bytes` (the total download).
 
 `internal/build.Builder.Run(ctx, rep, Options)` runs one generation build; `rep` is a
 `build.Reporter` (`Stage`, `Progress`, `Logf`; `*jobs.Job` satisfies it). Failure returns a
