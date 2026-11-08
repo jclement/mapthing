@@ -1,0 +1,6 @@
+{
+  "error_code": 170,
+  "error": "Locations are in unconnected regions. Go check/edit the map at osm.org",
+  "status_code": 400,
+  "status": "Bad Request"
+}

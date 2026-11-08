@@ -1,0 +1,9 @@
+Fixtures for the routing tests.
+
+valhalla_*.json were recorded by record.sh from Valhalla 3.9.1 serving the Geofabrik Delaware
+extract (OpenStreetMap data © OpenStreetMap contributors, ODbL), built with the overrides in
+docker/valhalla/. Exceptions, written by hand in Valhalla's error format:
+valhalla_error_nopath.json (442) and valhalla_error_unconnected.json (170).
+
+golden/ holds the expected API responses; regenerate with `go test ./internal/routing -update`
+and review the diff.

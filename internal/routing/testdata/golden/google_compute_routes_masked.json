@@ -1,0 +1,21 @@
+{
+  "routes": [
+    {
+      "distanceMeters": 30147,
+      "duration": "1455s",
+      "legs": [
+        {
+          "startLocation": {
+            "latLng": {
+              "latitude": 38.690075,
+              "longitude": -75.384995
+            }
+          }
+        }
+      ],
+      "polyline": {
+        "encodedPolyline": "_tckFfsbkMBy@p@cAYa@T_@VZxAnBFHDIn@y@\\c@RYdEsFjBgCDGFGFGFEHCHAFAtAA~@Af@ANANAJAHCFALE`@Mj@ShAc@~@]|Ai@vAg@h@SxAe@LEpHcCZKjBk@^KVGNEZIVGXG`@GjAQdAOv@K`BWjC_@d@IZI^Ib@MRGh@Sl@Ux@]x@c@tBgARINEXGFAH?NAJ?JBJAJANCJEHEDA@?F?D?JBB@BBB?B@B?B?B?BABABA@CBCBE@E@EDIDGDEBCDAJIJIJKDIFGDWFKFMDEDGNMDEBEHGJGPMRIb@UJEXKXIVCVA\\?j@Dn@Ln@PfB^lEdA~Bh@ZHx@RhAVdB`@lFhApA\\rBf@bAX|@Tj@Lp@Nh@Nd@Jz@u@tBsB`C}BbH{GjEcEdC_CjGeGbHyGvGoGdCaC|EqEfAaApBkB~BwB`@]x@y@zFkFv@u@nIyHjBgBJIl@i@`A}@zHiHhHyGbHsG|BuBbNgMbKkJrBmBpBiBvAsAhAeA~@}@d@_@h@g@|DsDzAuAfD_DbEuDhGyFx@u@vIcItAqA|KeKnQkPbLiKnMsLbVyTnAiAjBgBvNuMpAmApb@m`@tK{JfKoJf@e@TU|@w@jCcCVUrAqAp@m@LK`A{@dC_CfAcA|@}@b@e@PWPQ^i@h@u@h@y@`@u@d@}@Xi@d@eA^y@BGhCaGhAiCb@aAL]Zq@h@kAh@gAzAeCp@kAZo@vAeDVi@xBaFt@cBJUd@iA`@_AtB{EDK|@sBf@gAp@aB`@_A^y@lAoCnBqEFObA}Bh@mAP_@z@sBl@qAbAyBf@aAfAiBRWLSBCj@s@V]LMLM`@a@XY`@]`BuADChAaAf@a@JIHGh@e@jA_ABCpAeA`DmCZUjAaA`@]vJeIjAgAlAsAr@{@|@}@dA}@xAmAnAcAz@s@`Ay@ZWbAy@fB{ATQPOHGj@e@dGaFrCaCdCsBNKv@q@`FcEfDiCxHsGHIVSRO`BuAlB}A^]p@i@dBwA~HsGl@g@rBeBl@e@tAkAdDmCbDmC~CiCnHeG|CgCzNwLrC_CjFmEdJsHbFeEjEoD~BmBlHcGjAaAdDkCp@i@b@Yd@Yx@e@l@]h@_@n@c@`FaEpDyCXUROf@_@fD}Bt@k@t@q@d@e@^[b@_@`@YLKfAq@r@e@lAw@dC_BbDuBtGeEPMpCgBzMsI~JsG|@g@XSj@]xL}H~HcF|@i@tA}@~AcAhG_EzKeH~@m@\\SVQ|@i@b@Sv@_@t@Yj@WnAo@fDwBf@[n@_@b@YbAo@j@_@h@_@l@_@z@i@f@[h@Yf@WZOn@Wj@Sn@SZI~@Sd@Kh@Il@IZEh@Ep@CxAIvBIpAEnBIp@CtAIv@Gt@IlASlAQl@GTCr@EhQs@jU}@~ESHFZ?J@H@JHZPFJHLHL`@f@h@p@xAjBvAdBx@dAZ`@|AlBRVfDfEzCvDzCtDNPRPPNTN`@TZR`@Px@\\`@P`@TXPXPPNPPRTPRNRLRNXP\\LXN`@bArCXv@^z@`@bAr@~A~AfDLVP\\TZRRRRPLNHPJVLRFTFRDTBX@\\?`@?dEKX?P@RBVDTDZJ^NRJPLRLPPb@b@zDdEjNbOdAhAZXXTXVZTVPXPh@X`@T^Rb@Pn@RxA`@`@Lb@J\\FXBVBV@R?R?TCVEj@Kh@MtA]p@Mh@Gp@Gl@Cl@AfDCxArMDXFTHRHNLNXXCVCb@Cb@?Z?d@@\\BZHx@fBrObBQhBe@PSDS@m@@{@BMRYzBg@jDw@H@JBBG@G\\@vHq@vE]IsD??"
+      }
+    }
+  ]
+}

@@ -1,0 +1,1384 @@
+{
+  "units": "kilometers",
+  "edges": [
+    {
+      "surface": "paved_smooth",
+      "length": 0.012,
+      "source_percent_along": 0.763
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.053
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.068
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.036
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.109
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.05
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.044
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.109
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.106
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.241
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.213
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.004
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.071
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.111
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.135
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.138
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.106
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.055
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.061
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.011
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.105
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.137
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.034
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.012
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.022
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.041
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.074
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.034
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.044
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.079
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.027
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.018
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.063
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.082
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.507
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.021
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.342
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.105
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.074
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.064
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.083
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.048
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.023
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.078
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.11
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.085
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.244
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.045
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.138
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.477
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.011
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.233
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.009
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.075
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.064
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.032
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.099
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.026
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.051
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.028
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.102
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.027
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.077
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.007
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.037
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.301
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.027
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.053
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.027
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.063
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.016
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.004
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.029
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.037
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.007
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.006
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.023
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.019
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.017
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.044
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.049
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.01
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.012
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.017
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.048
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.018
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.01
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.014
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.035
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.02
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.007
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.008
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.018
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.056
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.084
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.022
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.221
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.126
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.044
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.02
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.055
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.021
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.038
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.032
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.118
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.01
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.011
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.068
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.011
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.05
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.028
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.007
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.027
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.025
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.065
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.01
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.067
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.042
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.029
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.016
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.053
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.038
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.032
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.016
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.007
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.016
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.051
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.032
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.02
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.045
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.028
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.134
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.055
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.018
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.105
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.11
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.072
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.073
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.098
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.185
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.021
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.049
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.064
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.005
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.028
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.037
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.236
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.025
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.062
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.059
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.069
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.13
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.008
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.126
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.287
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.068
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.103
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.061
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.136
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.44
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.133
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.081
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.098
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.077
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.047
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.25
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.113
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.072
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.027
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.054
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.053
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.401
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.127
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.306
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.123
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.012
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.216
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.073
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.057
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.043
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.031
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.324
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.107
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.097
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.065
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.037
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.1
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.136
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.535
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.101
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.032
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.056
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.157
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.065
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.113
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.021
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.046,
+      "sign": {}
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.145,
+      "sign": {}
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.353,
+      "sign": {}
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 2.048
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.152
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.324
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 1.197
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.155
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 1.12
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.527
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.059
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.152
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.279
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.417
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.409
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.04
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.334
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 2.344
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.637
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.211
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.849
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.089
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 3.766
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.04
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.091
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.525,
+      "sign": {}
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.222
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.597
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.052
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.021
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.018
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.044
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.095
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.012
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.034
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.092
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.012
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.069
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.058
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.174
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.154
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.042
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.034
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.014
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.034
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.024
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.015
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.018
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.001
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.055
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.052
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.011
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.058
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.089
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.022
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.011
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.187
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.136
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.026
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.018
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.168
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.031
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.009
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.325
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.049
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.008
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.156
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.084
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.063
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.229
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.015
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.078
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.013
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.171
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.005
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.046
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.03
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.039
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.093
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.019
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.073
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.014
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.029
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.016
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.017
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.01
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.02
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.098
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.058
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.064
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.07
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.048
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.118
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.088
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.037
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.047
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.059
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.061
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.005
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.065
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.104
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.077
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.05
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.044
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.057
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.118
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.046
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.169
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.123
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.014
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.141
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.085
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.084
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.046
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.069
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.078
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.056
+    },
+    {
+      "surface": "paved_smooth",
+      "length": 0.014,
+      "target_percent_along": 0.28
+    }
+  ],
+  "alternate_paths": []
+}

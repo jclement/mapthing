@@ -1,0 +1,282 @@
+{
+  "trip": {
+    "locations": [
+      {
+        "type": "break",
+        "lat": 38.69,
+        "lon": -75.385,
+        "side_of_street": "right",
+        "original_index": 0
+      },
+      {
+        "type": "break",
+        "lat": 38.471795,
+        "lon": -75.258845,
+        "side_of_street": "left",
+        "original_index": 1
+      }
+    ],
+    "legs": [
+      {
+        "maneuvers": [
+          {
+            "type": 2,
+            "instruction": "Drive east.",
+            "verbal_succinct_transition_instruction": "Drive east. Then Turn right.",
+            "verbal_pre_transition_instruction": "Drive east. Then Turn right.",
+            "verbal_post_transition_instruction": "Continue for 90 meters.",
+            "bearing_after": 93,
+            "time": 20.88,
+            "length": 0.087,
+            "cost": 20.358,
+            "begin_shape_index": 0,
+            "end_shape_index": 3,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right.",
+            "verbal_transition_alert_instruction": "Turn right.",
+            "verbal_succinct_transition_instruction": "Turn right. Then Turn right onto East Pine Street.",
+            "verbal_pre_transition_instruction": "Turn right. Then Turn right onto East Pine Street.",
+            "verbal_post_transition_instruction": "Continue for 20 meters.",
+            "bearing_before": 45,
+            "bearing_after": 133,
+            "time": 9.344,
+            "length": 0.018,
+            "cost": 9.711,
+            "begin_shape_index": 3,
+            "end_shape_index": 4,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto East Pine Street.",
+            "verbal_transition_alert_instruction": "Turn right onto East Pine Street.",
+            "verbal_succinct_transition_instruction": "Turn right. Then, in 90 meters, Turn left onto South Bedford Street.",
+            "verbal_pre_transition_instruction": "Turn right onto East Pine Street. Then, in 90 meters, Turn left onto South Bedford Street.",
+            "verbal_post_transition_instruction": "Continue for 90 meters.",
+            "street_names": [
+              "East Pine Street"
+            ],
+            "bearing_before": 133,
+            "bearing_after": 224,
+            "time": 15.093,
+            "length": 0.093,
+            "cost": 24.226,
+            "begin_shape_index": 4,
+            "end_shape_index": 7,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left onto South Bedford Street.",
+            "verbal_transition_alert_instruction": "Turn left onto South Bedford Street.",
+            "verbal_succinct_transition_instruction": "Turn left.",
+            "verbal_pre_transition_instruction": "Turn left onto South Bedford Street.",
+            "verbal_post_transition_instruction": "Continue for 2 kilometers.",
+            "street_names": [
+              "South Bedford Street"
+            ],
+            "bearing_before": 224,
+            "bearing_after": 136,
+            "time": 133.891,
+            "length": 1.847,
+            "cost": 159.625,
+            "begin_shape_index": 7,
+            "end_shape_index": 81,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 26,
+            "instruction": "Enter the roundabout and take the 2nd exit onto South Bedford Street.",
+            "verbal_transition_alert_instruction": "Enter the roundabout and take the 2nd exit onto South Bedford Street.",
+            "verbal_succinct_transition_instruction": "Enter the roundabout and take the 2nd exit.",
+            "verbal_pre_transition_instruction": "Enter the roundabout and take the 2nd exit onto South Bedford Street.",
+            "bearing_before": 179,
+            "bearing_after": 204,
+            "time": 4.784,
+            "length": 0.037,
+            "cost": 4.968,
+            "begin_shape_index": 81,
+            "end_shape_index": 96,
+            "roundabout_exit_count": 2,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 27,
+            "instruction": "Exit the roundabout onto South Bedford Street.",
+            "verbal_succinct_transition_instruction": "Exit the roundabout.",
+            "verbal_pre_transition_instruction": "Exit the roundabout onto South Bedford Street.",
+            "verbal_post_transition_instruction": "Continue for 1 kilometer.",
+            "street_names": [
+              "South Bedford Street"
+            ],
+            "bearing_before": 117,
+            "bearing_after": 140,
+            "time": 67.603,
+            "length": 1.157,
+            "cost": 95.788,
+            "begin_shape_index": 96,
+            "end_shape_index": 144,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left onto US 113/Dupont Boulevard.",
+            "verbal_transition_alert_instruction": "Turn left onto US 113.",
+            "verbal_succinct_transition_instruction": "Turn left.",
+            "verbal_pre_transition_instruction": "Turn left onto US 113, Dupont Boulevard.",
+            "verbal_post_transition_instruction": "Continue for 22 kilometers.",
+            "street_names": [
+              "US 113",
+              "Dupont Boulevard"
+            ],
+            "bearing_before": 195,
+            "bearing_after": 144,
+            "time": 925.305,
+            "length": 22.223,
+            "cost": 1044.375,
+            "begin_shape_index": 144,
+            "end_shape_index": 425,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto Parker Road.",
+            "verbal_transition_alert_instruction": "Turn right onto Parker Road.",
+            "verbal_succinct_transition_instruction": "Turn right.",
+            "verbal_pre_transition_instruction": "Turn right onto Parker Road.",
+            "verbal_post_transition_instruction": "Continue for 3 kilometers.",
+            "street_names": [
+              "Parker Road"
+            ],
+            "bearing_before": 176,
+            "bearing_after": 231,
+            "time": 147.307,
+            "length": 3.251,
+            "cost": 143.902,
+            "begin_shape_index": 425,
+            "end_shape_index": 536,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto Cliff Road.",
+            "verbal_transition_alert_instruction": "Turn right onto Cliff Road.",
+            "verbal_succinct_transition_instruction": "Turn right.",
+            "verbal_pre_transition_instruction": "Turn right onto Cliff Road.",
+            "verbal_post_transition_instruction": "Continue for 300 meters.",
+            "street_names": [
+              "Cliff Road"
+            ],
+            "bearing_before": 179,
+            "bearing_after": 256,
+            "time": 16.221,
+            "length": 0.28,
+            "cost": 23.525,
+            "begin_shape_index": 536,
+            "end_shape_index": 543,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 10,
+            "instruction": "Turn right onto Cypress Road/DE 54.",
+            "verbal_transition_alert_instruction": "Turn right onto Cypress Road.",
+            "verbal_succinct_transition_instruction": "Turn right.",
+            "verbal_pre_transition_instruction": "Turn right onto Cypress Road, DE 54.",
+            "verbal_post_transition_instruction": "Continue for 400 meters.",
+            "street_names": [
+              "Cypress Road",
+              "DE 54"
+            ],
+            "bearing_before": 218,
+            "bearing_after": 281,
+            "time": 18.149,
+            "length": 0.361,
+            "cost": 28.808,
+            "begin_shape_index": 543,
+            "end_shape_index": 552,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 15,
+            "instruction": "Turn left.",
+            "verbal_transition_alert_instruction": "Turn left.",
+            "verbal_succinct_transition_instruction": "Turn left.",
+            "verbal_pre_transition_instruction": "Turn left.",
+            "verbal_post_transition_instruction": "Continue for 800 meters.",
+            "bearing_before": 256,
+            "bearing_after": 172,
+            "time": 96.55,
+            "length": 0.791,
+            "cost": 957.898,
+            "begin_shape_index": 552,
+            "end_shape_index": 571,
+            "rough": true,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 6,
+            "instruction": "Your destination is on the left.",
+            "verbal_transition_alert_instruction": "Your destination will be on the left.",
+            "verbal_pre_transition_instruction": "Your destination is on the left.",
+            "bearing_before": 86,
+            "time": 0.0,
+            "length": 0.0,
+            "cost": 0.0,
+            "begin_shape_index": 571,
+            "end_shape_index": 571,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          }
+        ],
+        "summary": {
+          "has_time_restrictions": false,
+          "has_toll": false,
+          "has_highway": false,
+          "has_ferry": false,
+          "min_lat": 38.470752,
+          "min_lon": -75.384994,
+          "max_lat": 38.690074,
+          "max_lon": -75.237394,
+          "time": 1455.133,
+          "length": 30.147,
+          "cost": 2513.187
+        },
+        "shape": "upmxhAdicxnCVaQbOgTkGuI`FqHfFzGzZla@rAfBhA{ArMaQnHmJnE{Ff|@okAx`@ei@bAsAjAsAlAgA|AcAxAg@`BWhAI`Zc@zRSrKObDIfDUxBYzA[rAYjCw@rIuCrLmEzUuI|RmHj\\gLvZoKlLaEtZmKfCw@b_Bih@nGmB~`@aMrHuBjFqAfD{@nG{A~FkAbGkAlIyA~VqDnT}CxPaCd]aFtj@eIzJeBxGyAfIsBlJiC`EoAdL_EhM_FzPoHjQeJbd@mUxD}AhDeAdGgAnAM`BQ`DGjBIzBn@~BItBWxCs@vBw@`Bq@bASREfAAfAFrBVb@^d@Xh@Ph@Jh@Bf@Af@Gf@Ob@Sb@Y^_@\\c@`@y@X_ANcA|@cB`AqA|@{@f@Yj@]jCiBrB_BnByBdAuA~@_B`A_FxAgCpAgCp@s@bAiApCyC~@}@n@o@zAuApBwA~DgC~DeBnJyErBw@~FyBpGwA|Em@tFYvH@hL~@lNhCzMjDp_@lIl_AnTlf@fL|G~AjQfEbVxFx^rIbiAfVzX`Hzb@xKxTvF|QvE`MlClNhDfLzCvJ~BvQkP`d@gc@lg@cf@lzA_xAh~@{{@|h@ig@fsA}pAxyAawAxvA_tA|h@mg@jdAm`AjUwSnb@u`@`g@sd@jImHrQaQdmAohA`Q}OzgBoaBp`@a_@rBsBxMcLbScR~aBg|A`|AawAjzAmuA`f@mc@pvComCzwBaqBnc@ca@|b@k`@bZ_YlV_U`SsRhJ_IlLiKjz@iw@|[aZls@mp@h|@kx@brAemAtPuOljBcdB~YqXr`C{xBbxD_mD|aCczB~oCegClfFcyEtW}Ufa@m_@~{CcrCxXeWnbJemId~B}uBlyBirBhK{JdFqE|QuPrj@}g@rFiFrYoXtNmMzBqBdTqQph@}f@pUmTjRgR|IeKdEcFdD_ElIyKbLcPtK_QxIuObKwRtFgLxJsT~HiQh@kAfj@koA`Vej@`J_TzCcHjGkN~K{VjLoUx[ai@pN}VnGmM~Z}r@dFiL~d@qeA~Om^pBsE~JmVpIuRzc@}cAbA}BbRyb@lK_V|Ne]zIaSzHoQbW}k@bb@k`ArAeDbTgf@~KsWnD_I~Q_c@`M{XfTee@nKmS~Uw_@|DaGrC}Dh@q@vLuNpFmHbCyCbCgCrIqIrGaGbIqHz]qYz@s@`VgSlKyItBcB~AqAtLsJrVkSj@e@hX}T|q@ck@jG}EvVwSrIaHxtBeeBpVmU`WiYpOkQjRiRxTmRf[kWbXqTfQ_O`TiQfGeFlTqQn_@m[vE{DzD{CbBuAzL_K`qAoeA`m@kg@`i@kc@lCwB~PsNjeA}{@ls@oj@daBkuAdBwAlFqEhEcDt]uYda@m\\zHaH`OqLp^cZzbBguAtMyKfc@m^pMaKzYqVzr@uk@fr@ok@np@cj@`~AopAfp@wi@z}CghCfm@eg@diAc_AjnBe_BnfA}|@x~@cv@dg@qa@~|AipApVqSzr@yj@xNaLfJaGzJ{F~PcKjMiHrLwHzMyJbeAc{@zv@ko@lGyEdEaDbKyHts@sf@vOyLxOsNjKmJzHaHhJwHfIeGxCuBbU_O`OwJrWwPth@u\\nr@{c@~uAc}@rD_Cvl@s_@lsCciBbwBeuA~Q}KpGyDvLyHxhC_bBjcBifA`RoL~YaR~\\oTzqAqz@b`Ck{A~RgMjHkEbFgDnR}K`JgE~P}H|OoGnLgFbX_Nbs@md@tK{GvMiIpJcG`T_N~L_IhLyH|LeIrQeLpKsGdLgGnKeFbH{CrMmFdMoE|MeEvGaBtRoEbKoBzKkBfMaBdHu@vKw@tNu@b[yAhd@cBvXgA|a@cBxNg@tYyAtPqAtOgBrW{DrWuDjM{AlE_@jOu@jvDqOh~EsRjeAgEzA`BpGKdCNzA`@bCvAfGpDpA`CdBhCdBbCzI|K`LtNb[f`@bZ~^lQ|T|GpIz[fa@tE|Fls@f}@xo@nx@ho@zw@~CrDdExDxD|C`F`DjI~EbHvDrI|DrP~GzIdEzIjEdGrDtF|D~DbDrDfDhE|E`D`E`DpEtCjEbDbGfDbHfC~FbD~IpThm@`G`PrHfRxIxSdO~\\|\\zs@nCpF~D~GrExGzDhEnE|DnDnCdDpBvDnBrFbChErAjEnAlEx@bFd@xFXfH?bJEl|@uBdGAvDRdEd@rF|@rEhAbHpBrHtCjE`CxDlCxDlC~DtDbJzIpy@d}@~xC``DxT|U|GrGtF|EfGdFtGvEnFlDbGxDlLnGfItEjI`E`JnDjNtEtZtI~I`CxInBzHrAzFr@nF^fFThEDbEKhFe@rFs@lLuBjLoCnYsHnNeCjLsAxNgA`Mm@lMWts@Y`[zpCz@nGnArEzAbEfB~ChC`DjGjGa@lFu@`J[bJIfHDjJXlHf@tG|AhQb_@jeDj^}Db`@mJnDyEhAwDLoMLqQf@wCjE{F~e@}Kjt@iPrBRjBr@f@aBRmAhHZn`BmNlbAqHyAgw@??"
+      }
+    ],
+    "summary": {
+      "has_time_restrictions": false,
+      "has_toll": false,
+      "has_highway": false,
+      "has_ferry": false,
+      "min_lat": 38.470752,
+      "min_lon": -75.384994,
+      "max_lat": 38.690074,
+      "max_lon": -75.237394,
+      "time": 1455.133,
+      "length": 30.147,
+      "cost": 2513.187
+    },
+    "status_message": "Found route between points",
+    "status": 0,
+    "units": "kilometers",
+    "language": "en-US"
+  }
+}
