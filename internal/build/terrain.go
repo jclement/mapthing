@@ -12,7 +12,7 @@ package build
 //     chunk, warp sources in priority order (gdalwarp → raw float32) until no
 //     nodata remains; higher priority wins, nodata falls through. Source
 //     windows are fetched lazily into the cache (1° cells, clipped to the area,
-//     at about the target resolution, LERC-compressed with ≤1 cm error).
+//     at about the target resolution, LERC-compressed with ≤5 cm error).
 //  3. Encode max-zoom tiles with the per-pixel source index; build four lower
 //     zooms from the chunk raster by 2×2 averaging of elevations (never of
 //     encoded RGB), and the rest of the pyramid from the chunk-level tiles.
@@ -55,14 +55,20 @@ const (
 	// DefaultTerrainMaxZoom caps auto zoom selection (~16 m pixels at 30°N, 11 m at 55°N).
 	DefaultTerrainMaxZoom = 13
 	// DefaultTerrainMaxTiles is the default max-zoom tile budget: at the
-	// ~25 KB per tile measured for rolling terrain, about 15 GB with lower zooms.
+	// ~40 KB per max-zoom tile measured (with its share of lower zooms) about
+	// 18 GB. Texas+Alberta+BC by polygon fit at z13; by bbox they would not.
 	DefaultTerrainMaxTiles = 450000
 	// chunkShift: chunks are 2^chunkShift max-zoom tiles square.
 	chunkShift = 4
 	// cacheResFactor: cache windows hold pixels this fraction of the max-zoom pixel size.
 	cacheResFactor = 0.8
+	// TerrainQuantumM: elevations are rounded to this step before Terrarium
+	// encoding. 1/8 m (≤ 6 cm error, far below DEM accuracy) makes PNG tiles
+	// ~2.5× smaller than full 1/256 m precision (measured: 71 KB → 28.5 KB per
+	// z13 tile over Delaware). A power of two keeps the low bits of B zero.
+	TerrainQuantumM = 0.125
 	// estBytesPerTile is the planning figure for disk estimates.
-	estBytesPerTile = 25000
+	estBytesPerTile = 30000 // measured 29–30 KB/tile at z13 (Delaware, Permian)
 )
 
 // TerrainResult summarises a build; it is also written to <out>.json.
@@ -189,8 +195,9 @@ func EstimateTerrainBytes(regions []catalog.Region) int64 {
 	}
 	_, n := chooseMaxZoom(areas, terrainOptsFromEnv())
 	archive := int64(float64(n) * estBytesPerTile * 4 / 3)
-	// Cache: ~1.6 px per tile pixel (0.8 res factor) at ~1.5 B/px with LERC.
-	cache := int64(float64(n) * elevation.TileSize * elevation.TileSize * 1.56 * 1.5)
+	// Cache: ~1.6 px per tile pixel (0.8 res factor) at ~0.6 B/px with LERC
+	// (measured ~0.45 B/px on 3DEP west Texas at MAX_Z_ERROR 0.05).
+	cache := int64(float64(n) * elevation.TileSize * elevation.TileSize * 1.56 * 0.6)
 	return archive + cache
 }
 
@@ -200,7 +207,7 @@ func CheckTerrain(ctx context.Context, terrainPath string, pts [][2]float64) err
 	if err != nil {
 		return err
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	var missing []string
 	for _, p := range pts {
 		s, err := a.Sample(p[0], p[1])
@@ -223,18 +230,17 @@ func CheckTerrain(ctx context.Context, terrainPath string, pts [][2]float64) err
 type chunk struct{ cx, cy int }
 
 type builder struct {
-	o        terrainOpts
-	areas    []area
-	z        int // max zoom
-	minZoom  int
-	shift    int // pyramid levels built inside a chunk
-	srcs     []*demSource
-	fetch    *fetcher
-	gdal     *gdalRunner
-	w        *pmtiles.Writer
-	workDir  string
-	report   Reporter
-	cellsFor map[string]bool
+	o       terrainOpts
+	areas   []area
+	z       int // max zoom
+	minZoom int
+	shift   int // pyramid levels built inside a chunk
+	srcs    []*demSource
+	fetch   *fetcher
+	gdal    *gdalRunner
+	w       *pmtiles.Writer
+	workDir string
+	report  Reporter
 
 	mu        sync.Mutex
 	base      map[[2]int]*elevTile // tiles at zoom z-shift, for the low-zoom pyramid
@@ -342,7 +348,7 @@ feed:
 	// Metadata: only sources that contributed, in priority order; the
 	// per-pixel indices written in processChunk are 1-based positions in b.srcs,
 	// so keep every source in the table and mark unused ones with 0 pixels.
-	var bounds elevation.BBox = areas[0].bbox
+	bounds := areas[0].bbox
 	var ids []string
 	for _, a := range areas {
 		bounds = elevation.BBox{math.Min(bounds[0], a.bbox[0]), math.Min(bounds[1], a.bbox[1]), math.Max(bounds[2], a.bbox[2]), math.Max(bounds[3], a.bbox[3])}
@@ -474,7 +480,9 @@ func (b *builder) cellsTouching(box elevation.BBox) []cellWindow {
 			var win elevation.BBox
 			have := false
 			for _, a := range b.areas {
-				buf := 0.02
+				// Buffer by one max-zoom tile (plus a margin) so edge tiles are
+				// complete rather than half nodata.
+				buf := 1.2 * 360 / math.Exp2(float64(b.z))
 				ab := elevation.BBox{a.bbox[0] - buf, a.bbox[1] - buf, a.bbox[2] + buf, a.bbox[3] + buf}
 				if !ab.Intersects(cell) {
 					continue
@@ -510,7 +518,25 @@ func (b *builder) processChunk(ctx context.Context, c chunk) error {
 	for i := range comp {
 		comp[i] = nan
 	}
-	remaining := n
+	// Only pixels of tiles that will be written need filling; once those
+	// are done, lower-priority sources are not fetched for this chunk.
+	need := make([]bool, n)
+	remaining := 0
+	tilesPer := 1 << chunkShift
+	for ty := 0; ty < tilesPer; ty++ {
+		for tx := 0; tx < tilesPer; tx++ {
+			if !b.tileWanted(b.z, c.cx<<chunkShift+tx, c.cy<<chunkShift+ty) {
+				continue
+			}
+			for j := 0; j < elevation.TileSize; j++ {
+				row := (ty*elevation.TileSize+j)*size + tx*elevation.TileSize
+				for i := 0; i < elevation.TileSize; i++ {
+					need[row+i] = true
+				}
+			}
+			remaining += elevation.TileSize * elevation.TileSize
+		}
+	}
 	w, s, e, nn := elevation.TileBounds(cz, c.cx, c.cy)
 	box := elevation.BBox{w, s, e, nn}
 	minx, miny, maxx, maxy := elevation.TileMercBounds(cz, c.cx, c.cy)
@@ -551,9 +577,11 @@ func (b *builder) processChunk(ctx context.Context, c chunk) error {
 				comp[i] = v
 				src[i] = uint8(si + 1)
 				took++
+				if need[i] {
+					remaining--
+				}
 			}
 		}
-		remaining -= int(took)
 		if took > 0 {
 			b.mu.Lock()
 			b.pixels[si] += took
@@ -584,7 +612,7 @@ func (b *builder) processChunk(ctx context.Context, c chunk) error {
 				if !b.tileWanted(z, x, y) {
 					continue
 				}
-				data, err := elevation.EncodeTile(te, ts)
+				data, err := elevation.EncodeTile(quantize(te), ts)
 				if err != nil {
 					return err
 				}
@@ -625,6 +653,16 @@ func cutTile(r []float32, size, tx, ty int, src []uint8, withSrc bool) ([]float3
 		}
 	}
 	return te, tsrc, any
+}
+
+// quantize rounds valid elevations to TerrainQuantumM, in place.
+func quantize(e []float32) []float32 {
+	for i, v := range e {
+		if !math.IsNaN(float64(v)) {
+			e[i] = float32(math.Round(float64(v)/TerrainQuantumM) * TerrainQuantumM)
+		}
+	}
+	return e
 }
 
 // downsample halves a square raster by averaging valid pixels of each 2×2 block.
@@ -678,7 +716,7 @@ func (b *builder) lowZooms() error {
 			}
 			t := &elevTile{elev: downsample(big, 2*ts)}
 			parents[p] = t
-			data, err := elevation.EncodeTile(t.elev, nil)
+			data, err := elevation.EncodeTile(quantize(t.elev), nil)
 			if err != nil {
 				return err
 			}
@@ -701,11 +739,11 @@ func (b *builder) warp(ctx context.Context, files []string, minx, miny, maxx, ma
 	}
 	out := filepath.Join(tmpDir, "chunk_"+tag+".bin")
 	defer func() {
-		os.Remove(out)
-		os.Remove(strings.TrimSuffix(out, ".bin") + ".hdr")
-		os.Remove(out + ".aux.xml")
+		_ = os.Remove(out)
+		_ = os.Remove(strings.TrimSuffix(out, ".bin") + ".hdr")
+		_ = os.Remove(out + ".aux.xml")
 	}()
-	args := []string{"-overwrite", "-of", "ENVI", "-ot", "Float32", "-t_srs", "EPSG:3857",
+	args := []string{"-q", "-overwrite", "-of", "ENVI", "-ot", "Float32", "-t_srs", "EPSG:3857",
 		"-te", fmt.Sprintf("%.4f", minx), fmt.Sprintf("%.4f", miny), fmt.Sprintf("%.4f", maxx), fmt.Sprintf("%.4f", maxy),
 		"-ts", strconv.Itoa(size), strconv.Itoa(size), "-r", "bilinear", "-dstnodata", "nan",
 		"-wo", "NUM_THREADS=2", "-wm", "512"}

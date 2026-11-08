@@ -68,7 +68,7 @@ func TestWriteRead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer r.Close()
+			defer func() { _ = r.Close() }()
 			if r.Header.AddressedTiles != uint64(n) {
 				t.Errorf("addressed = %d, want %d", r.Header.AddressedTiles, n)
 			}

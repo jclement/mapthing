@@ -79,18 +79,18 @@ func EncodeTile(elev []float32, src []uint8) ([]byte, error) {
 	}
 	var z bytes.Buffer
 	zw, _ := zlib.NewWriterLevel(&z, zlib.BestCompression)
-	zw.Write(src)
-	zw.Close()
+	_, _ = zw.Write(src)
+	_ = zw.Close()
 	// Insert the chunk just before IEND (the last 12 bytes).
 	iend := len(out) - 12
 	var chunk bytes.Buffer
-	binary.Write(&chunk, binary.BigEndian, uint32(z.Len()))
+	_ = binary.Write(&chunk, binary.BigEndian, uint32(z.Len()))
 	chunk.WriteString(sourceChunk)
 	chunk.Write(z.Bytes())
 	crc := crc32.NewIEEE()
 	crc.Write([]byte(sourceChunk))
 	crc.Write(z.Bytes())
-	binary.Write(&chunk, binary.BigEndian, crc.Sum32())
+	_ = binary.Write(&chunk, binary.BigEndian, crc.Sum32())
 	res := make([]byte, 0, len(out)+chunk.Len())
 	res = append(res, out[:iend]...)
 	res = append(res, chunk.Bytes()...)

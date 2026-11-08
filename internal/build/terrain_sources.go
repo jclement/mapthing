@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -109,7 +108,7 @@ func demSources() []*demSource {
 		{
 			def: def("mrdem"), nativeRes: 30, geographic: false,
 			cellURLs: func(ctx context.Context, f *fetcher, lon, lat int) ([]cellRef, error) {
-				return []cellRef{{key: fmt.Sprintf("%s", cellName3DEP(lon, lat)), url: urlMRDEM}}, nil
+				return []cellRef{{key: cellName3DEP(lon, lat), url: urlMRDEM}}, nil
 			},
 		},
 		{
@@ -195,11 +194,11 @@ func (f *fetcher) head(ctx context.Context, u string) headResult {
 			time.Sleep(time.Duration(attempt+1) * time.Second)
 			continue
 		}
-		resp.Body.Close()
-		switch {
-		case resp.StatusCode == http.StatusOK:
+		_ = resp.Body.Close()
+		switch resp.StatusCode {
+		case http.StatusOK:
 			h = headResult{ok: true, etag: strings.Trim(resp.Header.Get("ETag"), `"`), lastMd: resp.Header.Get("Last-Modified")}
-		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden:
+		case http.StatusNotFound, http.StatusForbidden:
 			h = headResult{} // S3 answers 403 for missing keys in non-listable buckets
 		default:
 			h.err = fmt.Errorf("HEAD %s: %s", u, resp.Status)
@@ -267,7 +266,7 @@ func fetchSTAC(ctx context.Context, c *http.Client, collection string) ([]stacIt
 			} `json:"links"`
 		}
 		err = json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("STAC %s: %w", collection, err)
 		}
@@ -347,7 +346,7 @@ func (f *fetcher) download(ctx context.Context, src *demSource, p piece, h headR
 		return "", err
 	}
 	part := strings.TrimSuffix(path, ".tif") + ".part.tif"
-	os.Remove(part)
+	_ = os.Remove(part)
 	var tr []string
 	if src.geographic {
 		midLat := (p.window[1] + p.window[3]) / 2
@@ -361,15 +360,15 @@ func (f *fetcher) download(ctx context.Context, src *demSource, p piece, h headR
 	if resM > 1.2*nativeResM(src, (p.window[1]+p.window[3])/2) {
 		resampling = "average"
 	}
-	args := []string{"-q", "-overwrite", "-of", "GTiff", "-ot", "Float32",
+	args := []string{"-q", "-overwrite", "--config", "GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR", "-of", "GTiff", "-ot", "Float32",
 		"-te", f6(p.window[0]), f6(p.window[1]), f6(p.window[2]), f6(p.window[3]), "-te_srs", "EPSG:4326",
 		"-tr", tr[0], tr[1], "-r", resampling, "-dstnodata", "-32768",
-		"-co", "COMPRESS=LERC_DEFLATE", "-co", "MAX_Z_ERROR=0.01", "-co", "TILED=YES", "-co", "BIGTIFF=IF_SAFER",
+		"-co", "COMPRESS=LERC_DEFLATE", "-co", "MAX_Z_ERROR=0.05", "-co", "TILED=YES", "-co", "BIGTIFF=IF_SAFER",
 		"-wo", "NUM_THREADS=2",
 		"/vsicurl/" + p.url, part}
 	start := time.Now()
 	if err := f.gdal.run(ctx, "gdalwarp", args...); err != nil {
-		os.Remove(part)
+		_ = os.Remove(part)
 		return "", fmt.Errorf("fetch %s %s: %w", src.def.ID, p.key, err)
 	}
 	if err := os.Rename(part, path); err != nil {
@@ -377,13 +376,13 @@ func (f *fetcher) download(ctx context.Context, src *demSource, p piece, h headR
 	}
 	m := cacheMeta{URL: p.url, ETag: h.etag, LastModified: h.lastMd, Window: p.window, ResM: resM, FetchedAt: time.Now().UTC().Format(time.RFC3339)}
 	b, _ := json.MarshalIndent(m, "", "  ")
-	os.WriteFile(strings.TrimSuffix(path, ".tif")+".json", b, 0o644)
+	_ = os.WriteFile(strings.TrimSuffix(path, ".tif")+".json", b, 0o644)
 	// Older copies of this piece (other window, resolution or upstream ETag) are now stale.
 	old, _ := filepath.Glob(filepath.Join(dir, p.key+"_*.tif"))
 	for _, o := range old {
 		if o != path {
-			os.Remove(o)
-			os.Remove(strings.TrimSuffix(o, ".tif") + ".json")
+			_ = os.Remove(o)
+			_ = os.Remove(strings.TrimSuffix(o, ".tif") + ".json")
 		}
 	}
 	fi, _ := os.Stat(path)
@@ -407,7 +406,7 @@ func (f *fetcher) findCached(src *demSource, p piece, _ string) (cacheMeta, stri
 		}
 		var meta cacheMeta
 		if b, err := os.ReadFile(strings.TrimSuffix(m, ".tif") + ".json"); err == nil {
-			json.Unmarshal(b, &meta)
+			_ = json.Unmarshal(b, &meta)
 		}
 		return meta, m
 	}
@@ -423,10 +422,8 @@ func nativeResM(src *demSource, lat float64) float64 {
 
 func cacheID(u, etag string, w elevation.BBox, resM float64) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%.6f,%.6f,%.6f,%.6f|%.2f", u, etag, w[0], w[1], w[2], w[3], resM)
+	_, _ = fmt.Fprintf(h, "%s|%s|%.6f,%.6f,%.6f,%.6f|%.2f", u, etag, w[0], w[1], w[2], w[3], resM)
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 func f6(v float64) string { return fmt.Sprintf("%.6f", v) }
-
-var errNoData = errors.New("no data")

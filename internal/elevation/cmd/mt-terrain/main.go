@@ -52,16 +52,16 @@ func main() {
 		work := fs.String("work", "data/terrain/work", "work dir")
 		cache := fs.String("cache", "", "cache dir (default $MAPTHING_DATA/elevation/cache)")
 		maxzoom := fs.Int("maxzoom", 0, "force max zoom")
-		fs.Parse(os.Args[2:])
+		_ = fs.Parse(os.Args[2:])
 		b, err := parseFloats(*bbox, 4)
 		if err != nil {
 			fail(err)
 		}
 		if *cache != "" {
-			os.Setenv("MAPTHING_ELEVATION_CACHE", *cache)
+			_ = os.Setenv("MAPTHING_ELEVATION_CACHE", *cache)
 		}
 		if *maxzoom > 0 {
-			os.Setenv("MAPTHING_TERRAIN_MAXZOOM", strconv.Itoa(*maxzoom))
+			_ = os.Setenv("MAPTHING_TERRAIN_MAXZOOM", strconv.Itoa(*maxzoom))
 		}
 		regions := []catalog.Region{{ID: *id, BBox: catalog.BBox{b[0], b[1], b[2], b[3]}}}
 		fmt.Fprintf(os.Stderr, "estimate: %.1f MB\n", float64(build.EstimateTerrainBytes(regions))/1e6)
@@ -73,12 +73,12 @@ func main() {
 	case "sample":
 		fs := flag.NewFlagSet("sample", flag.ExitOnError)
 		in := fs.String("in", "data/terrain/terrain.pmtiles", "archive")
-		fs.Parse(os.Args[2:])
+		_ = fs.Parse(os.Args[2:])
 		a, err := elevation.OpenArchive(*in, 0)
 		if err != nil {
 			fail(err)
 		}
-		defer a.Close()
+		defer func() { _ = a.Close() }()
 		enc := json.NewEncoder(os.Stdout)
 		for _, arg := range fs.Args() {
 			p, err := parseFloats(arg, 2)
@@ -89,7 +89,7 @@ func main() {
 			if err != nil {
 				fail(err)
 			}
-			enc.Encode(s)
+			_ = enc.Encode(s)
 		}
 	default:
 		fail(fmt.Errorf("unknown command %q", os.Args[1]))

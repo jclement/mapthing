@@ -20,6 +20,7 @@ type Reporter interface {
 // TerrainFunc builds terrain.pmtiles for the regions at outPath.
 type TerrainFunc func(ctx context.Context, r Reporter, regions []catalog.Region, workDir, outPath string) error
 
+//nolint:unused // stub, deleted when feature/pipeline merges
 var (
 	terrainFunc     TerrainFunc
 	terrainEstimate func([]catalog.Region) int64

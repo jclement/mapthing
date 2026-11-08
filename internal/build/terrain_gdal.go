@@ -21,7 +21,6 @@ type gdalRunner struct {
 
 // gdalEnv tunes GDAL for range-reading COGs over HTTPS.
 var gdalEnv = []string{
-	"GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR",
 	"CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif,.TIF,.tiff,.vrt",
 	"GDAL_HTTP_MAX_RETRY=6",
 	"GDAL_HTTP_RETRY_DELAY=3",
@@ -62,7 +61,7 @@ func (g *gdalRunner) run(ctx context.Context, tool string, args ...string) error
 		if len(msg) > 2000 {
 			msg = "…" + msg[len(msg)-2000:]
 		}
-		return fmt.Errorf("%s: %w: %s", tool, err, msg)
+		return fmt.Errorf("%s %s: %w: %s", tool, strings.Join(args, " "), err, msg)
 	}
 	return nil
 }

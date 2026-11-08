@@ -35,7 +35,7 @@ func Create(path string) (*Writer, error) {
 		return nil, err
 	}
 	if _, err := f.Seek(dataStart, io.SeekStart); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return &Writer{f: f, path: path, seen: map[[32]byte]Entry{}}, nil
@@ -78,8 +78,8 @@ func (w *Writer) Abort() {
 	defer w.mu.Unlock()
 	if !w.closed {
 		w.closed = true
-		w.f.Close()
-		os.Remove(w.path + ".part")
+		_ = w.f.Close()
+		_ = os.Remove(w.path + ".part")
 	}
 }
 
@@ -94,8 +94,8 @@ func (w *Writer) Finish(h Header, metadata any) error {
 	}
 	w.closed = true
 	fail := func(err error) error {
-		w.f.Close()
-		os.Remove(w.path + ".part")
+		_ = w.f.Close()
+		_ = os.Remove(w.path + ".part")
 		return err
 	}
 
@@ -160,7 +160,7 @@ func (w *Writer) Finish(h Header, metadata any) error {
 		return fail(err)
 	}
 	if err := w.f.Close(); err != nil {
-		os.Remove(w.path + ".part")
+		_ = os.Remove(w.path + ".part")
 		return err
 	}
 	return os.Rename(w.path+".part", w.path)

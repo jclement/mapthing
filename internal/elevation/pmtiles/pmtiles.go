@@ -288,7 +288,7 @@ func decompress(b []byte, compression uint8) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 		return io.ReadAll(r)
 	default:
 		return nil, fmt.Errorf("pmtiles: unsupported compression %d", compression)

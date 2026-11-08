@@ -52,11 +52,11 @@ func OpenArchive(path string, cacheTiles int) (*Archive, error) {
 		a.cap = DefaultTileCache
 	}
 	if err := r.Metadata(&a.meta); err != nil {
-		r.Close()
+		_ = r.Close()
 		return nil, fmt.Errorf("%s: metadata: %w", path, err)
 	}
 	if a.meta.Encoding != "" && a.meta.Encoding != "terrarium" {
-		r.Close()
+		_ = r.Close()
 		return nil, fmt.Errorf("%s: unsupported encoding %q", path, a.meta.Encoding)
 	}
 	a.maxZoom = int(r.Header.MaxZoom)
@@ -253,7 +253,7 @@ func (t *Terrain) archive() (*Archive, error) {
 	t.arc, t.resolved, t.modTime = a, real, fi.ModTime()
 	if old != nil {
 		// Readers may still hold the old archive; close it a little later.
-		time.AfterFunc(30*time.Second, func() { old.Close() })
+		time.AfterFunc(30*time.Second, func() { _ = old.Close() })
 	}
 	return a, nil
 }

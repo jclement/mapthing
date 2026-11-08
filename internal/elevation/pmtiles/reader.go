@@ -29,7 +29,7 @@ func Open(path string) (*Reader, error) {
 	}
 	rd, err := NewReader(f)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	rd.closer = f

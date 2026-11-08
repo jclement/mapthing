@@ -100,13 +100,13 @@ func TestDownsampleAndCut(t *testing.T) {
 }
 
 func TestCellsTouching(t *testing.T) {
-	b := &builder{areas: []area{{bbox: elevation.BBox{-75.79, 38.45, -75.04, 39.84}}}}
+	b := &builder{z: 13, areas: []area{{bbox: elevation.BBox{-75.79, 38.45, -75.04, 39.84}}}}
 	cells := b.cellsTouching(elevation.BBox{-76, 38, -75, 40})
 	if len(cells) != 2 {
 		t.Fatalf("cells = %+v", cells)
 	}
 	for _, c := range cells {
-		if c.window[0] < -75.82 || c.window[2] > -75.0 {
+		if c.window[0] < -75.85 || c.window[2] > -75.0 {
 			t.Errorf("window not clipped to area: %v", c.window)
 		}
 	}

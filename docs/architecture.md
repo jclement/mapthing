@@ -138,8 +138,8 @@ and `RegisterElevationCheck(ctx, terrainPath, pts)` (verify). It needs the GDAL 
   latitude, capped at 13. That gives z13 for 3DEP and HRDEM areas and z12 for 30 m-only areas.
   The zoom is lowered while the max-zoom tile count exceeds `MAPTHING_TERRAIN_MAX_TILES`
   (default 450 000). `MAPTHING_TERRAIN_MAXZOOM` forces a zoom.
-- Sources are COGs read by HTTP range. Windows (1° cells clipped to the region bbox + 0.02°,
-  at 0.8 × the max-zoom pixel size, LERC-compressed with ≤ 1 cm error) are cached in
+- Sources are COGs read by HTTP range. Windows (1° cells clipped to the region bbox plus one max-zoom tile,
+  at 0.8 × the max-zoom pixel size, LERC-compressed with ≤ 5 cm error) are cached in
   `/data/elevation/cache/<source>/<cell>_<hash>.tif`, with a `.json` sidecar holding the
   upstream URL, ETag and Last-Modified. A rebuild reuses a window whose ETag is unchanged.
   When the upstream is unreachable, any cached copy is used. Windows are fetched lazily: a

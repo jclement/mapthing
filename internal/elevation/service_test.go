@@ -3,6 +3,7 @@ package elevation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -80,7 +81,7 @@ func TestBilinearOnPlane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	for _, p := range [][2]float64{{-104.0, 32.0}, {-103.91234, 31.95678}, {-104.15, 32.13}} {
 		s, err := a.Sample(p[0], p[1])
 		if err != nil {
@@ -115,7 +116,7 @@ func TestNoDataAndSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	if s, _ := a.Sample(-104.1, 32.0); s.Elevation != nil {
 		t.Errorf("nodata area returned %v", *s.Elevation)
 	}
@@ -243,26 +244,34 @@ func newTestHandler(t *testing.T) (*http.ServeMux, *Terrain) {
 	path := writeTestArchive(t, testBox, -104.1, 90)
 	dir := t.TempDir()
 	gen := filepath.Join(dir, "generations", "g1")
-	os.MkdirAll(gen, 0o755)
+	_ = os.MkdirAll(gen, 0o755)
 	if err := os.Rename(path, filepath.Join(gen, "terrain.pmtiles")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(gen, filepath.Join(dir, "current")); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewTerrainForData(dir)
-	t.Cleanup(func() { svc.Close() })
+	mux, svc := newMuxFor(t, dir)
+	t.Cleanup(func() { _ = svc.Close() })
+	return mux, svc
+}
+
+func newMuxFor(t *testing.T, dataDir string) (*http.ServeMux, *Terrain) {
+	t.Helper()
+	svc := NewTerrainForData(dataDir)
 	mux := http.NewServeMux()
 	NewHandler(svc).Mount(mux, nil)
 	return mux, svc
 }
+
+func fmtSscan(s string, v *float64) (int, error) { return fmt.Sscan(s, v) }
 
 func get(t *testing.T, mux http.Handler, u string) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest("GET", u, nil))
 	var body map[string]any
-	json.Unmarshal(rr.Body.Bytes(), &body)
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
 	return rr, body
 }
 
@@ -328,10 +337,10 @@ func TestNativeAPI(t *testing.T) {
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, httptest.NewRequest("POST", path, strings.NewReader(js)))
 		var b map[string]any
-		json.Unmarshal(rr.Body.Bytes(), &b)
+		_ = json.Unmarshal(rr.Body.Bytes(), &b)
 		return rr, b
 	}
-	rr, body = post("/api/v1/elevation", `{"points":[[-104.0,32.0]]}`)
+	rr, _ = post("/api/v1/elevation", `{"points":[[-104.0,32.0]]}`)
 	if rr.Code != 200 {
 		t.Fatalf("POST points: %d %s", rr.Code, rr.Body.String())
 	}
@@ -366,7 +375,7 @@ func TestNativeAPI(t *testing.T) {
 func TestSwapAndUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	svc := NewTerrainForData(dir)
-	defer svc.Close()
+	defer func() { _ = svc.Close() }()
 	svc.checkEvery = 0
 	if _, err := svc.Points(context.Background(), []LonLat{{-104, 32}}); err != ErrUnavailable {
 		t.Fatalf("no generation: err = %v", err)
@@ -379,18 +388,18 @@ func TestSwapAndUnavailable(t *testing.T) {
 	// Generation 1 covers the box; generation 2 has no data west of -103.9.
 	for i, nd := range []float64{-200, -103.9} {
 		gen := filepath.Join(dir, "generations", []string{"a", "b"}[i])
-		os.MkdirAll(gen, 0o755)
-		os.Rename(writeTestArchive(t, testBox, nd, 90), filepath.Join(gen, "terrain.pmtiles"))
+		_ = os.MkdirAll(gen, 0o755)
+		_ = os.Rename(writeTestArchive(t, testBox, nd, 90), filepath.Join(gen, "terrain.pmtiles"))
 	}
 	link := filepath.Join(dir, "current")
-	os.Symlink(filepath.Join(dir, "generations", "a"), link)
+	_ = os.Symlink(filepath.Join(dir, "generations", "a"), link)
 	s, err := svc.Points(context.Background(), []LonLat{{-104, 32}})
 	if err != nil || s[0].Elevation == nil {
 		t.Fatalf("gen a: %+v %v", s, err)
 	}
 	tmp := link + ".tmp"
-	os.Symlink(filepath.Join(dir, "generations", "b"), tmp)
-	os.Rename(tmp, link)
+	_ = os.Symlink(filepath.Join(dir, "generations", "b"), tmp)
+	_ = os.Rename(tmp, link)
 	s, _ = svc.Points(context.Background(), []LonLat{{-104, 32}})
 	if s[0].Elevation != nil {
 		t.Errorf("after swap, still reading old generation")

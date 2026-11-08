@@ -45,7 +45,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
-	enc.Encode(v)
+	_ = enc.Encode(v)
 }
 
 func apiError(w http.ResponseWriter, err error) {
@@ -323,10 +323,10 @@ func parseGoogleCoords(s string) ([]LonLat, error) {
 	if strings.HasPrefix(s, "enc:") {
 		pts, err := DecodePolyline(strings.TrimPrefix(s, "enc:"), 5)
 		if err != nil {
-			return nil, fmt.Errorf("Invalid encoded polyline: %v", err)
+			return nil, fmt.Errorf("invalid encoded polyline: %v", err)
 		}
 		if len(pts) == 0 {
-			return nil, errors.New("Empty encoded polyline.")
+			return nil, errors.New("empty encoded polyline")
 		}
 		for _, p := range pts {
 			if err := checkLonLat(p); err != nil {
@@ -345,12 +345,12 @@ func parsePairs(s string, latFirst bool) ([]LonLat, error) {
 	for _, part := range parts {
 		ab := strings.Split(strings.TrimSpace(part), ",")
 		if len(ab) != 2 {
-			return nil, fmt.Errorf("Invalid coordinate %q.", part)
+			return nil, fmt.Errorf("invalid coordinate %q", part)
 		}
 		a, err1 := strconv.ParseFloat(strings.TrimSpace(ab[0]), 64)
 		b, err2 := strconv.ParseFloat(strings.TrimSpace(ab[1]), 64)
 		if err1 != nil || err2 != nil {
-			return nil, fmt.Errorf("Invalid coordinate %q.", part)
+			return nil, fmt.Errorf("invalid coordinate %q", part)
 		}
 		p := LonLat{a, b}
 		if latFirst {
@@ -366,7 +366,7 @@ func parsePairs(s string, latFirst bool) ([]LonLat, error) {
 
 func checkLonLat(p LonLat) error {
 	if math.IsNaN(p[0]) || math.IsNaN(p[1]) || p[0] < -180 || p[0] > 180 || p[1] < -90 || p[1] > 90 {
-		return fmt.Errorf("Coordinate out of range: lat %v, lng %v.", p[1], p[0])
+		return fmt.Errorf("coordinate out of range: lat %v, lng %v", p[1], p[0])
 	}
 	return nil
 }
