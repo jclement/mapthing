@@ -1,0 +1,17 @@
+{
+  "name": "mapthing-styles",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Generates and validates mapthing's GL styles (outdoors, outdoors-dark, satellite).",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "validate": "node validate.mjs"
+  },
+  "devDependencies": {
+    "@mapbox/mapbox-gl-style-spec": "13.28.0",
+    "@maplibre/maplibre-gl-style-spec": "26.5.1",
+    "@protomaps/basemaps": "5.7.2"
+  }
+}
