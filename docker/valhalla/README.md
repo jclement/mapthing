@@ -14,8 +14,8 @@ itself (see below). JSON has no comments, so this file explains each override.
 
 ## What the pipeline must provide
 
-The image must contain this directory at **`/usr/local/share/mapthing/valhalla/`**
-(`COPY docker/valhalla/ /usr/local/share/mapthing/valhalla/`), because
+The image must contain this directory at **`/usr/share/mapthing/valhalla/`**
+(`COPY docker/valhalla/ /usr/share/mapthing/valhalla/`), because
 `mjolnir.default_speeds_config` points there. If the file is missing, Valhalla logs
 "Disabled default speeds assignment from config" and carries on with its stock speeds, and
 lease-road ETAs become several times too long (see "Speeds").

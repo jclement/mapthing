@@ -116,7 +116,7 @@ func (s *state) ensureExtract(ctx context.Context, r catalog.Region) (string, *D
 	meta, metaErr := readMeta(dir)
 	_, fileErr := os.Stat(file)
 	have := metaErr == nil && fileErr == nil && meta.URL == r.PBFURL
-	if have && !s.opt.Refresh {
+	if have && (!s.opt.Refresh || s.opt.SkipRefresh[r.ID]) {
 		s.logf("%s: using existing download (%s)", r.ID, humanBytes(meta.Size))
 		return file, meta, nil
 	}

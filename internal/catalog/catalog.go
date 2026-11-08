@@ -138,6 +138,17 @@ func (c *Catalog) Load(ctx context.Context) error {
 	return c.loadFile(path)
 }
 
+// Ensure loads the index once (Load) if nothing is loaded yet.
+func (c *Catalog) Ensure(ctx context.Context) error {
+	c.mu.RLock()
+	loaded := len(c.entries) > 0
+	c.mu.RUnlock()
+	if loaded {
+		return nil
+	}
+	return c.Load(ctx)
+}
+
 // Refresh forces a re-download of the index.
 func (c *Catalog) Refresh(ctx context.Context) error {
 	if err := c.fetch(ctx, c.indexPath()); err != nil {

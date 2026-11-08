@@ -55,6 +55,8 @@ type Options struct {
 	Regions []catalog.Region
 	// Refresh re-checks every download for a newer extract; false only downloads missing files.
 	Refresh bool
+	// SkipRefresh lists region ids excluded from Refresh (their refresh is disabled).
+	SkipRefresh map[string]bool
 	// Restart is called after the swap so the supervisor restarts valhalla and the renderer.
 	Restart func(ctx context.Context) error
 	// KeepWork leaves the work directory for debugging.

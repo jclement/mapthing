@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/catalog"
+	"github.com/jclement/mapthing/internal/tiles/pmtiles"
 )
 
 // Check is one verification result recorded in the manifest.
@@ -69,23 +70,21 @@ func (s *state) verify(ctx context.Context) error {
 // verifyTiles opens basemap.pmtiles and reads a tile at each region centre.
 func (s *state) verifyTiles() []Check {
 	path := filepath.Join(s.genDir, "basemap.pmtiles")
-	r, err := openPMTiles(path)
+	r, err := pmtiles.Open(path)
 	if err != nil {
 		return []Check{{Name: "basemap", OK: false, Detail: err.Error()}}
 	}
 	defer func() { _ = r.Close() }()
-	out := []Check{{Name: "basemap", OK: r.h.tileType == 1 && r.h.maxZoom >= 14,
-		Detail: fmt.Sprintf("type=%d zoom %d-%d bounds %v", r.h.tileType, r.h.minZoom, r.h.maxZoom, r.h.bounds)}}
-	z := r.h.maxZoom
-	if z > 12 {
-		z = 12
-	}
+	h := r.Header
+	out := []Check{{Name: "basemap", OK: h.TileType == pmtiles.TypeMVT && h.MaxZoom >= 14,
+		Detail: fmt.Sprintf("type=%d zoom %d-%d bounds %v", h.TileType, h.MinZoom, h.MaxZoom, h.Bounds())}}
+	z := min(h.MaxZoom, 12)
 	for _, reg := range s.opt.Regions {
 		c := reg.BBox.Center()
-		x, y := lonLatToTile(c[0], c[1], z)
-		n, ok, err := r.tileLen(z, x, y)
-		ch := Check{Name: "tile", Region: reg.ID, OK: err == nil && ok && n > 0,
-			Detail: fmt.Sprintf("z%d/%d/%d %d bytes", z, x, y, n)}
+		x, y, _, _ := pmtiles.TileRange(pmtiles.BBox{c[0], c[1], c[0], c[1]}, z)
+		data, ok, err := r.Get(z, x, y)
+		ch := Check{Name: "tile", Region: reg.ID, OK: err == nil && ok && len(data) > 0,
+			Detail: fmt.Sprintf("z%d/%d/%d %d bytes", z, x, y, len(data))}
 		if err != nil {
 			ch.Detail += ": " + err.Error()
 		}

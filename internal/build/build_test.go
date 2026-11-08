@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/catalog"
+	"github.com/jclement/mapthing/internal/tiles/pmtiles"
 )
 
 // The test binary doubles as every external tool: scripts in a temp dir re-exec it with
@@ -106,29 +107,31 @@ func readCfg(p string) fakeCfg {
 	return c
 }
 
-// testPMTiles is a valid v3 archive with one directory entry covering every tile id.
+// testPMTiles is a valid archive (core's writer) with z12 tiles over the test regions.
 func testPMTiles() []byte {
-	var dir bytes.Buffer
-	put := func(v uint64) {
-		b := make([]byte, binary.MaxVarintLen64)
-		dir.Write(b[:binary.PutUvarint(b, v)])
+	w, err := pmtiles.NewWriter("")
+	if err != nil {
+		panic(err)
 	}
-	put(1)         // entries
-	put(0)         // tile id 0
-	put(1<<32 - 1) // run length
-	put(10)        // length
-	put(1)         // offset 0 (+1)
-	h := make([]byte, 127)
-	copy(h, "PMTiles")
-	h[7] = 3
-	le := binary.LittleEndian
-	le.PutUint64(h[8:], 127)
-	le.PutUint64(h[16:], uint64(dir.Len()))
-	le.PutUint64(h[56:], 127+uint64(dir.Len()))
-	le.PutUint64(h[64:], 10)
-	h[97], h[98], h[99], h[100], h[101] = 1, 2, 1, 0, 15
-	out := append(h, dir.Bytes()...)
-	return append(out, make([]byte, 10)...)
+	x0, y0, x1, y1 := pmtiles.TileRange(pmtiles.BBox{-77, 38, -74, 40.5}, 12)
+	var ids []uint64
+	for x := x0; x <= x1; x++ {
+		for y := y0; y <= y1; y++ {
+			ids = append(ids, pmtiles.ZxyToID(12, x, y))
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		if err := w.Add(id, []byte("tile")); err != nil {
+			panic(err)
+		}
+	}
+	var buf bytes.Buffer
+	h := pmtiles.Header{TileType: pmtiles.TypeMVT, TileCompression: pmtiles.CompressionGzip, MinZoom: 0, MaxZoom: 15}
+	if err := w.Finish(&buf, h, []byte(`{}`)); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }
 
 // env is a test data dir, fake tools and a fake Geofabrik.
@@ -438,33 +441,6 @@ func TestBusy(t *testing.T) {
 	}
 }
 
-func TestZxyToID(t *testing.T) {
-	tests := []struct {
-		z    uint8
-		x, y uint32
-		id   uint64
-	}{
-		{0, 0, 0, 0}, {1, 0, 0, 1}, {1, 0, 1, 2}, {1, 1, 1, 3}, {1, 1, 0, 4},
-		{2, 0, 0, 5}, {3, 0, 0, 21}, {20, 0, 0, 366503875925},
-	}
-	for _, tt := range tests {
-		if got := zxyToID(tt.z, tt.x, tt.y); got != tt.id {
-			t.Errorf("zxyToID(%d,%d,%d)=%d want %d", tt.z, tt.x, tt.y, got, tt.id)
-		}
-	}
-	// Every tile at z3 maps to a distinct id in range.
-	seen := map[uint64]bool{}
-	for x := uint32(0); x < 8; x++ {
-		for y := uint32(0); y < 8; y++ {
-			id := zxyToID(3, x, y)
-			if id < 21 || id >= 85 || seen[id] {
-				t.Fatalf("bad id %d for 3/%d/%d", id, x, y)
-			}
-			seen[id] = true
-		}
-	}
-}
-
 func TestPlanetilerMemory(t *testing.T) {
 	tests := []struct {
 		avail, pbf int64
@@ -710,5 +686,23 @@ func TestManifestImage(t *testing.T) {
 	img := disk.Image
 	if img.ID != "sha256:abc" || img.Revision != "deadbeef" || img.Valhalla != "3.9.1" || len(img.PlanetilerJarSHA2) != 64 {
 		t.Errorf("image %+v (run %+v)", img, m.Image)
+	}
+}
+
+func TestValhallaMissingSpeedsFails(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	ov := filepath.Join(dir, "overrides.json")
+	speeds := filepath.Join(dir, "default_speeds.json")
+	_ = os.WriteFile(ov, []byte(`{"mjolnir":{"default_speeds_config":"`+speeds+`"}}`), 0o644)
+	e.b.Tools.ValhallaOverrides = ov
+	_, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}})
+	var se *StageError
+	if !errors.As(err, &se) || se.Stage != StageValhalla || !strings.Contains(err.Error(), "default_speeds_config") {
+		t.Fatalf("err = %v", err)
+	}
+	_ = os.WriteFile(speeds, []byte(`[]`), 0o644)
+	if _, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}}); err != nil {
+		t.Fatalf("with speeds present: %v", err)
 	}
 }

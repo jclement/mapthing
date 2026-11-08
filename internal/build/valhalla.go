@@ -51,6 +51,9 @@ func (s *state) valhalla(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := checkConfigFiles(cfg); err != nil {
+		return err
+	}
 	// Our paths win over anything an override says.
 	setPath(cfg, []string{"mjolnir", "tile_dir"}, tileDir)
 	setPath(cfg, []string{"mjolnir", "tile_extract"}, extract)
@@ -108,6 +111,22 @@ func (s *state) timezones(ctx context.Context) string {
 	}
 	_ = os.Rename(p+".part", p)
 	return p
+}
+
+// checkConfigFiles fails the build when the config references a data file that is not there.
+// Valhalla does not: a missing default_speeds_config silently falls back to built-in speeds
+// (about 2 km/h on unpaved tracks).
+func checkConfigFiles(cfg map[string]any) error {
+	mj, _ := cfg["mjolnir"].(map[string]any)
+	p, _ := mj["default_speeds_config"].(string)
+	if p == "" {
+		return nil
+	}
+	if st, err := os.Stat(p); err != nil || st.IsDir() {
+		return fmt.Errorf("mjolnir.default_speeds_config points at %s, which does not exist; "+
+			"the image must carry docker/valhalla/ at /usr/share/mapthing/valhalla/", p)
+	}
+	return nil
 }
 
 // deepMerge copies src into dst, recursing into objects; non-object values replace.

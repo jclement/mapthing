@@ -111,7 +111,7 @@ ok "catalog lists $REGION"
 admin POST /admin/api/regions -d "$(jq -n --arg r "$REGION" '{id:$r}')" >/dev/null || die "add region"
 ok "region added"
 
-JOB=$(admin POST /admin/api/build -d '{"refresh":true}' | jq -r '.id // .job.id // .job_id // empty')
+JOB=$(admin POST /admin/api/build -d '{"refresh":true}' | jq -r '.id // empty')   # 202 + job row
 [[ -n "$JOB" ]] || die "start build (no job id)"
 ok "build started (job $JOB)"
 
@@ -119,14 +119,14 @@ log "waiting for build (timeout ${BUILD_TIMEOUT}s)"
 start=$(date +%s)
 last=""
 while :; do
-  J=$(admin GET "/admin/api/jobs/$JOB")
-  status=$(jq -r '.status // .job.status' <<<"$J")
-  stage=$(jq -r '.stage // .job.stage // ""' <<<"$J")
+  J=$(admin GET "/admin/api/jobs/$JOB?tail=40")   # {"job": row, "log": [{line}]}
+  status=$(jq -r '.job.status' <<<"$J")
+  stage=$(jq -r '.job.stage // ""' <<<"$J")
   [[ "$stage" != "$last" ]] && { log "  stage: $stage"; last=$stage; }
   case "$status" in
     succeeded) break ;;
     failed|cancelled)
-      jq -r '.log_tail // .job.log_tail // .error // empty | if type=="array" then .[] else . end' <<<"$J" | tail -40 | sed 's/^/    /'
+      jq -r '.job.error, (.log[]?.line)' <<<"$J" | tail -40 | sed 's/^/    /'
       die "build $status at stage $stage" ;;
   esac
   (( $(date +%s) - start > BUILD_TIMEOUT )) && die "build timed out"
@@ -141,7 +141,7 @@ for i in $(seq 1 60); do
 done
 ok "readyz"
 
-KEY=$(admin POST /admin/api/keys -d '{"label":"smoke"}' | jq -r '.secret // .key // .token // empty')
+KEY=$(admin POST /admin/api/keys -d '{"label":"smoke"}' | jq -r '.secret // empty')   # {"key":…, "secret":"mt_…"}
 [[ "$KEY" == mt_* ]] || die "create API key"
 ok "API key created"
 AUTH=(-H "Authorization: Bearer $KEY")
@@ -174,7 +174,7 @@ check "raster tile 512@2x"      "image/png"     "$BASE/styles/outdoors/512/$Z/$X
 
 ROUTE=$(curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' -X POST "$BASE/api/v1/route" \
   -d "{\"locations\":[$DOVER,$WILM],\"profile\":\"auto\"}" || true)
-D=$(jq -r '.distance_m // .route.distance_m // empty' <<<"$ROUTE" 2>/dev/null || true)
+D=$(jq -r '.properties.distance_m // empty' <<<"$ROUTE" 2>/dev/null || true)
 if [[ -n "$D" ]] && awk "BEGIN{exit !($D > 60000 && $D < 120000)}"; then
   ok "route Dover → Wilmington: $(awk "BEGIN{printf \"%.1f\", $D/1000}") km"
 else

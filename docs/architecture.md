@@ -211,7 +211,7 @@ gravel/dirt.
 
 - Engine: Valhalla 3.9.1. Config = `valhalla_build_config` output deep-merged with
   `docker/valhalla/overrides.json`; the image carries `docker/valhalla/` at
-  `/usr/local/share/mapthing/valhalla/` (the overrides reference `default_speeds.json` there).
+  `/usr/share/mapthing/valhalla/` (the overrides reference `default_speeds.json` there).
   Build steps, paths and the reason for each override: `docker/valhalla/README.md`.
 - valhalla_service listens on `127.0.0.1:8002`; the Go client reads `MAPTHING_VALHALLA_URL`
   (default `http://127.0.0.1:8002`).
