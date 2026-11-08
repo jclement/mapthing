@@ -17,7 +17,9 @@ run = [
 
 [tasks."build:web"]
 description = "Build the admin web UI into web/dist (embedded by the Go binary)"
-run = "[ ! -f web/package.json ] || (cd web && npm run build)"
+# Without a web/ app (a fresh checkout before the UI lands, or a Go-only worktree) this writes
+# a placeholder web/dist/index.html so the Go embed still compiles.
+run = "if [ -f web/package.json ]; then cd web && npm run build; else mkdir -p web/dist && [ -f web/dist/index.html ] || echo '<!doctype html><title>mapthing</title><p>UI not built</p>' > web/dist/index.html; fi"
 sources = ["web/src/**/*", "web/index.html", "web/package-lock.json", "web/vite.config.ts"]
 outputs = ["web/dist/index.html"]
 

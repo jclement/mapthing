@@ -1,0 +1,401 @@
+// Package jobs runs long background work (builds) one at a time, with persisted progress and
+// logs and a server-sent-events fan-out for the admin UI.
+//
+// A job is a plain function registered by name:
+//
+//	runner.Register("build", func(ctx context.Context, j *jobs.Job) error { ... })
+//
+// *Job satisfies the pipeline's build.Reporter (Stage, Progress, Logf), so a builder can
+// report straight into it.
+package jobs
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jclement/mapthing/internal/store"
+)
+
+// Func is the body of a job. Return nil on success. ctx is cancelled when the job is
+// cancelled or the server shuts down.
+type Func func(ctx context.Context, j *Job) error
+
+// Status values.
+const (
+	StatusQueued    = "queued"
+	StatusRunning   = "running"
+	StatusSucceeded = "succeeded"
+	StatusFailed    = "failed"
+	StatusCancelled = "cancelled"
+)
+
+// ErrBusy is returned by Enqueue with Unique when a job of that name is already queued or running.
+var ErrBusy = errors.New("a job with that name is already queued or running")
+
+// Job is the handle a running job reports through.
+type Job struct {
+	ID      int64
+	Name    string
+	Trigger string
+	params  json.RawMessage
+
+	ctx    context.Context
+	r      *Runner
+	mu     sync.Mutex
+	row    store.JobRow
+	lastDB time.Time
+}
+
+// Context returns the job's context.
+func (j *Job) Context() context.Context { return j.ctx }
+
+// Params returns the raw JSON params the job was enqueued with.
+func (j *Job) Params() json.RawMessage { return j.params }
+
+// Decode unmarshals the job params into v.
+func (j *Job) Decode(v any) error {
+	if len(j.params) == 0 {
+		return nil
+	}
+	return json.Unmarshal(j.params, v)
+}
+
+// Stage starts a named stage and resets progress to 0.
+func (j *Job) Stage(name string) {
+	j.mu.Lock()
+	j.row.Stage = name
+	j.row.Pct = 0
+	j.row.Message = ""
+	j.mu.Unlock()
+	j.flush(true)
+	j.Logf("== stage: %s", name)
+}
+
+// Progress reports progress within the current stage; frac is 0..1.
+func (j *Job) Progress(frac float64, msg string) {
+	if frac < 0 {
+		frac = 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	j.mu.Lock()
+	j.row.Pct = frac
+	j.row.Message = msg
+	j.mu.Unlock()
+	j.flush(false)
+}
+
+// Logf appends a log line (persisted, and streamed to the UI).
+func (j *Job) Logf(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	now := time.Now()
+	for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
+		if err := j.r.st.AppendJobLog(context.WithoutCancel(j.ctx), j.ID, now, l); err != nil {
+			slog.Warn("job log", "job", j.ID, "err", err)
+		}
+		j.r.hub.publish(Event{Type: "log", Data: store.LogLine{JobID: j.ID, At: now.UTC(), Line: l}})
+	}
+}
+
+// Snapshot returns the job's current row.
+func (j *Job) Snapshot() store.JobRow {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.row
+}
+
+// flush publishes the job state, writing to the DB at most once a second unless forced.
+func (j *Job) flush(force bool) {
+	j.mu.Lock()
+	row := j.row
+	write := force || time.Since(j.lastDB) >= time.Second
+	if write {
+		j.lastDB = time.Now()
+	}
+	j.mu.Unlock()
+	if write {
+		if err := j.r.st.UpdateJob(context.WithoutCancel(j.ctx), &row); err != nil {
+			slog.Warn("job update", "job", j.ID, "err", err)
+		}
+	}
+	j.r.hub.publish(Event{Type: "job", Data: row})
+}
+
+// ErrorDetails extracts history details from a job error (for example the pipeline's
+// *build.StageError: its stage and log tail). Return ok=false for a plain error.
+type ErrorDetails func(err error) (details map[string]any, ok bool)
+
+// Runner executes queued jobs one at a time.
+type Runner struct {
+	st  *store.Store
+	hub *Hub
+
+	// Details, if set, turns job errors into structured history details.
+	Details ErrorDetails
+
+	mu      sync.Mutex
+	funcs   map[string]Func
+	queue   []int64
+	current *Job
+	cancels map[int64]context.CancelFunc
+	wake    chan struct{}
+}
+
+// NewRunner returns a runner backed by st. Call Start to begin processing.
+func NewRunner(st *store.Store) *Runner {
+	return &Runner{st: st, hub: NewHub(), funcs: map[string]Func{}, cancels: map[int64]context.CancelFunc{}, wake: make(chan struct{}, 1)}
+}
+
+// Hub returns the event hub (SSE fan-out).
+func (r *Runner) Hub() *Hub { return r.hub }
+
+// Register adds a job function under name.
+func (r *Runner) Register(name string, f Func) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.funcs[name] = f
+}
+
+// Registered reports whether a job name has a function.
+func (r *Runner) Registered(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.funcs[name]
+	return ok
+}
+
+// EnqueueOptions control Enqueue.
+type EnqueueOptions struct {
+	Trigger string // manual (default) | schedule | startup
+	Unique  bool   // refuse with ErrBusy if a job of this name is queued or running
+}
+
+// Enqueue queues a job and returns its row.
+func (r *Runner) Enqueue(ctx context.Context, name string, params any, opt EnqueueOptions) (*store.JobRow, error) {
+	r.mu.Lock()
+	if _, ok := r.funcs[name]; !ok {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("no job named %q", name)
+	}
+	if opt.Unique && r.busyLocked(ctx, name) {
+		r.mu.Unlock()
+		return nil, ErrBusy
+	}
+	r.mu.Unlock()
+	if opt.Trigger == "" {
+		opt.Trigger = "manual"
+	}
+	p := []byte("{}")
+	if params != nil {
+		var err error
+		if p, err = json.Marshal(params); err != nil {
+			return nil, err
+		}
+	}
+	row, err := r.st.CreateJob(ctx, name, string(p), opt.Trigger)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	r.queue = append(r.queue, row.ID)
+	r.mu.Unlock()
+	r.hub.publish(Event{Type: "job", Data: *row})
+	r.poke()
+	return row, nil
+}
+
+func (r *Runner) busyLocked(ctx context.Context, name string) bool {
+	if r.current != nil && r.current.Name == name {
+		return true
+	}
+	for _, id := range r.queue {
+		if j, err := r.st.Job(ctx, id); err == nil && j.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Busy reports whether a job of this name is queued or running.
+func (r *Runner) Busy(ctx context.Context, name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.busyLocked(ctx, name)
+}
+
+// Current returns the running job's snapshot, if any.
+func (r *Runner) Current() (store.JobRow, bool) {
+	r.mu.Lock()
+	j := r.current
+	r.mu.Unlock()
+	if j == nil {
+		return store.JobRow{}, false
+	}
+	return j.Snapshot(), true
+}
+
+// Cancel cancels a queued or running job.
+func (r *Runner) Cancel(ctx context.Context, id int64) error {
+	r.mu.Lock()
+	if c, ok := r.cancels[id]; ok {
+		r.mu.Unlock()
+		c()
+		return nil
+	}
+	for i, q := range r.queue {
+		if q == id {
+			r.queue = append(r.queue[:i], r.queue[i+1:]...)
+			r.mu.Unlock()
+			row, err := r.st.Job(ctx, id)
+			if err != nil {
+				return err
+			}
+			now := time.Now().UTC()
+			row.Status, row.FinishedAt = StatusCancelled, &now
+			if err := r.st.UpdateJob(ctx, row); err != nil {
+				return err
+			}
+			r.hub.publish(Event{Type: "job", Data: *row})
+			return nil
+		}
+	}
+	r.mu.Unlock()
+	return store.ErrNotFound
+}
+
+func (r *Runner) poke() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Start recovers jobs interrupted by a restart (running → failed, queued → re-queued) and
+// processes the queue until ctx is done.
+func (r *Runner) Start(ctx context.Context) error {
+	running, err := r.st.JobsByStatus(ctx, StatusRunning)
+	if err != nil {
+		return err
+	}
+	for _, j := range running {
+		now := time.Now().UTC()
+		j.Status, j.Error, j.FinishedAt = StatusFailed, "interrupted by server restart", &now
+		_ = r.st.UpdateJob(ctx, j)
+		jid := j.ID
+		_ = r.st.AddHistory(ctx, store.HistoryEntry{Kind: "job", OK: false, Message: j.Name + ": interrupted by server restart", JobID: &jid})
+	}
+	queued, err := r.st.JobsByStatus(ctx, StatusQueued)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	for _, j := range queued {
+		r.queue = append(r.queue, j.ID)
+	}
+	r.mu.Unlock()
+	go r.loop(ctx)
+	r.poke()
+	return nil
+}
+
+func (r *Runner) loop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.wake:
+		}
+		for ctx.Err() == nil {
+			r.mu.Lock()
+			if len(r.queue) == 0 {
+				r.mu.Unlock()
+				break
+			}
+			id := r.queue[0]
+			r.queue = r.queue[1:]
+			r.mu.Unlock()
+			r.run(ctx, id)
+		}
+	}
+}
+
+func (r *Runner) run(parent context.Context, id int64) {
+	row, err := r.st.Job(parent, id)
+	if err != nil {
+		slog.Error("job load", "job", id, "err", err)
+		return
+	}
+	r.mu.Lock()
+	f := r.funcs[row.Name]
+	ctx, cancel := context.WithCancel(parent)
+	j := &Job{ID: row.ID, Name: row.Name, Trigger: row.Trigger, params: json.RawMessage(row.Params), ctx: ctx, r: r, row: *row}
+	r.current = j
+	r.cancels[id] = cancel
+	r.mu.Unlock()
+	defer func() {
+		cancel()
+		r.mu.Lock()
+		r.current = nil
+		delete(r.cancels, id)
+		r.mu.Unlock()
+	}()
+
+	now := time.Now().UTC()
+	j.mu.Lock()
+	j.row.Status, j.row.StartedAt = StatusRunning, &now
+	j.mu.Unlock()
+	j.flush(true)
+	slog.Info("job start", "job", id, "name", row.Name, "trigger", row.Trigger)
+
+	err = safeRun(ctx, f, j)
+
+	fin := time.Now().UTC()
+	j.mu.Lock()
+	j.row.FinishedAt = &fin
+	switch {
+	case err == nil:
+		j.row.Status, j.row.Pct = StatusSucceeded, 1
+	case ctx.Err() != nil && parent.Err() == nil:
+		j.row.Status, j.row.Error = StatusCancelled, "cancelled"
+	default:
+		j.row.Status, j.row.Error = StatusFailed, err.Error()
+	}
+	final := j.row
+	j.mu.Unlock()
+	j.flush(true)
+	if err != nil {
+		j.Logf("job %s: %v", final.Status, err)
+	}
+
+	h := store.HistoryEntry{Kind: "job", OK: err == nil, JobID: &final.ID}
+	h.Message = fmt.Sprintf("%s (%s) %s in %s", final.Name, final.Trigger, final.Status, fin.Sub(now).Round(time.Second))
+	if err != nil {
+		h.Message += ": " + err.Error()
+		if r.Details != nil {
+			if d, ok := r.Details(err); ok {
+				h.Details, _ = json.Marshal(d)
+			}
+		}
+	}
+	if herr := r.st.AddHistory(context.WithoutCancel(parent), h); herr != nil {
+		slog.Warn("history", "err", herr)
+	}
+	_ = r.st.PruneJobLogs(context.WithoutCancel(parent), 50)
+	slog.Info("job end", "job", id, "status", final.Status, "err", err)
+}
+
+func safeRun(ctx context.Context, f Func, j *Job) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("panic: %v", p)
+		}
+	}()
+	return f(ctx, j)
+}

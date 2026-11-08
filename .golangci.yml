@@ -1,0 +1,49 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G104 # unhandled errors: errcheck covers this
+        - G115 # integer overflow conversions: tile maths is bounded by validation
+        - G204 # subprocess with variable: the supervisor runs configured commands by design
+        - G304 # file inclusion via variable: paths come from the data dir and validated keys
+        - G306 # WriteFile permissions: data files are not secret
+        - G301 # MkdirAll 0755: data directories are not secret
+        - G302
+        - G122 # WalkDir TOCTOU: walks are over mapthing's own data dir
+        - G124 # cookie attributes: Secure is set per request (isHTTPS), HttpOnly+SameSite always
+        - G602 # false positive on guarded entries[i-1]
+        - G703 # taint path traversal: cache keys are validated (validKey), paths built from them
+        - G704 # taint SSRF: upstream URLs come from operator config, not requests
+        - G705 # taint XSS: JSON/protobuf/png bodies with explicit content types and nosniff
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+        - name: var-naming
+          disabled: true
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters: [gosec, noctx, bodyclose, errcheck]
+
+formatters:
+  enable:
+    - gofmt
