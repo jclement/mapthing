@@ -1,4 +1,4 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { finishBuilds } from "../mocks/server";
 import { renderApp } from "./util";
@@ -38,7 +38,10 @@ describe("add region flow", () => {
     await user.type(within(dialog).getByLabelText(/Bounding box/), "-103.8, 31.9, -102.1, 33.1");
     const est = within(dialog).getByTestId("estimate");
     expect(est).toHaveTextContent("Permian north");
-    expect(est).toHaveTextContent("Clipped from Texas");
+    // The box crosses the Texas/New Mexico line: clipped from both, not from the whole US.
+    const parents = within(dialog).getByTestId("parents");
+    await waitFor(() => expect(parents).toHaveTextContent(/Clipped from New Mexico .* \+ Texas/));
+    expect(parents).toHaveTextContent(/downloads .* instead of United States/);
     await user.click(within(dialog).getByRole("button", { name: "Add only" }));
     expect(await screen.findByText(/added but not built yet/)).toBeInTheDocument();
     // in the banner and in the table

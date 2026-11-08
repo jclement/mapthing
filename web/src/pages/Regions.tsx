@@ -16,6 +16,7 @@ import {
   type BBox,
   type Catalog,
   type CatalogEntry,
+  type CustomEstimate,
   type ElevationSource,
   type NewRegion,
   type Region,
@@ -419,10 +420,35 @@ function AddRegion({
     if (tab === "draw") setSel(box ? { kind: "box", name: boxName, bbox: box } : null);
   }, [tab, box, boxName]);
 
-  const summary = useMemo(
-    () => (sel && catalog ? estimateFor(sel, catalog) : null),
-    [sel, catalog],
-  );
+  // A drawn box is clipped from the cheapest set of extracts that cover it (several when it
+  // crosses a state or province line); the server plans that and returns the real download.
+  const [cover, setCover] = useState<{ key: string; est?: CustomEstimate; error?: string }>();
+  const boxKey = sel?.kind === "box" ? sel.bbox.join(",") : "";
+  useEffect(() => {
+    if (!boxKey) return;
+    const bbox = boxKey.split(",").map(Number) as BBox;
+    let live = true;
+    const t = setTimeout(() => {
+      api
+        .estimateCustom({ bbox })
+        .then((est) => live && setCover({ key: boxKey, est }))
+        .catch((e: Error) => live && setCover({ key: boxKey, error: e.message }));
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [boxKey]);
+  const coverNow = cover && cover.key === boxKey ? cover : undefined;
+
+  const summary = useMemo(() => {
+    const s = sel && catalog ? estimateFor(sel, catalog) : null;
+    const est = coverNow?.est;
+    if (!s || !est) return s;
+    // The download is every parent extract in full; the rest scales with the clipped area.
+    const total = s.est.total - s.est.download + est.total_bytes;
+    return { ...s, est: { ...s.est, download: est.total_bytes, total } };
+  }, [sel, catalog, coverNow]);
   const installedIds = new Set(installed.map((r) => r.id));
   const alreadyInstalled = sel?.kind === "catalog" && installedIds.has(sel.entry.id);
   const canAdd =
@@ -584,10 +610,28 @@ function AddRegion({
                 </div>
               </div>
               {sel.kind === "box" && (
-                <p className="mt-3 text-xs text-faint">
-                  {"parent" in summary && summary.parent
-                    ? `Clipped from ${summary.parent.name}.`
-                    : "No catalog extract covers this box completely; it is clipped from the smallest extracts that do."}
+                <p className="mt-3 text-xs text-faint" data-testid="parents">
+                  {coverNow?.est ? (
+                    <>
+                      Clipped from{" "}
+                      {coverNow.est.parents
+                        .map((p) => `${p.name} (${p.estimated ? "≈ " : ""}${fmt.bytes(p.bytes)})`)
+                        .join(" + ")}
+                      : downloads {coverNow.est.estimated ? "≈ " : ""}
+                      {fmt.bytes(coverNow.est.total_bytes)}
+                      {coverNow.est.single_best &&
+                        coverNow.est.parents.length > 1 &&
+                        coverNow.est.single_best.bytes > coverNow.est.total_bytes &&
+                        ` instead of ${coverNow.est.single_best.name} (${fmt.bytes(coverNow.est.single_best.bytes)})`}
+                      .
+                    </>
+                  ) : coverNow?.error ? (
+                    <span className="text-warn">{coverNow.error}</span>
+                  ) : "parent" in summary && summary.parent ? (
+                    `Clipped from ${summary.parent.name}.`
+                  ) : (
+                    "Clipped from the smallest set of extracts that together cover it."
+                  )}
                 </p>
               )}
             </>
