@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/catalog"
-	"github.com/jclement/mapthing/internal/tiles/pmtiles"
+	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
 // Check is one verification result recorded in the manifest.

@@ -112,7 +112,9 @@ internal/jobs         job runner, progress, logs, SSE fan-out
 internal/build        generation builds (download, merge, planetiler, valhalla, elevation, verify, swap)
 internal/scheduler    cron → build jobs
 internal/supervisor   child processes (valhalla_service, renderer)
-internal/tiles        PMTiles reader + z/x/y, TileJSON, styles, packs, imagery proxy, raster proxy
+internal/pmtiles      the one PMTiles v3 implementation: reader (leaf cache), writer (any order,
+                      dedupe, in-place Create/Commit or spooled Finish to an io.Writer), extract
+internal/tiles        z/x/y serving, TileJSON, styles, packs, imagery proxy, raster proxy
 internal/routing      Router interface; Valhalla client; Google Routes compatibility
 internal/elevation    Service interface; terrain tile reader; profiles; Google Elevation compatibility
 internal/server       HTTP routes, embedding web/dist

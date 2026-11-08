@@ -36,7 +36,7 @@ import (
 
 	"github.com/jclement/mapthing/internal/catalog"
 	"github.com/jclement/mapthing/internal/elevation"
-	"github.com/jclement/mapthing/internal/elevation/pmtiles"
+	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
 func init() {
@@ -377,7 +377,7 @@ feed:
 		}
 	}
 	meta.Attribution = strings.Join(attrs, "; ")
-	h := pmtiles.Header{TileType: pmtiles.TileTypePNG, TileCompression: pmtiles.CompressionNone,
+	h := pmtiles.Header{TileType: pmtiles.TypePNG, TileCompression: pmtiles.CompressionNone,
 		MinZoom: uint8(b.minZoom), MaxZoom: uint8(z),
 		MinLonE7: int32(bounds[0] * 1e7), MinLatE7: int32(bounds[1] * 1e7), MaxLonE7: int32(bounds[2] * 1e7), MaxLatE7: int32(bounds[3] * 1e7),
 		CenterZoom: uint8(max(b.minZoom, z-4)), CenterLonE7: int32((bounds[0] + bounds[2]) / 2 * 1e7), CenterLatE7: int32((bounds[1] + bounds[3]) / 2 * 1e7)}
@@ -385,12 +385,16 @@ feed:
 	if tiles == 0 {
 		return nil, errors.New("terrain: no tiles produced (no source covers the regions?)")
 	}
-	if err := w.Finish(h, meta); err != nil {
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.Commit(h, metaJSON); err != nil {
 		return nil, err
 	}
 	ok = true
 	fi, _ := os.Stat(outPath)
-	res := &TerrainResult{Regions: ids, MinZoom: b.minZoom, MaxZoom: z, TileSize: elevation.TileSize, Tiles: tiles, Sources: meta.Sources,
+	res := &TerrainResult{Regions: ids, MinZoom: b.minZoom, MaxZoom: z, TileSize: elevation.TileSize, Tiles: int(tiles), Sources: meta.Sources,
 		Fetched: b.fetch.fetched, Reused: b.fetch.reused, DurationSec: math.Round(time.Since(start).Seconds()), BuiltAt: meta.BuiltAt}
 	if fi != nil {
 		res.Bytes = fi.Size()
@@ -627,7 +631,7 @@ func (b *builder) processChunk(ctx context.Context, c chunk) error {
 				if err != nil {
 					return err
 				}
-				if err := b.w.Add(uint8(z), uint32(x), uint32(y), data); err != nil {
+				if err := b.w.AddTile(uint8(z), uint32(x), uint32(y), data); err != nil {
 					return err
 				}
 			}
@@ -748,7 +752,7 @@ func (b *builder) lowZooms() error {
 			if err != nil {
 				return err
 			}
-			if err := b.w.Add(uint8(z), uint32(p[0]), uint32(p[1]), data); err != nil {
+			if err := b.w.AddTile(uint8(z), uint32(p[0]), uint32(p[1]), data); err != nil {
 				return err
 			}
 		}

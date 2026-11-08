@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/auth"
+	"github.com/jclement/mapthing/internal/pmtiles"
 	"github.com/jclement/mapthing/internal/stats"
-	"github.com/jclement/mapthing/internal/tiles/pmtiles"
 )
 
 // Tilesets served from each generation: name → file.

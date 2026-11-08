@@ -1,6 +1,7 @@
 package pmtiles
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -155,4 +156,13 @@ func (r *Reader) leaf(off, n uint64) ([]Entry, error) {
 	r.leaves[off] = es
 	r.mu.Unlock()
 	return es, nil
+}
+
+// MetadataJSON unmarshals the metadata JSON into v.
+func (r *Reader) MetadataJSON(v any) error {
+	b, err := r.Metadata()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
 }

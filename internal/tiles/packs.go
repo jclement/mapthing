@@ -17,7 +17,7 @@ import (
 
 	_ "modernc.org/sqlite" // MBTiles writer
 
-	"github.com/jclement/mapthing/internal/tiles/pmtiles"
+	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
 // handlePack serves /packs/extract.pmtiles?bbox=w,s,e,n&minzoom=&maxzoom=[&format=mbtiles]
