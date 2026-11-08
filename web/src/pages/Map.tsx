@@ -35,7 +35,7 @@ import { StylePicker } from "../components/StylePicker";
 import { Button, cx, Progress, Segmented, Switch } from "../components/ui";
 import { useEvents } from "../lib/events";
 import * as fmt from "../lib/format";
-import { bboxPolygon, formatLonLat, lineLength } from "../lib/geo";
+import { bboxOf, bboxPolygon, formatLonLat, lineLength, routeFitPadding } from "../lib/geo";
 import { useTheme } from "../lib/theme";
 import { useApi } from "../lib/useApi";
 
@@ -152,6 +152,40 @@ export function MapPage() {
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const fitted = useRef(false);
+  const routePanel = useRef<HTMLDivElement>(null);
+  const lastRouteFit = useRef("");
+
+  // Fit the map to a newly computed route, clear of the route panel (side panel on desktop,
+  // bottom sheet on phones). Skipped when the route's extent did not change (e.g. toggling
+  // bridge handling), so a map the user has panned is not yanked back. Inspect clicks never
+  // move the map.
+  const fitRoute = useCallback((coords: LonLat[]) => {
+    const m = mapRef.current;
+    if (!m || coords.length < 2) return;
+    const b = bboxOf(coords);
+    const key = b.map((v) => v.toFixed(5)).join(",");
+    if (key === lastRouteFit.current) return;
+    lastRouteFit.current = key;
+    const box = m.getContainer().getBoundingClientRect();
+    const el = routePanel.current;
+    const pr = el?.getBoundingClientRect();
+    let panel = pr
+      ? { left: pr.left - box.left, top: pr.top - box.top, width: pr.width, height: pr.height }
+      : null;
+    // The bottom sheet is still short here (stats and profile render after the route), so pad
+    // for the height it grows to: its max-height.
+    if (el && panel && panel.width >= box.width * 0.8) {
+      // getComputedStyle keeps a percentage max-height as "60%"; resolve it against the map.
+      const raw = getComputedStyle(el).maxHeight;
+      const max = raw.endsWith("%")
+        ? (box.height * Number.parseFloat(raw)) / 100
+        : Number.parseFloat(raw);
+      if (max > panel.height) panel = { ...panel, top: box.height - max, height: max };
+    }
+    // 56 px clears the floating mode / style toolbar at the top of the map.
+    const padding = routeFitPadding({ width: box.width, height: box.height }, panel, 48, 56);
+    m.fitBounds(b, { padding, maxZoom: 15, duration: 600 });
+  }, []);
 
   const sourceName = useCallback(
     (id?: string) => catalog.data?.elevation_sources?.find((s) => s.id === id)?.name ?? id ?? "—",
@@ -238,6 +272,7 @@ export function MapPage() {
         if (!live) return;
         setRoute(r);
         const coords = r.geometry.coordinates as LonLat[];
+        fitRoute(coords);
         const len = lineLength(coords);
         const p = await api.profile(
           coords,
@@ -256,7 +291,7 @@ export function MapPage() {
     return () => {
       live = false;
     };
-  }, [waypoints, profileName, avoidUnpaved, bridgeDeck]);
+  }, [waypoints, profileName, avoidUnpaved, bridgeDeck, fitRoute]);
 
   // ----- hover marker synced with the chart -----
   useEffect(() => {
@@ -311,6 +346,7 @@ export function MapPage() {
 
   const clearRoute = () => {
     setWaypoints([]);
+    lastRouteFit.current = "";
     setHoverIdx(null);
   };
 
@@ -460,7 +496,10 @@ export function MapPage() {
 
       {/* Route panel */}
       {mode === "route" && (
-        <div className="absolute inset-x-0 bottom-0 max-h-[60%] overflow-y-auto rounded-t-2xl border border-line bg-panel shadow-float sm:inset-x-auto sm:top-16 sm:bottom-auto sm:left-3 sm:max-h-[calc(100%-5rem)] sm:w-[380px] sm:rounded-2xl">
+        <div
+          ref={routePanel}
+          className="absolute inset-x-0 bottom-0 max-h-[60%] overflow-y-auto rounded-t-2xl border border-line bg-panel shadow-float sm:inset-x-auto sm:top-16 sm:bottom-auto sm:left-3 sm:max-h-[calc(100%-5rem)] sm:w-[380px] sm:rounded-2xl"
+        >
           <div className="space-y-3 p-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">Route</h2>
