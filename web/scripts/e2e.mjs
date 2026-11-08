@@ -101,15 +101,15 @@ await step("keys: create (secret shown once)", async () => {
 });
 
 await step("keys: the new key works on a keyed endpoint", async () => {
-  const r = await fetch(`${base}/tiles/basemap.json?key=${created}`);
-  if (r.status !== 200) throw new Error(`status ${r.status}`);
+  const r = await fetch(`${base}/styles?key=${created}`);
+  if (r.status !== 200) throw new Error(`status ${r.status}`); // /styles answers before any build
 });
 
 await step("keys: revoke", async () => {
   await page.getByRole("button", { name: `Revoke ${label}` }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Revoke key" }).click();
   await page.getByRole("button", { name: `Revoke ${label}` }).waitFor({ state: "detached" });
-  const r = await fetch(`${base}/tiles/basemap.json?key=${created}`);
+  const r = await fetch(`${base}/styles?key=${created}`);
   if (r.status !== 401) throw new Error(`revoked key answered ${r.status}`);
 });
 
@@ -243,6 +243,7 @@ async function buildFlow() {
       )
         break;
       if (Date.now() > deadline) throw new Error(`timed out in stage ${running}`);
+      if (!job && Date.now() - t0 > 60000) throw new Error("no build job was queued");
       await page.waitForTimeout(5000);
     }
     if (job.status !== "succeeded") {

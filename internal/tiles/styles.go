@@ -40,6 +40,9 @@ func Styles(assets fs.FS) []StyleInfo {
 		}
 		info := StyleInfo{ID: id, Name: id, Dark: strings.HasSuffix(id, "-dark")}
 		if b, err := fs.ReadFile(assets, f); err == nil {
+			if !isGLStyle(b) {
+				continue // package.json and other non-style JSON
+			}
 			var st struct {
 				Name     string         `json:"name"`
 				Metadata map[string]any `json:"metadata"`
@@ -65,13 +68,27 @@ func Styles(assets fs.FS) []StyleInfo {
 	return out
 }
 
+// isGLStyle reports whether b is a MapLibre/Mapbox GL style document (version 8 with layers).
+func isGLStyle(b []byte) bool {
+	var st struct {
+		Version int               `json:"version"`
+		Layers  []json.RawMessage `json:"layers"`
+	}
+	return json.Unmarshal(b, &st) == nil && st.Version == 8 && st.Layers != nil
+}
+
 // HasStyle reports whether an embedded style exists.
 func (s *Server) HasStyle(name string) bool {
 	if !nameRE.MatchString(name) || s.opt.Assets == nil {
 		return false
 	}
-	_, err := fs.Stat(s.opt.Assets, "styles/"+name+".json")
-	return err == nil
+	s.styleOnce.Do(func() {
+		s.styleSet = map[string]bool{}
+		for _, st := range Styles(s.opt.Assets) {
+			s.styleSet[st.ID] = true
+		}
+	})
+	return s.styleSet[name]
 }
 
 func (s *Server) handleStyleList(w http.ResponseWriter, r *http.Request) {

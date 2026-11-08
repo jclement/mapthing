@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -429,9 +430,39 @@ func parseIndex(data []byte) ([]Entry, error) {
 		e.Parent = p.Parent // short id for now
 		entries = append(entries, e)
 	}
+	byID := map[string]bool{}
+	for _, e := range entries {
+		byID[e.ID] = true
+	}
 	for i := range entries {
-		entries[i].Parent = shortToID[entries[i].Parent]
+		e := &entries[i]
+		e.Parent = shortToID[e.Parent]
+		// Geofabrik lists US states as "us/<state>" with parent "north-america" and the short
+		// id as name. Use the nearest path ancestor that is an entry (north-america/us) and a
+		// readable name.
+		for p := path.Dir(e.ID); p != "." && p != "/"; p = path.Dir(p) {
+			if byID[p] {
+				if strings.HasPrefix(p, e.Parent+"/") || e.Parent == "" {
+					e.Parent = p
+				}
+				break
+			}
+		}
+		if strings.Contains(e.Name, "/") || e.Name == "" {
+			e.Name = titleFromSlug(path.Base(e.ID))
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 	return entries, nil
+}
+
+// titleFromSlug turns "new-mexico" into "New Mexico".
+func titleFromSlug(s string) string {
+	words := strings.Split(s, "-")
+	for i, w := range words {
+		if w != "" {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }

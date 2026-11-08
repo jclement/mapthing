@@ -55,6 +55,9 @@ type Server struct {
 	imagery *DiskCache
 	packs   *DiskCache
 
+	styleOnce sync.Once
+	styleSet  map[string]bool
+
 	mu   sync.RWMutex
 	gen  string
 	dir  string
