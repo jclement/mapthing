@@ -1,3 +1,5 @@
+// Package build runs generation builds (pipeline-owned; this stub comment
+// goes away with zz_stub_pipeline.go when feature/pipeline merges).
 package build
 
 // STUB: stands in for the pipeline worker's declarations until feature/pipeline

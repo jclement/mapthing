@@ -323,7 +323,7 @@ func parseGoogleCoords(s string) ([]LonLat, error) {
 	if strings.HasPrefix(s, "enc:") {
 		pts, err := DecodePolyline(strings.TrimPrefix(s, "enc:"), 5)
 		if err != nil {
-			return nil, fmt.Errorf("invalid encoded polyline: %v", err)
+			return nil, fmt.Errorf("invalid encoded polyline: %w", err)
 		}
 		if len(pts) == 0 {
 			return nil, errors.New("empty encoded polyline")

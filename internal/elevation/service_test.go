@@ -3,6 +3,7 @@ package elevation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -377,7 +378,7 @@ func TestSwapAndUnavailable(t *testing.T) {
 	svc := NewTerrainForData(dir)
 	defer func() { _ = svc.Close() }()
 	svc.checkEvery = 0
-	if _, err := svc.Points(context.Background(), []LonLat{{-104, 32}}); err != ErrUnavailable {
+	if _, err := svc.Points(context.Background(), []LonLat{{-104, 32}}); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("no generation: err = %v", err)
 	}
 	mux := http.NewServeMux()
