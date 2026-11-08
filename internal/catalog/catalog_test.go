@@ -151,8 +151,8 @@ func TestCustomRegion(t *testing.T) {
 			if len(r.Polygon) != 1 || len(r.Polygon[0]) < 4 {
 				t.Errorf("custom polygon %v", r.Polygon)
 			}
-			if r.ID != "custom/my-lease-area" || r.Custom.Parent.ID != tt.parent {
-				t.Errorf("got id=%s parent=%s", r.ID, r.Custom.Parent.ID)
+			if r.ID != "custom/my-lease-area" || len(r.Custom.Parents) != 1 || r.Custom.Parents[0].ID != tt.parent {
+				t.Errorf("got id=%s parents=%v", r.ID, r.Custom.Parents)
 			}
 		})
 	}

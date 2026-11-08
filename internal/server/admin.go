@@ -32,6 +32,64 @@ type CatalogRegion struct {
 	ElevationSources []string
 }
 
+// CatalogParent is one Geofabrik extract a custom region is clipped from.
+type CatalogParent struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Bytes     int64  `json:"bytes"`
+	Estimated bool   `json:"estimated,omitempty"` // size guessed from area (not yet known)
+}
+
+// CustomEstimate is what the pipeline plans for a custom area (see Deps.EstimateCustom).
+type CustomEstimate struct {
+	Parents          []CatalogParent `json:"parents"`
+	TotalBytes       int64           `json:"total_bytes"` // download size: every parent extract
+	Estimated        bool            `json:"estimated,omitempty"`
+	SingleBest       *CatalogParent  `json:"single_best,omitempty"` // cheapest single extract covering it
+	ElevationSources []string        `json:"elevation_sources"`
+}
+
+// ErrNotCovered is returned by EstimateCustom when no extract covers the area.
+var ErrNotCovered = errors.New("no extract covers that area")
+
+// estimateCustom: POST /admin/api/catalog/estimate {bbox:[w,s,e,n]} or {polygon:[[lon,lat],…]}
+// → the parent extracts and total download for a custom region, before adding it.
+func (s *Server) estimateCustom(w http.ResponseWriter, r *http.Request) {
+	if s.d.EstimateCustom == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "the region catalog is not available")
+		return
+	}
+	var b struct {
+		BBox    []float64       `json:"bbox"`
+		Polygon json.RawMessage `json:"polygon"`
+	}
+	if !readJSON(w, r, &b) {
+		return
+	}
+	ring := polygonRing(b.Polygon)
+	if len(b.BBox) == 0 && len(ring) >= 3 {
+		b.BBox = bboxOf(ring)
+	}
+	if !validBBox(b.BBox) {
+		writeError(w, r, http.StatusBadRequest, "bad_request", "bbox must be [w,s,e,n] with w<e and s<n, or polygon [[lon,lat],…] (3+ points)")
+		return
+	}
+	est, err := s.d.EstimateCustom(r.Context(), b.BBox, ring)
+	if errors.Is(err, ErrNotCovered) {
+		writeError(w, r, http.StatusBadRequest, "not_covered", "no Geofabrik extract covers that area")
+		return
+	}
+	if err != nil {
+		writeError(w, r, http.StatusBadGateway, "catalog_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, est)
+}
+
+func validBBox(b []float64) bool {
+	return len(b) == 4 && b[0] < b[2] && b[1] < b[3] && b[0] >= -180 && b[2] <= 180 && b[1] >= -90 && b[3] <= 90
+}
+
 // ---------- keys ----------
 
 type keyLimitsJSON struct {
@@ -624,26 +682,28 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 }
 
 type regionJSON struct {
-	ID               string       `json:"id"`
-	Name             string       `json:"name"`
-	CatalogID        *string      `json:"catalog_id"`
-	Parent           string       `json:"parent,omitempty"`
-	BBox             []float64    `json:"bbox"`
-	Polygon          [][2]float64 `json:"polygon,omitempty"`
-	Status           string       `json:"status"` // pending | installed | failed
-	ExtractBytes     int64        `json:"extract_bytes"`
-	DiskBytes        int64        `json:"disk_bytes"`
-	DataDate         *string      `json:"data_date"`
-	DownloadedAt     *time.Time   `json:"downloaded_at"`
-	ElevationSources []string     `json:"elevation_sources"`
-	Refresh          bool         `json:"refresh"`
-	AddedAt          time.Time    `json:"added_at"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	CatalogID        *string         `json:"catalog_id"`
+	Parent           string          `json:"parent,omitempty"`
+	BBox             []float64       `json:"bbox"`
+	Polygon          [][2]float64    `json:"polygon,omitempty"`
+	Status           string          `json:"status"` // pending | installed | failed
+	ExtractBytes     int64           `json:"extract_bytes"`
+	DiskBytes        int64           `json:"disk_bytes"`
+	DataDate         *string         `json:"data_date"`
+	DownloadedAt     *time.Time      `json:"downloaded_at"`
+	ElevationSources []string        `json:"elevation_sources"`
+	Parents          []CatalogParent `json:"parents,omitempty"` // custom regions: extracts clipped from
+	Refresh          bool            `json:"refresh"`
+	AddedAt          time.Time       `json:"added_at"`
 }
 
 // regionMeta is the JSON core keeps in regions.meta (from the catalog at add time).
 type regionMeta struct {
-	ExtractBytes     int64    `json:"extract_bytes,omitempty"`
-	ElevationSources []string `json:"elevation_sources,omitempty"`
+	ExtractBytes     int64           `json:"extract_bytes,omitempty"`
+	ElevationSources []string        `json:"elevation_sources,omitempty"`
+	Parents          []CatalogParent `json:"parents,omitempty"`
 }
 
 // downloadMeta is the subset of the pipeline's downloads/<region>/meta.json read here.
@@ -691,6 +751,7 @@ func (s *Server) regionView(rg *store.Region, rc regionContext) regionJSON {
 	var meta regionMeta
 	_ = json.Unmarshal(rg.Meta, &meta)
 	v.ExtractBytes = meta.ExtractBytes
+	v.Parents = meta.Parents
 	if meta.ElevationSources != nil {
 		v.ElevationSources = meta.ElevationSources
 	}
@@ -862,6 +923,23 @@ func (s *Server) addRegion(w http.ResponseWriter, r *http.Request) {
 			rg.BBox = info.BBox
 		}
 		rg.Meta, _ = json.Marshal(regionMeta{ExtractBytes: info.ExtractBytes, ElevationSources: info.ElevationSources})
+	}
+	if rg.Kind == "custom" && s.d.EstimateCustom != nil {
+		est, err := s.d.EstimateCustom(r.Context(), rg.BBox, polygonRing(rg.Polygon))
+		if errors.Is(err, ErrNotCovered) {
+			writeError(w, r, http.StatusBadRequest, "not_covered", "no Geofabrik extract covers that area")
+			return
+		}
+		if err == nil {
+			ids := make([]string, len(est.Parents))
+			for i, p := range est.Parents {
+				ids[i] = p.ID
+			}
+			if rg.Parent == "" {
+				rg.Parent = strings.Join(ids, ",")
+			}
+			rg.Meta, _ = json.Marshal(regionMeta{ExtractBytes: est.TotalBytes, ElevationSources: est.ElevationSources, Parents: est.Parents})
+		}
 	}
 	if rg.Name == "" {
 		rg.Name = rg.ID

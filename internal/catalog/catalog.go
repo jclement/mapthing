@@ -75,7 +75,8 @@ type Region struct {
 
 // Custom describes a clipped region.
 type Custom struct {
-	Parent Region `json:"parent"` // the Geofabrik extract it is clipped from
+	// Parents are the Geofabrik extracts it is clipped from (each clipped, then merged).
+	Parents []Region `json:"parents"`
 }
 
 // Catalog loads and caches the Geofabrik index.
@@ -307,75 +308,48 @@ func Slug(name string) string {
 	return s
 }
 
-// ErrNotCovered means no Geofabrik extract contains the requested custom area.
+// ErrNotCovered means no Geofabrik extract covers any of the requested custom area.
 var ErrNotCovered = errors.New("catalog: no extract contains that area")
 
-// CustomRegion builds a custom Region clipped by bbox or polygon (one of them) from the smallest
-// Geofabrik extract whose boundary contains the whole area.
+// CustomRegion builds a custom Region clipped by bbox or polygon (one of them) from the cheapest
+// set of Geofabrik extracts that together cover it (see cover.go). Sizes come from the cache:
+// call PlanCustom (or FillSizes) first when they may be missing.
 func (c *Catalog) CustomRegion(name string, bbox *BBox, polygon [][][2]float64) (Region, error) {
+	r, _, err := c.CustomRegionPlan(name, bbox, polygon)
+	return r, err
+}
+
+// CustomRegionPlan is CustomRegion that also returns the cover plan.
+func (c *Catalog) CustomRegionPlan(name string, bbox *BBox, polygon [][][2]float64) (Region, CoverPlan, error) {
 	if strings.TrimSpace(name) == "" {
-		return Region{}, errors.New("catalog: custom region needs a name")
+		return Region{}, CoverPlan{}, errors.New("catalog: custom region needs a name")
 	}
-	var pts [][2]float64
-	var box BBox
-	switch {
-	case len(polygon) > 0:
-		if len(polygon[0]) < 4 {
-			return Region{}, errors.New("catalog: polygon outer ring needs at least 4 points")
+	poly, box, err := areaPolygon(bbox, polygon)
+	if err != nil {
+		return Region{}, CoverPlan{}, err
+	}
+	plan, err := c.plan(poly)
+	if err != nil {
+		return Region{}, CoverPlan{}, err
+	}
+	var parents []Region
+	for _, p := range plan.Parents {
+		e, ok := c.Get(p.ID)
+		if !ok {
+			return Region{}, CoverPlan{}, fmt.Errorf("catalog: parent %s vanished", p.ID)
 		}
-		box = BBox{180, 90, -180, -90}
-		for _, p := range polygon[0] {
-			pts = append(pts, p)
-			box[0], box[1] = math.Min(box[0], p[0]), math.Min(box[1], p[1])
-			box[2], box[3] = math.Max(box[2], p[0]), math.Max(box[3], p[1])
-		}
-	case bbox != nil:
-		box = *bbox
-		pts = [][2]float64{{box[0], box[1]}, {box[2], box[1]}, {box[2], box[3]}, {box[0], box[3]}}
-		polygon = [][][2]float64{append(pts, pts[0])}
-	default:
-		return Region{}, errors.New("catalog: custom region needs a bbox or polygon")
-	}
-	if !box.Valid() {
-		return Region{}, fmt.Errorf("catalog: invalid bbox %v", box)
-	}
-	parent, ok := c.smallestContaining(pts)
-	if !ok {
-		return Region{}, ErrNotCovered
+		pr := e.Region()
+		pr.SizeHint = p.Bytes // the parent keeps its outline: the disk guard sizes the clip by area share
+		parents = append(parents, pr)
 	}
 	return Region{
 		ID:       "custom/" + Slug(name),
 		Name:     name,
 		BBox:     box,
-		SizeHint: parent.Size,
-		Polygon:  polygon,
-		Custom:   &Custom{Parent: parent.Region()},
-	}, nil
-}
-
-func (c *Catalog) smallestContaining(pts [][2]float64) (Entry, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	best, bestArea := -1, math.Inf(1)
-	for i, e := range c.entries {
-		if len(e.geom) == 0 || e.BBox.Area() >= bestArea {
-			continue
-		}
-		inside := true
-		for _, p := range pts {
-			if !e.geom.contains(p) {
-				inside = false
-				break
-			}
-		}
-		if inside {
-			best, bestArea = i, e.BBox.Area()
-		}
-	}
-	if best < 0 {
-		return Entry{}, false
-	}
-	return c.decorate(c.entries[best]), true
+		SizeHint: plan.TotalBytes,
+		Polygon:  poly,
+		Custom:   &Custom{Parents: parents},
+	}, plan, nil
 }
 
 // --- index parsing ---

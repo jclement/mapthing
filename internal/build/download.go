@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -35,8 +36,9 @@ type DownloadMeta struct {
 	DownloadedAt    time.Time `json:"downloaded_at"`
 	CheckedAt       time.Time `json:"checked_at"`
 	// Custom regions.
-	ParentMD5 string `json:"parent_md5,omitempty"`
-	ClipHash  string `json:"clip_hash,omitempty"`
+	Parents   []string `json:"parents,omitempty"`    // parent extract ids
+	ParentMD5 string   `json:"parent_md5,omitempty"` // "id:md5,…" of the parents clipped from
+	ClipHash  string   `json:"clip_hash,omitempty"`
 }
 
 func (b *Builder) httpClient() *http.Client {
@@ -88,7 +90,7 @@ func (s *state) download(ctx context.Context) error {
 		if r.Custom != nil {
 			file, meta, err = s.ensureCustom(ctx, r)
 		} else {
-			file, meta, err = s.ensureExtract(ctx, r)
+			file, meta, err = s.ensureExtractOnce(ctx, r)
 		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", r.ID, err)
@@ -96,7 +98,7 @@ func (s *state) download(ctx context.Context) error {
 		s.sources[i] = file
 		mr := &s.m.Regions[i]
 		mr.Source, mr.SourceTimestamp, mr.Sequence = meta.URL, meta.SourceTimestamp, meta.Sequence
-		mr.SizeBytes, mr.MD5 = meta.Size, meta.MD5
+		mr.SizeBytes, mr.MD5, mr.Parents = meta.Size, meta.MD5, meta.Parents
 	}
 	s.rep.Progress(1, "downloads ready")
 	return nil
@@ -201,13 +203,54 @@ func (s *state) ensureExtract(ctx context.Context, r catalog.Region) (string, *D
 	return file, nm, nil
 }
 
-// ensureCustom clips a custom region from its parent extract, re-clipping when the parent
-// changed or the clip geometry changed.
-func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *DownloadMeta, error) {
-	parentFile, parentMeta, err := s.ensureExtract(ctx, r.Custom.Parent)
-	if err != nil {
-		return "", nil, fmt.Errorf("parent %s: %w", r.Custom.Parent.ID, err)
+// ensureExtractOnce is ensureExtract, run at most once per build for each extract: two custom
+// regions over Texas (or a custom region and the Texas region itself) share one texas.osm.pbf.
+func (s *state) ensureExtractOnce(ctx context.Context, r catalog.Region) (string, *DownloadMeta, error) {
+	if s.extracts == nil {
+		s.extracts = map[string]extractResult{}
 	}
+	if got, ok := s.extracts[r.ID]; ok {
+		return got.file, got.meta, nil
+	}
+	file, meta, err := s.ensureExtract(ctx, r)
+	if err != nil {
+		return "", nil, err
+	}
+	s.extracts[r.ID] = extractResult{file, meta}
+	return file, meta, nil
+}
+
+type extractResult struct {
+	file string
+	meta *DownloadMeta
+}
+
+// ensureCustom clips a custom region from each of its parent extracts and merges the clips,
+// re-clipping only when a parent changed or the clip geometry changed.
+func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *DownloadMeta, error) {
+	if len(r.Custom.Parents) == 0 {
+		return "", nil, errors.New("custom region has no parent extracts")
+	}
+	type parentFile struct {
+		id   string
+		file string
+		meta *DownloadMeta
+	}
+	var parents []parentFile
+	for _, p := range r.Custom.Parents {
+		file, meta, err := s.ensureExtractOnce(ctx, p)
+		if err != nil {
+			return "", nil, fmt.Errorf("parent %s: %w", p.ID, err)
+		}
+		parents = append(parents, parentFile{p.ID, file, meta})
+	}
+	sort.Slice(parents, func(i, j int) bool { return parents[i].id < parents[j].id })
+	var sig []string
+	for _, p := range parents {
+		sig = append(sig, p.id+":"+p.meta.MD5)
+	}
+	parentSig := strings.Join(sig, ",")
+
 	dir := s.b.RegionDir(r.ID)
 	file := s.b.regionFile(r.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -219,14 +262,14 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 	}{r.BBox, r.Polygon})
 	h := sha256.Sum256(clip)
 	clipHash := hex.EncodeToString(h[:8])
-	if meta, err := readMeta(dir); err == nil && meta.ParentMD5 == parentMeta.MD5 && meta.ClipHash == clipHash {
+	if meta, err := readMeta(dir); err == nil && meta.ParentMD5 == parentSig && meta.ClipHash == clipHash {
 		if _, err := os.Stat(file); err == nil {
 			s.logf("%s: clip up to date", r.ID)
 			return file, meta, nil
 		}
 	}
-	part := file + ".part"
-	args := []string{"extract", "--overwrite", "-f", "pbf", "-o", part}
+
+	clipArgs := []string{}
 	if len(r.Polygon) > 0 {
 		gj := filepath.Join(dir, "clip.geojson")
 		data, _ := json.Marshal(map[string]any{
@@ -236,15 +279,38 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 		if err := os.WriteFile(gj, data, 0o644); err != nil {
 			return "", nil, err
 		}
-		args = append(args, "-p", gj)
+		clipArgs = append(clipArgs, "-p", gj)
 	} else {
 		b := r.BBox
-		args = append(args, "-b", fmt.Sprintf("%g,%g,%g,%g", b[0], b[1], b[2], b[3]))
+		clipArgs = append(clipArgs, "-b", fmt.Sprintf("%g,%g,%g,%g", b[0], b[1], b[2], b[3]))
 	}
-	args = append(args, parentFile)
-	if err := s.exec(ctx, dir, s.b.Tools.Osmium, args...); err != nil {
-		_ = os.Remove(part)
+	partsDir := filepath.Join(dir, "parts")
+	_ = os.RemoveAll(partsDir)
+	if err := os.MkdirAll(partsDir, 0o755); err != nil {
 		return "", nil, err
+	}
+	defer func() { _ = os.RemoveAll(partsDir) }()
+	var clips []string
+	for i, p := range parents {
+		out := filepath.Join(partsDir, fmt.Sprintf("%02d.osm.pbf", i))
+		args := append([]string{"extract", "--overwrite", "-o", out}, clipArgs...)
+		if err := s.exec(ctx, dir, s.b.Tools.Osmium, append(args, p.file)...); err != nil {
+			return "", nil, fmt.Errorf("clip from %s: %w", p.id, err)
+		}
+		clips = append(clips, out)
+	}
+	part := file + ".part"
+	if len(clips) == 1 {
+		if err := os.Rename(clips[0], part); err != nil {
+			return "", nil, err
+		}
+	} else {
+		// Ways and nodes along the shared border appear in both clips; merge keeps one copy.
+		args := append([]string{"merge", "--overwrite", "-f", "pbf", "-o", part}, clips...)
+		if err := s.exec(ctx, dir, s.b.Tools.Osmium, args...); err != nil {
+			_ = os.Remove(part)
+			return "", nil, err
+		}
 	}
 	if err := os.Rename(part, file); err != nil {
 		return "", nil, err
@@ -255,10 +321,17 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 	}
 	now := s.b.now().UTC()
 	meta := &DownloadMeta{
-		URL: parentMeta.URL, Size: size, MD5: sum, Sequence: parentMeta.Sequence,
-		SourceTimestamp: parentMeta.SourceTimestamp, DownloadedAt: now, CheckedAt: now,
-		ParentMD5: parentMeta.MD5, ClipHash: clipHash,
+		URL: parents[0].meta.URL, Size: size, MD5: sum, DownloadedAt: now, CheckedAt: now,
+		ParentMD5: parentSig, ClipHash: clipHash,
 	}
+	// The clip is as old as its oldest parent.
+	for i, p := range parents {
+		meta.Parents = append(meta.Parents, p.id)
+		if i == 0 || (p.meta.SourceTimestamp != "" && p.meta.SourceTimestamp < meta.SourceTimestamp) {
+			meta.SourceTimestamp, meta.Sequence = p.meta.SourceTimestamp, p.meta.Sequence
+		}
+	}
+	s.logf("%s: clipped from %s (%s)", r.ID, strings.Join(meta.Parents, " + "), humanBytes(size))
 	return file, meta, writeMeta(dir, meta)
 }
 

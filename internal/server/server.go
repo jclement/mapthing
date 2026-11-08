@@ -50,6 +50,9 @@ type Deps struct {
 	// ValidateRegion checks a catalog region id and returns what the catalog knows about it
 	// (pipeline). nil → any well-formed id is accepted.
 	ValidateRegion func(ctx context.Context, id string) (CatalogRegion, error)
+	// EstimateCustom plans the Geofabrik extracts a custom area is clipped from (pipeline):
+	// the cheapest set that together covers it. nil → custom regions carry no parent list.
+	EstimateCustom func(ctx context.Context, bbox []float64, ring [][2]float64) (CustomEstimate, error)
 	// ElevationSources lists DEM sources of the live generation (elevation). Optional.
 	ElevationSources func() any
 	// ReadyChecks are extra readiness probes (e.g. routing.Router.Ready). name → probe.
@@ -110,6 +113,7 @@ func (s *Server) routes() {
 	m.Handle("PUT /admin/api/schedule", admin(s.putSchedule))
 
 	m.Handle("GET /admin/api/catalog", admin(s.catalog))
+	m.Handle("POST /admin/api/catalog/estimate", admin(s.estimateCustom))
 	m.Handle("GET /admin/api/regions", admin(s.listRegions))
 	m.Handle("POST /admin/api/regions", admin(s.addRegion))
 	m.Handle("GET /admin/api/regions/{id...}", admin(s.getRegion))

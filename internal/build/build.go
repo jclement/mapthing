@@ -145,10 +145,11 @@ type state struct {
 	m       *Manifest
 	tail    *ring
 
-	sources []string // per region pbf path, aligned with opt.Regions
-	merged  string
-	peakKB  int64 // peak RSS of subprocesses in the current stage
-	terrain bool
+	sources  []string // per region pbf path, aligned with opt.Regions
+	merged   string
+	peakKB   int64 // peak RSS of subprocesses in the current stage
+	terrain  bool
+	extracts map[string]extractResult // per-build download memo
 }
 
 func (s *state) logf(format string, args ...any) {

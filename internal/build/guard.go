@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/jclement/mapthing/internal/catalog"
@@ -86,18 +87,32 @@ func (b *Builder) EstimateFor(opt Options) DiskEstimate {
 			e.InputBytes += download(r)
 			continue
 		}
-		parent := r.Custom.Parent
-		parentBytes := download(parent)
+		type share struct {
+			id    string
+			bytes int64
+			frac  float64
+		}
+		var shares []share
+		for _, parent := range r.Custom.Parents {
+			shares = append(shares, share{parent.ID, download(parent), clipFraction(r, parent)})
+		}
 		if st, err := os.Stat(b.regionFile(r.ID)); err == nil {
 			e.InputBytes += st.Size()
 			item("clip %s: %s on disk", r.ID, humanBytes(st.Size()))
 			continue
 		}
-		frac := clipFraction(r, parent)
-		clip := max(int64(float64(parentBytes)*frac), 1<<20)
+		// A multi-parent clip is the sum of its share of each parent (the merge removes the few
+		// objects along the shared border that both clips contain).
+		var clip int64
+		var parts []string
+		for _, sh := range shares {
+			clip += int64(float64(sh.bytes) * sh.frac)
+			parts = append(parts, fmt.Sprintf("%.1f%% of %s", sh.frac*100, sh.id))
+		}
+		clip = max(clip, 1<<20)
 		e.ClipBytes += clip
 		e.InputBytes += clip
-		item("clip %s: %s (%.1f%% of %s)", r.ID, humanBytes(clip), frac*100, parent.ID)
+		item("clip %s: %s (%s)", r.ID, humanBytes(clip), strings.Join(parts, " + "))
 	}
 	if len(opt.Regions) > 1 {
 		e.MergeBytes = e.InputBytes
