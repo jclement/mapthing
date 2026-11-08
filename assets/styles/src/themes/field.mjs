@@ -8,7 +8,7 @@ import { base } from "./_base.mjs";
 import { ex } from "../layers.mjs";
 import { scaleTextSize } from "./_text.mjs";
 import {
-  HIGHWAY_CASINGS, HIGHWAY_FILLS, MAJOR_CASINGS, MAJOR_FILLS, byClass, setPaint, widthByClass,
+  HIGHWAY_CASINGS, HIGHWAY_FILLS, MAJOR_CASINGS, MAJOR_FILLS, byClass, largerShields, setPaint, widthByClass,
 } from "./_roads.mjs";
 
 const c = {
@@ -175,6 +175,7 @@ export default {
     setPaint(layers, HIGHWAY_FILLS, { "line-width": highwayWidth });
     setPaint(layers, HIGHWAY_CASINGS, { "line-gap-width": highwayWidth });
     scaleTextSize(layers, 1.2, ["roads_shields"]);
+    largerShields(layers, 1.1, 11);
     for (const l of layers) {
       if (l.type === "symbol" && l.paint && l.paint["text-halo-width"] !== undefined) l.paint["text-halo-width"] = 2;
     }
