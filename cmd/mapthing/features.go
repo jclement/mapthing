@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/jclement/mapthing/internal/catalog"
 	"github.com/jclement/mapthing/internal/config"
 	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/jobs"
@@ -32,8 +33,7 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 		return nil
 	}
 	// Pipeline: build job, catalog, region validation (cmd/mapthing/pipeline.go).
-	cat := f.wirePipeline(ctx, d, restart)
-	_ = cat // elevation: cat.Coverage = elevation.CoverageIDs
+	f.wirePipeline(ctx, d, restart, func(b catalog.BBox) []string { return elevation.CoverageIDs(b) })
 
 	// Routing (wired with the pipeline so the smoke test can route).
 	router := routing.New(f.cfg.ValhallaURL)

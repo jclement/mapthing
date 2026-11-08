@@ -16,8 +16,9 @@ import (
 )
 
 // wirePipeline registers the build job and the region catalog.
-func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart func(context.Context) error) *catalog.Catalog {
+func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart func(context.Context) error, coverage func(catalog.BBox) []string) *catalog.Catalog {
 	cat := catalog.New(f.cfg.DataDir)
+	cat.Coverage = coverage // set before the background load starts
 	go func() {
 		if err := cat.Ensure(ctx); err != nil {
 			slog.Warn("region catalog not loaded yet", "err", err)
@@ -50,15 +51,17 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 		}
 		return cat.Entries(catalog.Filter{}), nil
 	}
-	d.ValidateRegion = func(ctx context.Context, id string) (string, string, error) {
+	d.ValidateRegion = func(ctx context.Context, id string) (server.CatalogRegion, error) {
 		if err := cat.Ensure(ctx); err != nil {
-			return "", "", err
+			return server.CatalogRegion{}, err
 		}
+		_ = cat.FillSizes(ctx, []string{id})
 		e, ok := cat.Get(id)
 		if !ok {
-			return "", "", fmt.Errorf("unknown region %q (ids look like north-america/us/texas)", id)
+			return server.CatalogRegion{}, fmt.Errorf("unknown region %q (ids look like north-america/us/texas)", id)
 		}
-		return e.Name, e.Parent, nil
+		return server.CatalogRegion{Name: e.Name, Parent: e.Parent, BBox: e.BBox[:],
+			ExtractBytes: e.Size, ElevationSources: e.ElevationSources}, nil
 	}
 	return cat
 }
