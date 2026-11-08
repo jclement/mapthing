@@ -1573,7 +1573,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#4f555b",
+    "line-color": "#464b51",
     "line-width": [
      "interpolate",
      [
@@ -2280,7 +2280,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#4f555b",
+    "line-color": "#464b51",
     "line-width": [
      "interpolate",
      [
@@ -2319,7 +2319,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#4f555b",
+    "line-color": "#464b51",
     "line-width": [
      "interpolate",
      [

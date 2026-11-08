@@ -1478,6 +1478,15 @@
      0.75,
      18,
      1
+    ],
+    "line-opacity": [
+     "step",
+     [
+      "zoom"
+     ],
+     0,
+     14,
+     1
     ]
    }
   },
@@ -2017,7 +2026,15 @@
     ]
    ],
    "paint": {
-    "line-color": "#ffffff",
+    "line-color": [
+     "step",
+     [
+      "zoom"
+     ],
+     "#b9b2a8",
+     14,
+     "#ffffff"
+    ],
     "line-width": [
      "interpolate",
      [
@@ -2035,8 +2052,22 @@
      2,
      18,
      8
+    ],
+    "line-opacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12.5,
+     0,
+     13,
+     1
     ]
-   }
+   },
+   "minzoom": 12.5
   },
   {
    "id": "roads_minor",

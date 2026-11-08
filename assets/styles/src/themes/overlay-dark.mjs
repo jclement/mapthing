@@ -55,8 +55,8 @@ export default {
     highway_casing_early: casing,
     other: "#33373b",
     minor_service: "#4a4f56",
-    minor_a: "#4f555b",
-    minor_b: "#4f555b",
+    minor_a: "#464b51",
+    minor_b: "#464b51",
     link: "#5a6066",
     major: "#5a6066",
     highway: "#6a7178",
@@ -68,7 +68,7 @@ export default {
     bridges_major_casing: casing,
     bridges_highway_casing: casing,
     bridges_other: "#33373b",
-    bridges_minor: "#4f555b",
+    bridges_minor: "#464b51",
     bridges_link: "#5a6066",
     bridges_major: "#5a6066",
     bridges_highway: "#6a7178",
@@ -104,7 +104,7 @@ export default {
     serviceCasingWidth: [13, 0.5, 18, 1],
   },
   colors: {
-    minor: "#4f555b",
+    minor: "#464b51", // residential a step below service/lease roads
     minor_casing: casing,
     service: "#4a4f56",
     service_casing: casing,
