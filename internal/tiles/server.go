@@ -202,6 +202,16 @@ func jsonError(w http.ResponseWriter, r *http.Request, status int, code, msg str
 	auth.WriteError(w, r, status, code, msg)
 }
 
+// missingTileset answers for a tileset that is not served: 503 while no generation is live,
+// 404 when the live generation simply does not have it (e.g. built without terrain).
+func missingTileset(w http.ResponseWriter, r *http.Request, gen string) {
+	if gen == "" {
+		noGeneration(w, r)
+		return
+	}
+	jsonError(w, r, http.StatusNotFound, "no_tileset", "this tileset is not part of the live generation")
+}
+
 func noGeneration(w http.ResponseWriter, r *http.Request) {
 	jsonError(w, r, http.StatusServiceUnavailable, "no_generation", "no map data has been built yet")
 }

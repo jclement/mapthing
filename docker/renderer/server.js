@@ -18,7 +18,7 @@
 
 import http from "node:http";
 import { createRequire } from "node:module";
-import { FORMATS, tileCenter, parseRenderPath, rewriteURL } from "./lib.js";
+import { classify, degradedResponse, EMPTY_TILE_URL, FORMATS, tileCenter, parseRenderPath, rewriteURL } from "./lib.js";
 
 const require = createRequire(import.meta.url);
 const mbgl = require("@maplibre/maplibre-gl-native");
@@ -44,6 +44,7 @@ if (!TOKEN) log("WARN", "MAPTHING_INTERNAL_TOKEN is empty; mapthing will refuse 
 // Resource fetching for MapLibre Native.
 
 async function fetchResource(url) {
+  if (url.startsWith(EMPTY_TILE_URL.slice(0, EMPTY_TILE_URL.indexOf("{")))) return null;
   const target = rewriteURL(url, BASE);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
@@ -60,11 +61,32 @@ async function fetchResource(url) {
   }
 }
 
-function requestFn(req, callback) {
-  fetchResource(req.url).then(
-    (data) => (data ? callback(null, { data }) : callback()),
-    (err) => callback(err),
-  );
+let degradedCount = 0;
+
+// requestFor returns the resource loader of one map. A failed sub-resource degrades (see
+// lib.js) instead of failing the render; the map is flagged so its tile is marked degraded
+// and mapthing does not cache it.
+function requestFor(state) {
+  return (req, callback) => {
+    fetchResource(req.url).then(
+      (data) => {
+        if (data) return callback(null, { data });
+        // 404/204: the resource does not exist in this generation (e.g. no terrain archive);
+        // a source still needs a valid TileJSON, so it gets the empty one. Not degraded.
+        const what = classify(req.url, req.kind);
+        return what === "source" ? callback(null, { data: degradedResponse("source") }) : callback();
+      },
+      (err) => {
+        const what = classify(req.url, req.kind);
+        const stand = degradedResponse(what);
+        if (stand === undefined) return callback(err);
+        state.degraded = true;
+        degradedCount++;
+        log("WARN", "resource failed; rendering without it", { kind: what, url: req.url, error: String(err.message || err) });
+        return stand ? callback(null, { data: stand }) : callback();
+      },
+    );
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -88,7 +110,9 @@ async function getStyle(name) {
 }
 
 function newMap(styleJSON, ratio) {
-  const map = new mbgl.Map({ request: requestFn, ratio, mode: "tile" });
+  const state = { degraded: false };
+  const map = new mbgl.Map({ request: requestFor(state), ratio, mode: "tile" });
+  map.state = state;
   map.load(styleJSON);
   return map;
 }
@@ -162,6 +186,7 @@ async function renderTile({ style, size, z, x, y, ratio, format }) {
   }
   const { pool, map } = await acquire(style, ratio);
   map.ratio = ratio;
+  map.state.degraded = false;
   let raw;
   try {
     raw = await renderRaw(map, { zoom, center, width: px, height: px });
@@ -169,10 +194,17 @@ async function renderTile({ style, size, z, x, y, ratio, format }) {
     release(pool, map, true);
     throw err;
   }
-  release(pool, map, false);
+  // A failed TileJSON is cached inside the map: drop a degraded map so the next render retries.
+  const degraded = map.state.degraded;
+  release(pool, map, degraded);
   const w = px * ratio;
   let img = sharp(Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength), { raw: { width: w, height: w, channels: 4 } });
   if (downscale) img = img.resize(size * ratio, size * ratio);
+  const encoded = await encode(img, format);
+  return { body: encoded, degraded };
+}
+
+function encode(img, format) {
   switch (format) {
     case "jpg":
       // Satellite at 512@2x is ~2-2.5 MB as PNG; JPEG q80 is a fraction of that.
@@ -208,6 +240,7 @@ const server = http.createServer(async (req, res) => {
         uptime_s: Math.round((Date.now() - started) / 1000),
         rendered,
         failures,
+        degraded_resources: degradedCount,
         styles: [...styles.keys()],
         pools: [...pools.entries()].map(([k, p]) => ({ key: k, size: p.all.length, idle: p.idle.length, waiting: p.waiters.length })),
       }),
@@ -225,9 +258,15 @@ const server = http.createServer(async (req, res) => {
   if (!params) return send(res, 404, '{"error":"not found"}');
   const t0 = Date.now();
   try {
-    const body = await renderTile(params);
+    const { body, degraded } = await renderTile(params);
     rendered++;
-    res.writeHead(200, { "Content-Type": FORMATS[params.format], "Content-Length": body.length, "Cache-Control": "public, max-age=86400" });
+    const headers = { "Content-Type": FORMATS[params.format], "Content-Length": body.length, "Cache-Control": "public, max-age=86400" };
+    if (degraded) {
+      // drawn without one or more sources: serve it, but nobody should cache it
+      headers["Cache-Control"] = "no-store";
+      headers["X-Mapthing-Degraded"] = "1";
+    }
+    res.writeHead(200, headers);
     res.end(req.method === "HEAD" ? undefined : body);
     log("DEBUG", "rendered", { path: url.pathname, ms: Date.now() - t0 });
   } catch (err) {

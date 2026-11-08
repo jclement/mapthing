@@ -237,6 +237,9 @@ func TestHealth(t *testing.T) {
 	if r, b := e.do(nil, "GET", "/readyz", nil, nil); r.StatusCode != 503 {
 		t.Fatalf("readyz without generation: %d %s", r.StatusCode, b)
 	}
+	if r, _ := e.do(nil, "GET", "/tiles/basemap.json", nil, map[string]string{"X-Mapthing-Internal": token}); r.StatusCode != 503 {
+		t.Fatalf("tilejson before any build: %d", r.StatusCode)
+	}
 	e2 := newEnv(t, true)
 	if r, b := e2.do(nil, "GET", "/readyz", nil, nil); r.StatusCode != 200 {
 		t.Fatalf("readyz with generation: %d %s", r.StatusCode, b)
@@ -496,8 +499,11 @@ func TestTiles(t *testing.T) {
 	if r, _ := e.do(nil, "GET", "/tiles/nope/0/0/0.mvt"+q, nil, nil); r.StatusCode != 404 {
 		t.Fatalf("unknown tileset: %d", r.StatusCode)
 	}
-	if r, _ := e.do(nil, "GET", "/tiles/terrain/0/0/0.png"+q, nil, nil); r.StatusCode != 503 {
+	if r, _ := e.do(nil, "GET", "/tiles/terrain/0/0/0.png"+q, nil, nil); r.StatusCode != 404 {
 		t.Fatalf("missing terrain archive: %d", r.StatusCode)
+	}
+	if r, _ := e.do(nil, "GET", "/tiles/terrain.json"+q, nil, nil); r.StatusCode != 404 {
+		t.Fatalf("missing terrain tilejson: %d", r.StatusCode)
 	}
 
 	// TileJSON carries the key and metadata
@@ -620,6 +626,10 @@ func TestRasterProxyAndCache(t *testing.T) {
 		calls++
 		paths = append(paths, r.URL.Path)
 		switch {
+		case r.URL.Path == "/render/outdoors/256/4/2/1.png": // rendered without a failed source
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set(tiles.DegradedHeader, "1")
+			_, _ = w.Write([]byte("\x89PNG partial"))
 		case r.URL.Path == "/render/outdoors/512/3/2/1@2x.png":
 			w.Header().Set("Content-Type", "image/png")
 			_, _ = w.Write([]byte("\x89PNG fake"))
@@ -687,6 +697,15 @@ func TestRasterProxyAndCache(t *testing.T) {
 	if len(paths) != before+1 || !strings.HasSuffix(paths[before], "1@2x.png") {
 		t.Fatalf("png variant: %v", paths)
 	}
+	// a degraded render is served (200, no-store) but never cached: asked twice, rendered twice
+	for i := range 2 {
+		before := len(paths)
+		r, b := get("/styles/outdoors/256/4/2/1.png")
+		if r.StatusCode != 200 || string(b) != "\x89PNG partial" || r.Header.Get("Cache-Control") != "no-store" ||
+			r.Header.Get(tiles.DegradedHeader) != "1" || len(paths) != before+1 {
+			t.Fatalf("degraded %d: %d %q %v %v", i, r.StatusCode, b, r.Header, paths)
+		}
+	}
 	if r, _ := get("/styles/outdoors/256/3/2/1.gif"); r.StatusCode != 400 {
 		t.Fatalf("bad format: %d", r.StatusCode)
 	}
@@ -696,7 +715,7 @@ func TestRasterProxyAndCache(t *testing.T) {
 	if r, _ := get("/styles/nope/256/3/2/1.png"); r.StatusCode != 404 {
 		t.Fatalf("unknown style: %d", r.StatusCode)
 	}
-	if _, c := e.stats.Totals(); c["raster"] != [2]int64{3, 5} {
+	if _, c := e.stats.Totals(); c["raster"] != [2]int64{3, 7} {
 		t.Fatalf("raster cache stats %v", c["raster"])
 	}
 }

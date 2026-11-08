@@ -58,7 +58,7 @@ func (s *Server) handleTile(w http.ResponseWriter, r *http.Request) {
 	}
 	rd, gen, _ := s.tileset(name)
 	if rd == nil {
-		noGeneration(w, r)
+		missingTileset(w, r, gen)
 		return
 	}
 	etag := fmt.Sprintf(`"%s-%d-%d-%d"`, gen, z, x, y)
@@ -144,7 +144,7 @@ func (s *Server) tileJSON(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	rd, gen, _ := s.tileset(name)
 	if rd == nil {
-		noGeneration(w, r)
+		missingTileset(w, r, gen)
 		return
 	}
 	h := rd.Header
