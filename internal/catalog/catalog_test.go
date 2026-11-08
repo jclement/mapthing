@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -185,4 +187,65 @@ func TestIDFromURL(t *testing.T) {
 	if got := IDFromURL("https://download.geofabrik.de/north-america/canada/alberta-latest.osm.pbf"); got != "north-america/canada/alberta" {
 		t.Error(got)
 	}
+}
+
+// Geofabrik answers HEAD with 307 → the dated file → 200 + Content-Length. WarmSizes must follow
+// that, cover every extract (not just one), persist sizes.json and reload it.
+func TestWarmSizesPersists(t *testing.T) {
+	var heads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && strings.HasSuffix(r.URL.Path, "-latest.osm.pbf"):
+			http.Redirect(w, r, strings.Replace(r.URL.Path, "-latest", "-261107", 1), http.StatusTemporaryRedirect)
+		case r.Method == http.MethodHead:
+			heads.Add(1)
+			w.Header().Set("Content-Length", strconv.Itoa(1000+len(r.URL.Path)))
+		default:
+			_, _ = w.Write([]byte(testIndex))
+		}
+	}))
+	defer srv.Close()
+	// Every request (including the index's real download.geofabrik.de URLs) goes to srv.
+	client := &http.Client{Transport: rewriteTransport{srv.URL}}
+	dir := t.TempDir()
+	c := New(dir)
+	c.IndexURL, c.Client = srv.URL, client
+	if err := c.Load(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WarmSizes(t.Context(), Filter{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := heads.Load(); got != 3 { // north-america, us, us/delaware
+		t.Errorf("HEADs = %d, want 3", got)
+	}
+	c2 := New(dir)
+	c2.IndexURL = srv.URL
+	if err := c2.Load(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range c2.Entries(Filter{}) {
+		if e.Size <= 1000 {
+			t.Errorf("%s size %d after reload", e.ID, e.Size)
+		}
+	}
+	// Fresh sizes are not fetched again.
+	if err := c2.WarmSizes(t.Context(), Filter{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := heads.Load(); got != 3 {
+		t.Errorf("cached sizes re-fetched (%d HEADs)", got)
+	}
+}
+
+type rewriteTransport struct{ base string }
+
+func (rt rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	u, err := url.Parse(rt.base)
+	if err != nil {
+		return nil, err
+	}
+	r = r.Clone(r.Context())
+	r.URL.Scheme, r.URL.Host, r.Host = u.Scheme, u.Host, u.Host
+	return http.DefaultTransport.RoundTrip(r)
 }
