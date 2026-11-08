@@ -57,6 +57,64 @@ at full detail is ~20 MB; a state or province at z14 is 100–470 MB.
 - **MapLibre Native** for the raster renderer, and a React + MapLibre GL JS admin UI that is
   compiled into the Go binary.
 
+## Running
+
+The image is published for `linux/amd64` and `linux/arm64`:
+
+```sh
+docker run -d --name mapthing --restart unless-stopped \
+  -p 8080:8080 -v mapthing-data:/data \
+  -e ADMIN_USER=admin -e ADMIN_PASSWORD='change-me' \
+  -e MAPTHING_PUBLIC_URL=https://maps.example.com \
+  ghcr.io/jclement/mapthing:latest
+```
+
+With Docker Compose:
+
+```yaml
+services:
+  mapthing:
+    image: ghcr.io/jclement/mapthing:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: change-me          # or use an env_file / secret
+      MAPTHING_PUBLIC_URL: https://maps.example.com   # optional; used in styles and TileJSON
+    volumes:
+      - mapthing-data:/data
+volumes:
+  mapthing-data:
+```
+
+Everything mapthing keeps lives in `/data`: downloaded extracts, the built generations, the
+SQLite database (keys, schedule, history) and caches. The container runs as UID 10001; a named
+volume just works, and for a bind mount make the directory writable by that UID
+(`chown 10001:10001 /srv/mapthing`) or pass `--user`.
+
+**Sizing.** A build needs roughly six times the size of the selected extracts in free disk, plus
+the elevation data, plus about 4 GB once for Planetiler's world-wide land, water and Natural Earth
+layers (downloaded on the first build and reused). Two good generations are kept. Planetiler is
+given 60% of available memory; large regions (a big US state or province) build comfortably with
+8–16 GB of RAM, and the build switches to disk-backed storage when memory is short. The build
+refuses to start, with a clear message, when the data volume is too small.
+
+**Environment.**
+
+| Variable | Default | |
+|---|---|---|
+| `ADMIN_USER`, `ADMIN_PASSWORD` | (required) | the admin login |
+| `MAPTHING_PUBLIC_URL` | from the request | external base URL written into styles and TileJSON |
+| `MAPTHING_DATA` | `/data` | data directory |
+| `MAPTHING_LISTEN` | `:8080` | listen address |
+| `MAPTHING_WATER_POLYGONS_URL`, `MAPTHING_LAND_POLYGONS_URL` | osmdata.openstreetmap.de | mirrors for Planetiler's ocean/land polygons |
+
+The image contains Valhalla 3.9.1, Planetiler with the Protomaps basemap profile (lightly patched
+for rural roads: see [docker/planetiler/PATCHES.md](docker/planetiler/PATCHES.md)), osmium, GDAL
+and the MapLibre Native renderer. Build it yourself with
+`docker build -t mapthing:dev -f docker/Dockerfile .`.
+
 ## Licence and data attribution
 
 Code: [MIT](LICENSE).

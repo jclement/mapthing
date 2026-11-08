@@ -29,12 +29,19 @@ swapped in.
 /data/
   mapthing.db                 SQLite: api keys (hashes), regions, schedule, jobs, history, usage
   downloads/<region>/         latest source extract per region (<region>.osm.pbf + meta.json)
-  elevation/cache/<source>/   raw DEM downloads (re-used across builds)
+  elevation/cache/<source>/   raw DEM downloads (re-used across builds; MAPTHING_ELEVATION_CACHE overrides)
+  cache/planetiler/           Planetiler auxiliary sources (Natural Earth, OSM water/land polygons,
+                              landcover, QRank, pgf-encoding), downloaded once with retries, re-used
+  cache/valhalla/             timezone database for valhalla_build_tiles
+  catalog/                    cached Geofabrik index-v1.json (refreshed weekly) and extract sizes
+  work/<gen-id>/              scratch for a build in progress (merged PBF, planetiler tmp, valhalla
+                              loose tiles); deleted when the build ends
   generations/<gen-id>/       one complete, self-consistent build of all installed regions
-      manifest.json           regions, source dates, sizes, timings, checks passed
+      manifest.json           regions, source dates, sizes, timings, checks passed, and "ocean":
+                              "osm" | "approximate:ne-10m" | "missing" (where ocean polygons came from)
       basemap.pmtiles         Protomaps v4 schema vector tiles (z0–15)
       terrain.pmtiles         elevation tiles (see Elevation) for profiles + hillshade
-      valhalla/               valhalla tiles + valhalla.json
+      valhalla/               tiles.tar + valhalla.json (point valhalla_service at this config)
   current -> generations/<gen-id>   atomic symlink swap
   imagery-cache/              cached satellite imagery tiles (bounded LRU)
   logs/
@@ -204,7 +211,7 @@ gravel/dirt.
 
 - Engine: Valhalla 3.9.1. Config = `valhalla_build_config` output deep-merged with
   `docker/valhalla/overrides.json`; the image carries `docker/valhalla/` at
-  `/usr/local/share/mapthing/valhalla/` (the overrides reference `default_speeds.json` there).
+  `/usr/share/mapthing/valhalla/` (the overrides reference `default_speeds.json` there).
   Build steps, paths and the reason for each override: `docker/valhalla/README.md`.
 - valhalla_service listens on `127.0.0.1:8002`; the Go client reads `MAPTHING_VALHALLA_URL`
   (default `http://127.0.0.1:8002`).
@@ -349,3 +356,42 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
 - `GET /admin/api/history?kind=&limit=` → `{history:[{id,at,kind,ok,message,job_id?,generation?,details?}]}`; `POST /admin/api/system/restart/{name}` → 204.
 - Keyed endpoints as the UI calls them: `POST /api/v1/route` → GeoJSON Feature (`geometry` LineString, `properties` = `{distance_m,duration_s,surface_breakdown_m,legs}`); the client flattens it.
   Route errors use codes `no_road` / `no_route`. `POST /api/v1/elevation` → `{results:[sample]}`; `POST /api/v1/elevation/profile` → the `elevation.Profile` JSON.
+
+- Errors: non-2xx with `{"error":{"code":"…","message":"…"}}` (a plain string `error` is accepted too).
+- `POST /admin/api/login` `{username,password}` → `{user}`; 401 on bad credentials. `POST /admin/api/logout` → 204.
+- `GET /admin/api/catalog` → `{entries:[{id,name,parent,bbox:[w,s,e,n],extract_bytes,elevation_sources:[id…]}], elevation_sources:[{id,name,resolution_m,license,attribution}]}`.
+  Grouping nodes (continent, country without its own extract) have `extract_bytes: 0`.
+- `GET /admin/api/regions` → `{regions:[{id,name,catalog_id|null,bbox,polygon?,status:"pending"|"installed"|"failed",extract_bytes,disk_bytes,data_date|null,downloaded_at|null,elevation_sources:[id…]}]}`;
+  `POST` `{id}` or `{name,bbox|polygon}` → 201 region (409 if already installed); `DELETE /{id}` → 204 (ids contain `/`, URL-encoded).
+- `POST /admin/api/build` `{refresh_downloads}` → 202 job.
+- Job: `{id,status:"queued"|"running"|"succeeded"|"failed"|"cancelled",trigger:"manual"|"schedule",refresh_downloads,created_at,started_at?,finished_at?,progress:0..1,stages:[{name,status:"pending"|"running"|"done"|"failed"|"skipped",progress,detail?,started_at?,finished_at?}],error?,generation_id?}`;
+  stage names `download, merge, basemap, routing, elevation, verify, swap`.
+  `GET /admin/api/jobs` → `{jobs:[…]}` newest first; `GET /admin/api/jobs/{id}` → job + `log:[{job_id,t,level,msg}]` (tail).
+- `GET /admin/api/events` (SSE): named events `job` (data: job), `log` (data: log line), `generation` (data: `{id}` when a generation goes live).
+- `GET /admin/api/generations` → `{generations:[{id,created_at,status:"live"|"kept",manifest:{regions:[{id,name,data_date}],sizes:{basemap,terrain,routing,total},timings:{stage:seconds},checks:[{name,ok,detail?}]}}]}`.
+- `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,refresh_downloads,regions:[{id,enabled}]}` (cron is 5-field, UTC).
+- `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}`;
+  `POST` `{label,rpm?,rpd?,origins?}` → 201 `{key,secret}`; `DELETE /{id}` → 204.
+- `GET /admin/api/stats` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state,pid|null,uptime_s,restarts,rss_bytes}]}`.
+- `GET /admin/api/system` → `{version,commit,build_date,components:[{name,version}],ready,readiness:[{name,ok,detail?}],disk:{free_bytes,total_bytes},current_generation|null,attribution:[{name,license,url?,note?}],imagery_source:{name,attribution,url?}|null}`.
+- Keyed endpoints as the UI calls them: `POST /api/v1/route` returns `geometry` as a GeoJSON LineString plus `surface_breakdown_m` (`paved|gravel|dirt|unknown` → metres);
+  route errors use codes `no_road` / `no_route`. `POST /api/v1/elevation` → `{results:[sample]}`; `POST /api/v1/elevation/profile` → the `elevation.Profile` JSON.
+
+
+## Build pipeline interfaces
+
+`internal/build.Builder.Run(ctx, rep, Options)` runs one generation build; `rep` is a
+`build.Reporter` (`Stage`, `Progress`, `Logf`; `*jobs.Job` satisfies it). Failure returns a
+`*build.StageError{Stage, Err, LogTail}`. Regions are `catalog.Region{ID, Name, BBox, Polygon, …}`;
+`Polygon` is lon/lat rings read with the even-odd rule (Geofabrik boundary, or the drawn custom
+polygon). The elevation package plugs in with `build.RegisterTerrain`,
+`build.RegisterTerrainEstimate` and `build.RegisterElevationCheck` from an `init()` in
+`internal/build/terrain*.go`. Valhalla settings: `docker/valhalla/overrides.json` is deep-merged over
+`valhalla_build_config` output. Planetiler runs the Protomaps profile with the patches in
+`docker/planetiler/` (see PATCHES.md: `surface`, `surface_raw`, `tracktype`, `access` attributes on
+roads; private and rural service roads at their normal zooms).
+
+When osmdata.openstreetmap.de is unreachable after retries (or `MAPTHING_WATER_POLYGONS_URL` /
+`MAPTHING_LAND_POLYGONS_URL` mirrors fail), the build uses Natural Earth 10m ocean/land clipped to
+the regions (manifest `ocean: approximate:ne-10m`); if that fails too it builds without high-zoom
+ocean (`ocean: missing`). The admin UI should surface a non-`osm` value.

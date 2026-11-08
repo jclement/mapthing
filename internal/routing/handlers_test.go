@@ -61,7 +61,7 @@ func TestPassthrough(t *testing.T) {
 	if rec := do(t, c, "POST", "/api/v1/valhalla/tile", `{}`, nil); rec.Code != 400 {
 		t.Errorf("non-allowlisted action: %d", rec.Code)
 	}
-	if rec := do(t, c, "DELETE", "/api/v1/valhalla/route", ``, nil); rec.Code != 400 {
+	if rec := do(t, c, "DELETE", "/api/v1/valhalla/route", ``, nil); rec.Code != http.StatusMethodNotAllowed { // mux: GET/POST only
 		t.Errorf("DELETE: %d", rec.Code)
 	}
 }

@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 
+	"github.com/jclement/mapthing/internal/catalog"
 	"github.com/jclement/mapthing/internal/config"
 	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/jobs"
+	"github.com/jclement/mapthing/internal/routing"
 	"github.com/jclement/mapthing/internal/server"
 	"github.com/jclement/mapthing/internal/store"
 	"github.com/jclement/mapthing/internal/supervisor"
@@ -24,16 +26,24 @@ type features struct {
 }
 
 func (f *features) wire(ctx context.Context, d *server.Deps) error {
-	_ = ctx
 	// Swap hook for the build: after the pipeline moves the current symlink it calls
 	// Options.Restart; this applies the swap at once (tiles reopen, children restart).
 	restart := func(ctx context.Context) error {
 		f.watcher.Check(ctx)
 		return nil
 	}
-	_ = restart
+	// Pipeline: build job, catalog, region validation (cmd/mapthing/pipeline.go).
+	f.wirePipeline(ctx, d, restart, func(b catalog.BBox) []string { return elevation.CoverageIDs(b) })
 
-	// Pipeline (merge): register the build job and the catalog, e.g.
+	// Routing (wired with the pipeline so the smoke test can route).
+	router := routing.New(f.cfg.ValhallaURL)
+	d.Mounts = append(d.Mounts, routing.NewHandlers(router))
+	if d.ReadyChecks == nil {
+		d.ReadyChecks = map[string]func(context.Context) bool{}
+	}
+	d.ReadyChecks["routing"] = router.Ready
+
+	// (Original pipeline merge notes, now implemented in pipeline.go:)
 	//
 	//	b := build.New(build.Config{DataDir: f.cfg.DataDir, Store: f.store, Catalog: cat})
 	//	f.runner.Register("build", func(ctx context.Context, j *jobs.Job) error {

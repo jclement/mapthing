@@ -1,0 +1,271 @@
+// Package build produces generations: it refreshes region downloads, merges them, runs
+// Planetiler (Protomaps profile), builds the Valhalla graph and the terrain archive, verifies the
+// result and atomically swaps /data/current to it. See docs/architecture.md.
+package build
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jclement/mapthing/internal/catalog"
+)
+
+// Reporter receives progress and log lines for a build. The jobs runner implements it.
+type Reporter interface {
+	Stage(name string)                 // a new stage begins
+	Progress(frac float64, msg string) // 0..1 within the current stage
+	Logf(format string, args ...any)   // one log line
+}
+
+// Stage names, in order.
+const (
+	StageGuard     = "guard"
+	StageDownload  = "download"
+	StageMerge     = "merge"
+	StageBasemap   = "basemap"
+	StageValhalla  = "valhalla"
+	StageTerrain   = "terrain"
+	StageVerify    = "verify"
+	StageSwap      = "swap"
+	StageRetention = "retention"
+)
+
+// StageError is returned when a stage fails; LogTail holds the last lines of output for history.
+type StageError struct {
+	Stage   string
+	Err     error
+	LogTail []string
+}
+
+func (e *StageError) Error() string { return fmt.Sprintf("build stage %s: %v", e.Stage, e.Err) }
+func (e *StageError) Unwrap() error { return e.Err }
+
+// ErrBusy means another build is running.
+var ErrBusy = errors.New("build: another build is already running")
+
+// Options controls one build.
+type Options struct {
+	Regions []catalog.Region
+	// Refresh re-checks every download for a newer extract; false only downloads missing files.
+	Refresh bool
+	// SkipRefresh lists region ids excluded from Refresh (their refresh is disabled).
+	SkipRefresh map[string]bool
+	// Restart is called after the swap so the supervisor restarts valhalla and the renderer.
+	Restart func(ctx context.Context) error
+	// KeepWork leaves the work directory for debugging.
+	KeepWork bool
+}
+
+// Builder runs builds against one data directory. Safe for concurrent use; builds serialise.
+type Builder struct {
+	DataDir string
+	Tools   Tools
+	// HTTP is used for downloads; nil uses a default client.
+	HTTP *http.Client
+	// Now is the clock (tests).
+	Now func() time.Time
+
+	mu sync.Mutex
+
+	hostMu      sync.Mutex
+	failedHosts map[string]time.Time // source hosts that exhausted their retry budget
+}
+
+// New returns a Builder with tool paths from the environment.
+func New(dataDir string) *Builder {
+	return &Builder{DataDir: dataDir, Tools: ToolsFromEnv()}
+}
+
+func (b *Builder) now() time.Time {
+	if b.Now != nil {
+		return b.Now()
+	}
+	return time.Now()
+}
+
+// Paths under the data directory.
+func (b *Builder) downloadsDir() string   { return filepath.Join(b.DataDir, "downloads") }
+func (b *Builder) generationsDir() string { return filepath.Join(b.DataDir, "generations") }
+func (b *Builder) workRoot() string       { return filepath.Join(b.DataDir, "work") }
+func (b *Builder) currentLink() string    { return filepath.Join(b.DataDir, "current") }
+func (b *Builder) sourcesDir() string     { return filepath.Join(b.DataDir, "cache", "planetiler") }
+
+// Run performs a whole build. On success the new generation is live and its manifest is
+// returned. On failure the live generation is untouched, the new one is deleted and a
+// *StageError says which stage failed.
+func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest, error) {
+	if !b.mu.TryLock() {
+		return nil, ErrBusy
+	}
+	defer b.mu.Unlock()
+	if len(opt.Regions) == 0 {
+		return nil, &StageError{Stage: StageGuard, Err: errors.New("no regions installed")}
+	}
+
+	start := b.now().UTC()
+	genID := start.Format("20060102T150405Z")
+	genDir := filepath.Join(b.generationsDir(), genID)
+	workDir := filepath.Join(b.workRoot(), genID)
+	m := &Manifest{Generation: genID, CreatedAt: start, Artifacts: map[string]int64{}, Image: imageInfo(b.Tools)}
+	for _, r := range opt.Regions {
+		m.Regions = append(m.Regions, ManifestRegion{ID: r.ID, Name: r.Name, BBox: r.BBox})
+	}
+	st := &state{b: b, rep: rep, opt: opt, genDir: genDir, workDir: workDir, m: m, tail: newRing(60)}
+
+	err := st.run(ctx)
+	m.TotalS = b.now().Sub(start).Seconds()
+	if !opt.KeepWork {
+		_ = os.RemoveAll(workDir)
+	}
+	if err != nil {
+		_ = os.RemoveAll(genDir)
+		var se *StageError
+		if errors.As(err, &se) && se.LogTail == nil {
+			se.LogTail = st.tail.lines()
+		}
+		return m, err
+	}
+	return m, nil
+}
+
+// state is one build in progress.
+type state struct {
+	b       *Builder
+	rep     Reporter
+	opt     Options
+	genDir  string
+	workDir string
+	m       *Manifest
+	tail    *ring
+
+	sources []string // per region pbf path, aligned with opt.Regions
+	merged  string
+	peakKB  int64 // peak RSS of subprocesses in the current stage
+	terrain bool
+}
+
+func (s *state) logf(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	s.tail.add(line)
+	s.rep.Logf("%s", line)
+}
+
+func (s *state) run(ctx context.Context) error {
+	stages := []struct {
+		name string
+		fn   func(context.Context) error
+	}{
+		{StageGuard, s.guard},
+		{StageDownload, s.download},
+		{StageMerge, s.merge},
+		{StageBasemap, s.basemap},
+		{StageValhalla, s.valhalla},
+		{StageTerrain, s.terrainStage},
+		{StageVerify, s.verify},
+		{StageSwap, s.swap},
+		{StageRetention, s.retention},
+	}
+	for _, stg := range stages {
+		if err := ctx.Err(); err != nil {
+			return &StageError{Stage: stg.name, Err: err}
+		}
+		s.rep.Stage(stg.name)
+		s.peakKB = 0
+		t0 := time.Now()
+		s.logf("== stage %s", stg.name)
+		err := stg.fn(ctx)
+		res := StageResult{Name: stg.name, DurationS: time.Since(t0).Seconds(), PeakRSSKB: s.peakKB}
+		if errors.Is(err, errSkipped) {
+			res.Skipped = true
+			err = nil
+		}
+		if err != nil {
+			res.Error = err.Error()
+		}
+		s.m.Stages = append(s.m.Stages, res)
+		if err != nil {
+			s.logf("stage %s failed: %v", stg.name, err)
+			return &StageError{Stage: stg.name, Err: err}
+		}
+		s.logf("stage %s done in %.1fs", stg.name, res.DurationS)
+	}
+	return nil
+}
+
+var errSkipped = errors.New("skipped")
+
+func (s *state) merge(ctx context.Context) error {
+	if err := os.MkdirAll(s.workDir, 0o755); err != nil {
+		return err
+	}
+	if len(s.sources) == 1 {
+		s.merged = s.sources[0]
+		s.logf("single region: using %s directly", s.merged)
+		return nil
+	}
+	s.merged = filepath.Join(s.workDir, "merged.osm.pbf")
+	args := append([]string{"merge", "--overwrite", "-o", s.merged}, s.sources...)
+	if err := s.exec(ctx, s.workDir, s.b.Tools.Osmium, args...); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *state) terrainStage(ctx context.Context) error {
+	f := hooks.terrain()
+	if f == nil {
+		s.logf("no terrain builder registered; skipping")
+		return errSkipped
+	}
+	wd := filepath.Join(s.workDir, "terrain")
+	if err := os.MkdirAll(wd, 0o755); err != nil {
+		return err
+	}
+	out := filepath.Join(s.genDir, "terrain.pmtiles")
+	if err := f(ctx, &stageReporter{s}, s.opt.Regions, wd, out); err != nil {
+		return err
+	}
+	if st, err := os.Stat(out); err == nil {
+		s.m.Artifacts["terrain.pmtiles"] = st.Size()
+	}
+	s.terrain = true
+	return nil
+}
+
+// stageReporter forwards a hook's output into the build's log tail.
+type stageReporter struct{ s *state }
+
+func (r *stageReporter) Stage(name string)               { r.s.logf("-- %s", name) }
+func (r *stageReporter) Progress(f float64, msg string)  { r.s.rep.Progress(f, msg) }
+func (r *stageReporter) Logf(format string, args ...any) { r.s.logf(format, args...) }
+
+// ring keeps the last n lines.
+type ring struct {
+	mu  sync.Mutex
+	buf []string
+	n   int
+}
+
+func newRing(n int) *ring { return &ring{n: n} }
+
+func (r *ring) add(line string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf = append(r.buf, strings.TrimRight(line, "\r\n"))
+	if len(r.buf) > r.n {
+		r.buf = r.buf[len(r.buf)-r.n:]
+	}
+}
+
+func (r *ring) lines() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.buf...)
+}

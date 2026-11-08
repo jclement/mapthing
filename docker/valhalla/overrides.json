@@ -22,7 +22,7 @@
       "allow_alt_name": true,
       "use_direction_on_ways": false
     },
-    "default_speeds_config": "/usr/local/share/mapthing/valhalla/default_speeds.json"
+    "default_speeds_config": "/usr/share/mapthing/valhalla/default_speeds.json"
   },
   "loki": {
     "service_defaults": {
