@@ -40,8 +40,8 @@
    ],
    "tileSize": 256,
    "minzoom": 0,
-   "maxzoom": 18,
-   "attribution": "Imagery: <a href=\"https://www.usgs.gov/programs/national-geospatial-program/national-map\" target=\"_blank\">USGS The National Map</a>; <a href=\"https://s2maps.eu\" target=\"_blank\">Sentinel-2 cloudless by EOX IT Services GmbH</a> (contains modified Copernicus Sentinel data)"
+   "maxzoom": 16,
+   "attribution": "Imagery: <a href=\"https://www.usgs.gov/programs/national-geospatial-program/national-map\" target=\"_blank\">USGS The National Map</a>; <a href=\"https://s2maps.eu\" target=\"_blank\">Sentinel-2 cloudless</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0)"
   }
  },
  "layers": [
