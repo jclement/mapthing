@@ -127,6 +127,13 @@ func (b *Builder) EstimateFor(opt Options) DiskEstimate {
 		e.MergeBytes = e.InputBytes
 		item("merged input: %s", humanBytes(e.MergeBytes))
 	}
+	if opt.StopAfter == StageGuard || opt.StopAfter == StageDownload || opt.StopAfter == StageMerge {
+		// A build that stops before the basemap needs only its downloads, clips and merge.
+		e.NeedBytes = int64(float64(e.DownloadBytes+e.ClipBytes+e.MergeBytes) * e.Factor)
+		item("stopping after %s: no tile, routing or terrain build", opt.StopAfter)
+		e.FreeBytes = freeBytes(b.DataDir)
+		return e
+	}
 	e.WorkBytes = max(e.InputBytes*workFactor, minWorkBytes)
 	item("build scratch and outputs: %s (max(input %s × %d, %s))", humanBytes(e.WorkBytes),
 		humanBytes(e.InputBytes), workFactor, humanBytes(minWorkBytes))

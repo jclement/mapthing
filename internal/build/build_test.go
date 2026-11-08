@@ -852,3 +852,18 @@ func TestCustomRegionMultiParentSharedDownloads(t *testing.T) {
 		t.Error("clip parts left behind")
 	}
 }
+
+func TestStopAfterMerge(t *testing.T) {
+	e := newEnv(t)
+	rep := &testRep{}
+	m, err := e.b.Run(context.Background(), rep, Options{Regions: []catalog.Region{e.region}, StopAfter: StageMerge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rep.stages[len(rep.stages)-1]; got != StageMerge || m.OK {
+		t.Errorf("last stage %s, ok %v", got, m.OK)
+	}
+	if e.b.CurrentGeneration() != "" || len(e.b.Generations()) != 0 {
+		t.Error("a stopped build left a generation")
+	}
+}

@@ -61,6 +61,9 @@ type Options struct {
 	Restart func(ctx context.Context) error
 	// KeepWork leaves the work directory for debugging.
 	KeepWork bool
+	// StopAfter ends the build cleanly after the named stage (development: e.g. "merge" to check
+	// downloads and clips without building tiles). Nothing is swapped in.
+	StopAfter string
 }
 
 // Builder runs builds against one data directory. Safe for concurrent use; builds serialise.
@@ -120,9 +123,17 @@ func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest
 	st := &state{b: b, rep: rep, opt: opt, genDir: genDir, workDir: workDir, m: m, tail: newRing(60)}
 
 	err := st.run(ctx)
+	stoppedEarly := errors.Is(err, errStoppedEarly)
+	if stoppedEarly {
+		err = nil
+	}
 	m.TotalS = b.now().Sub(start).Seconds()
 	if !opt.KeepWork {
 		_ = os.RemoveAll(workDir)
+	}
+	if stoppedEarly {
+		_ = os.RemoveAll(genDir)
+		return m, nil
 	}
 	if err != nil {
 		_ = os.RemoveAll(genDir)
@@ -196,11 +207,18 @@ func (s *state) run(ctx context.Context) error {
 			return &StageError{Stage: stg.name, Err: err}
 		}
 		s.logf("stage %s done in %.1fs", stg.name, res.DurationS)
+		if stg.name == s.opt.StopAfter {
+			s.logf("stopping after %s as asked; nothing swapped in", stg.name)
+			return errStoppedEarly
+		}
 	}
 	return nil
 }
 
-var errSkipped = errors.New("skipped")
+var (
+	errSkipped      = errors.New("skipped")
+	errStoppedEarly = errors.New("stopped early")
+)
 
 func (s *state) merge(ctx context.Context) error {
 	if err := os.MkdirAll(s.workDir, 0o755); err != nil {
