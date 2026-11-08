@@ -290,6 +290,9 @@ func TestRunSuccess(t *testing.T) {
 	if len(disk.Checks) < 4 { // basemap, tile, route, elevation
 		t.Errorf("checks %+v", disk.Checks)
 	}
+	if disk.Artifacts["terrain.pmtiles"] == 0 || disk.TotalS <= 0 {
+		t.Errorf("manifest artifacts %v total_s %v", disk.Artifacts, disk.TotalS)
+	}
 	for _, f := range []string{"basemap.pmtiles", "terrain.pmtiles", "valhalla/valhalla.json", "valhalla/tiles.tar"} {
 		if _, err := os.Stat(filepath.Join(e.b.DataDir, "current", f)); err != nil {
 			t.Errorf("missing %s", f)

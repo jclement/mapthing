@@ -232,6 +232,9 @@ func (s *state) terrainStage(ctx context.Context) error {
 	if err := f(ctx, &stageReporter{s}, s.opt.Regions, wd, out); err != nil {
 		return err
 	}
+	if st, err := os.Stat(out); err == nil {
+		s.m.Artifacts["terrain.pmtiles"] = st.Size()
+	}
 	s.terrain = true
 	return nil
 }

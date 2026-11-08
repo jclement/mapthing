@@ -76,6 +76,7 @@ func writeManifest(genDir string, m *Manifest) error {
 // supervisor to restart the children.
 func (s *state) swap(ctx context.Context) error {
 	s.m.OK = true
+	s.m.TotalS = s.b.now().Sub(s.m.CreatedAt).Seconds() // up to the swap; Run updates the returned copy
 	// Stage timings for swap/retention are appended after this write; the manifest on disk
 	// records everything up to and including verify, which is what matters.
 	if err := writeManifest(s.genDir, s.m); err != nil {
