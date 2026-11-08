@@ -399,14 +399,14 @@ func TestCustomRegionClipsFromParent(t *testing.T) {
 	e := newEnv(t)
 	custom := catalog.Region{
 		ID: "custom/kent-county", Name: "Kent County", BBox: catalog.BBox{-75.75, 38.8, -75.3, 39.4},
-		Custom: &catalog.Custom{Parent: e.region},
+		Custom: &catalog.Custom{Parents: []catalog.Region{e.region}},
 	}
 	rep := &testRep{}
 	m, err := e.b.Run(context.Background(), rep, Options{Regions: []catalog.Region{custom}})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, strings.Join(rep.logs, "\n"))
 	}
-	if !rep.has("extract --overwrite -f pbf") || !rep.has("-b -75.75,38.8,-75.3,39.4") {
+	if !rep.has("extract --overwrite -o") || !rep.has("-b -75.75,38.8,-75.3,39.4") {
 		t.Error("osmium extract not run with bbox")
 	}
 	if m.Regions[0].Source != e.region.PBFURL {
@@ -720,7 +720,7 @@ func TestDiskGuardItemised(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		w := -105 + float64(i)*2
 		regions = append(regions, catalog.Region{ID: fmt.Sprintf("custom/box-%d", i), Name: "box",
-			BBox: catalog.BBox{w, 31, w + 1, 32}, Custom: &catalog.Custom{Parent: texas}})
+			BBox: catalog.BBox{w, 31, w + 1, 32}, Custom: &catalog.Custom{Parents: []catalog.Region{texas}}})
 	}
 	est := e.b.Estimate(regions)
 	if est.DownloadBytes != 700<<20 {
@@ -737,8 +737,18 @@ func TestDiskGuardItemised(t *testing.T) {
 	if est.NeedBytes != want || est.Factor != 1 {
 		t.Errorf("need %d, want %d (factor %v)", est.NeedBytes, want, est.Factor)
 	}
-	if est.NeedBytes > 1<<30 {
+	// Small input: the scratch floor (3 GiB) plus the Natural Earth unpack (1 GiB) apply.
+	if est.WorkBytes != minWorkBytes+naturalEarthUnpackBytes {
+		t.Errorf("work %s, want floor 3 GiB + 1 GiB unpack", humanBytes(est.WorkBytes))
+	}
+	if est.NeedBytes > 6<<30 {
 		t.Errorf("five small Texas boxes need %s; the old guard said ~22 GiB", humanBytes(est.NeedBytes))
+	}
+	// A big input scales past the floor: 1 GiB extract → 6 GiB scratch.
+	big := e.region
+	big.SizeHint = 1 << 30
+	if w := e.b.Estimate([]catalog.Region{big}).WorkBytes; w != 6<<30+naturalEarthUnpackBytes {
+		t.Errorf("work for 1 GiB input %s, want 6 GiB + 1 GiB", humanBytes(w))
 	}
 
 	t.Setenv("MAPTHING_DISK_GUARD_FACTOR", "0.5")
@@ -760,11 +770,22 @@ func TestDiskGuardSourcesAndReuse(t *testing.T) {
 	if est.SourcesBytes != (900+800)<<20 {
 		t.Errorf("sources %s, want water+land", humanBytes(est.SourcesBytes))
 	}
-	// osmdata known down → the Natural Earth fallback will be used: no reservation.
+	// osmdata known down → the Natural Earth fallback will be used: no reservation, and a fresh
+	// process (restart, new image) on the same data volume knows it too.
 	e.b.markHostFailed("osmdata.openstreetmap.de")
-	est = e.b.Estimate([]catalog.Region{e.region})
-	if est.SourcesBytes != 0 || !strings.Contains(strings.Join(est.Items, "\n"), "Natural Earth fallback") {
-		t.Errorf("sources %s items %v", humanBytes(est.SourcesBytes), est.Items)
+	for _, b := range []*Builder{e.b, {DataDir: e.b.DataDir}} {
+		est = b.Estimate([]catalog.Region{e.region})
+		if est.SourcesBytes != 0 || !strings.Contains(strings.Join(est.Items, "\n"), "Natural Earth fallback") {
+			t.Errorf("sources %s items %v", humanBytes(est.SourcesBytes), est.Items)
+		}
+	}
+	e.b.clearHostFailed("osmdata.openstreetmap.de")
+	if _, down := (&Builder{DataDir: e.b.DataDir}).hostFailedAt("osmdata.openstreetmap.de"); down {
+		t.Error("marker not cleared")
+	}
+	// Cached again, so the builds below never reach the network.
+	for _, f := range []string{"water-polygons-split-3857.zip", "land-polygons-split-3857.zip"} {
+		_ = os.WriteFile(filepath.Join(e.b.sourcesDir(), f), []byte("cached"), 0o644)
 	}
 	// An extract already on disk costs nothing to download unless refreshing.
 	if _, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}}); err != nil {
@@ -782,5 +803,67 @@ func TestDiskGuardSourcesAndReuse(t *testing.T) {
 	}
 	if !rep.has("disk: reuse north-america/us/delaware") || !rep.has("disk: need ~") {
 		t.Error("itemised estimate not in the job log")
+	}
+}
+
+func TestCustomRegionMultiParentSharedDownloads(t *testing.T) {
+	e := newEnv(t)
+	// A second "state" served by the same fake Geofabrik URL under another id.
+	md := e.region
+	md.ID, md.Name = "north-america/us/maryland", "Maryland"
+	acrossLine := catalog.Region{
+		ID: "custom/de-md-line", Name: "DE/MD line", BBox: catalog.BBox{-75.9, 38.6, -75.6, 38.8},
+		Custom: &catalog.Custom{Parents: []catalog.Region{e.region, md}},
+	}
+	insideDE := catalog.Region{
+		ID: "custom/kent", Name: "Kent", BBox: catalog.BBox{-75.7, 38.9, -75.4, 39.2},
+		Custom: &catalog.Custom{Parents: []catalog.Region{e.region}},
+	}
+	regions := []catalog.Region{acrossLine, insideDE, e.region}
+
+	est := e.b.Estimate(regions)
+	if est.DownloadBytes != 2*e.region.SizeHint { // delaware + maryland, each once
+		t.Errorf("estimate counts %d bytes of extracts, want %d", est.DownloadBytes, 2*e.region.SizeHint)
+	}
+
+	rep := &testRep{}
+	m, err := e.b.Run(context.Background(), rep, Options{Regions: regions, Refresh: true})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(rep.logs, "\n"))
+	}
+	// Two extracts (delaware, maryland), each fetched once although delaware feeds three regions.
+	if got := e.pbfGets.Load(); got != 2 {
+		t.Errorf("extract downloads = %d, want 2", got)
+	}
+	if !rep.has("custom/de-md-line: clipped from north-america/us/delaware + north-america/us/maryland") {
+		t.Error("multi-parent clip not logged")
+	}
+	if !rep.has("osmium merge ok") {
+		t.Error("clips not merged")
+	}
+	if got := m.Regions[0].Parents; len(got) != 2 {
+		t.Errorf("manifest parents %v", got)
+	}
+	meta, err := readMeta(e.b.RegionDir(acrossLine.ID))
+	if err != nil || !strings.Contains(meta.ParentMD5, "maryland:") || len(meta.Parents) != 2 {
+		t.Errorf("clip meta %+v err %v", meta, err)
+	}
+	if _, err := os.Stat(filepath.Join(e.b.RegionDir(acrossLine.ID), "parts")); !os.IsNotExist(err) {
+		t.Error("clip parts left behind")
+	}
+}
+
+func TestStopAfterMerge(t *testing.T) {
+	e := newEnv(t)
+	rep := &testRep{}
+	m, err := e.b.Run(context.Background(), rep, Options{Regions: []catalog.Region{e.region}, StopAfter: StageMerge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rep.stages[len(rep.stages)-1]; got != StageMerge || m.OK {
+		t.Errorf("last stage %s, ok %v", got, m.OK)
+	}
+	if e.b.CurrentGeneration() != "" || len(e.b.Generations()) != 0 {
+		t.Error("a stopped build left a generation")
 	}
 }

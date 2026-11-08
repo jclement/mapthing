@@ -39,6 +39,7 @@ type ManifestRegion struct {
 	Sequence        int64        `json:"sequence,omitempty"`
 	SizeBytes       int64        `json:"size_bytes"`
 	MD5             string       `json:"md5,omitempty"`
+	Parents         []string     `json:"parents,omitempty"` // custom regions: extracts clipped from
 }
 
 // StageResult is the timing of one stage.

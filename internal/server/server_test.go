@@ -123,7 +123,7 @@ func sortIDs(a []uint64) {
 	}
 }
 
-func newEnv(t *testing.T, withGeneration bool) *env {
+func newEnv(t *testing.T, withGeneration bool, opts ...func(*Deps)) *env {
 	t.Helper()
 	dir := t.TempDir()
 	if withGeneration {
@@ -161,8 +161,12 @@ func newEnv(t *testing.T, withGeneration bool) *env {
 		t.Fatal(err)
 	}
 	sup := supervisor.New("")
-	srv := New(Deps{DataDir: dir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner, Scheduler: sched,
-		Supervisor: sup, Tiles: ts, Assets: testAssets, UI: fstest.MapFS{"index.html": {Data: []byte("<html>ui</html>")}, "assets/app-123.js": {Data: []byte("js")}}})
+	deps := Deps{DataDir: dir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner, Scheduler: sched,
+		Supervisor: sup, Tiles: ts, Assets: testAssets, UI: fstest.MapFS{"index.html": {Data: []byte("<html>ui</html>")}, "assets/app-123.js": {Data: []byte("js")}}}
+	for _, o := range opts {
+		o(&deps)
+	}
+	srv := New(deps)
 	if err := runner.Start(ctx); err != nil {
 		t.Fatal(err)
 	}

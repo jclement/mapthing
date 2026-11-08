@@ -3,6 +3,7 @@
 // into the production build (see main.tsx).
 import type {
   ApiKey,
+  BBox,
   CreatedKey,
   ElevationSample,
   Generation,
@@ -458,6 +459,33 @@ on("GET", /^\/admin\/api\/catalog$/, () => ({
   entries: fx.catalog,
   elevation_sources: fx.elevationSources,
 }));
+// Mock cover planner: the state/province extracts whose bbox overlaps the area.
+function mockCover(bbox: BBox) {
+  const overlaps = (b: BBox) =>
+    b[0] < bbox[2] && bbox[0] < b[2] && b[1] < bbox[3] && bbox[1] < b[3];
+  const parents = fx.catalog
+    .filter(
+      (e) => /^north-america\/(us|canada)\//.test(e.id) && e.extract_bytes > 0 && overlaps(e.bbox),
+    )
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((e) => ({ id: e.id, name: e.name, bytes: e.extract_bytes }));
+  return {
+    parents,
+    total_bytes: parents.reduce((n, p) => n + p.bytes, 0),
+    single_best: { id: "north-america/us", name: "United States", bytes: 11.7e9 },
+    elevation_sources: [sourceAt([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]).source],
+  };
+}
+on("POST", /^\/admin\/api\/catalog\/estimate$/, (_m, b) => {
+  const body = b as { bbox?: BBox; polygon?: LonLat[] };
+  const bbox = body.bbox ?? bboxOf(body.polygon ?? []);
+  const est = mockCover(bbox);
+  if (est.parents.length === 0)
+    return json(400, {
+      error: { code: "not_covered", message: "No Geofabrik extract covers that area" },
+    });
+  return est;
+});
 on("GET", /^\/admin\/api\/regions$/, () => ({ regions: S.regions }));
 on("POST", /^\/admin\/api\/regions$/, (_m, b) => {
   const nr = b as NewRegion;

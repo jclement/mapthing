@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/jclement/mapthing/internal/catalog"
@@ -16,8 +17,17 @@ import (
 const unknownPBFBytes = 512 << 20
 
 // workFactor is the scratch and output a build needs per byte of merged OSM input: Planetiler's
-// temporary store and the basemap, Valhalla's loose tiles and tar.
-const workFactor = 4
+// temporary feature store (its sort spills to --tmpdir even with storage=ram) and the basemap,
+// Valhalla's loose tiles and tar. minWorkBytes is the floor for small inputs: a 190 MiB input
+// measured ≥ 2.5 GB of Planetiler temp files alone.
+const (
+	workFactor   = 6
+	minWorkBytes = 3 << 30
+)
+
+// naturalEarthUnpackBytes is the Natural Earth GeoPackage Planetiler unpacks into its temp
+// directory on every build (~0.85 GB measured).
+const naturalEarthUnpackBytes = 1 << 30
 
 // DiskEstimate is what a build is expected to need on the data volume, itemised.
 type DiskEstimate struct {
@@ -86,25 +96,49 @@ func (b *Builder) EstimateFor(opt Options) DiskEstimate {
 			e.InputBytes += download(r)
 			continue
 		}
-		parent := r.Custom.Parent
-		parentBytes := download(parent)
+		type share struct {
+			id    string
+			bytes int64
+			frac  float64
+		}
+		var shares []share
+		for _, parent := range r.Custom.Parents {
+			shares = append(shares, share{parent.ID, download(parent), clipFraction(r, parent)})
+		}
 		if st, err := os.Stat(b.regionFile(r.ID)); err == nil {
 			e.InputBytes += st.Size()
 			item("clip %s: %s on disk", r.ID, humanBytes(st.Size()))
 			continue
 		}
-		frac := clipFraction(r, parent)
-		clip := max(int64(float64(parentBytes)*frac), 1<<20)
+		// A multi-parent clip is the sum of its share of each parent (the merge removes the few
+		// objects along the shared border that both clips contain).
+		var clip int64
+		var parts []string
+		for _, sh := range shares {
+			clip += int64(float64(sh.bytes) * sh.frac)
+			parts = append(parts, fmt.Sprintf("%.1f%% of %s", sh.frac*100, sh.id))
+		}
+		clip = max(clip, 1<<20)
 		e.ClipBytes += clip
 		e.InputBytes += clip
-		item("clip %s: %s (%.1f%% of %s)", r.ID, humanBytes(clip), frac*100, parent.ID)
+		item("clip %s: %s (%s)", r.ID, humanBytes(clip), strings.Join(parts, " + "))
 	}
 	if len(opt.Regions) > 1 {
 		e.MergeBytes = e.InputBytes
 		item("merged input: %s", humanBytes(e.MergeBytes))
 	}
-	e.WorkBytes = e.InputBytes * workFactor
-	item("build scratch and outputs: %s (input %s × %d)", humanBytes(e.WorkBytes), humanBytes(e.InputBytes), workFactor)
+	if opt.StopAfter == StageGuard || opt.StopAfter == StageDownload || opt.StopAfter == StageMerge {
+		// A build that stops before the basemap needs only its downloads, clips and merge.
+		e.NeedBytes = int64(float64(e.DownloadBytes+e.ClipBytes+e.MergeBytes) * e.Factor)
+		item("stopping after %s: no tile, routing or terrain build", opt.StopAfter)
+		e.FreeBytes = freeBytes(b.DataDir)
+		return e
+	}
+	e.WorkBytes = max(e.InputBytes*workFactor, minWorkBytes)
+	item("build scratch and outputs: %s (max(input %s × %d, %s))", humanBytes(e.WorkBytes),
+		humanBytes(e.InputBytes), workFactor, humanBytes(minWorkBytes))
+	e.WorkBytes += naturalEarthUnpackBytes
+	item("planetiler Natural Earth unpack: %s", humanBytes(naturalEarthUnpackBytes))
 	if f := hooks.terrainEstimate(); f != nil {
 		e.TerrainBytes = f(opt.Regions)
 		item("terrain: %s", humanBytes(e.TerrainBytes))

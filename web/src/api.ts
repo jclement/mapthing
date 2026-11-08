@@ -77,6 +77,23 @@ export interface Catalog {
   elevation_sources: ElevationSource[];
 }
 
+/** One Geofabrik extract a custom region is clipped from. */
+export interface CatalogParent {
+  id: string;
+  name: string;
+  bytes: number;
+  estimated?: boolean; // size guessed from area
+}
+
+/** POST /admin/api/catalog/estimate: the cheapest set of extracts covering a custom area. */
+export interface CustomEstimate {
+  parents: CatalogParent[];
+  total_bytes: number; // download: every parent extract
+  estimated?: boolean;
+  single_best?: CatalogParent; // cheapest single extract covering it alone
+  elevation_sources: string[];
+}
+
 export interface Region {
   id: string;
   name: string;
@@ -89,6 +106,7 @@ export interface Region {
   data_date: string | null; // OSM data timestamp of the downloaded extract
   downloaded_at: string | null;
   elevation_sources: string[];
+  parents?: CatalogParent[]; // custom regions: extracts clipped from
 }
 
 export type NewRegion = { id: string } | { name: string; bbox: BBox; polygon?: LonLat[] };
@@ -318,6 +336,8 @@ export const api = {
   catalog: () => request<Catalog>("GET", "/admin/api/catalog"),
   regions: () => request<{ regions: Region[] }>("GET", "/admin/api/regions"),
   addRegion: (r: NewRegion) => request<Region>("POST", "/admin/api/regions", r),
+  estimateCustom: (a: { bbox?: BBox; polygon?: LonLat[] }) =>
+    request<CustomEstimate>("POST", "/admin/api/catalog/estimate", a),
   removeRegion: (id: string) =>
     request<void>("DELETE", `/admin/api/regions/${encodeURIComponent(id)}`),
 

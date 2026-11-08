@@ -72,6 +72,33 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 		return server.CatalogRegion{Name: e.Name, Parent: e.Parent, BBox: e.BBox[:],
 			ExtractBytes: e.Size, ElevationSources: e.ElevationSources}, nil
 	}
+	d.EstimateCustom = func(ctx context.Context, bbox []float64, ring [][2]float64) (server.CustomEstimate, error) {
+		if err := cat.Ensure(ctx); err != nil {
+			return server.CustomEstimate{}, err
+		}
+		box, poly := customArea(bbox, ring)
+		plan, err := cat.PlanCustom(ctx, box, poly)
+		if errors.Is(err, catalog.ErrNotCovered) {
+			return server.CustomEstimate{}, server.ErrNotCovered
+		}
+		if err != nil {
+			return server.CustomEstimate{}, err
+		}
+		est := server.CustomEstimate{TotalBytes: plan.TotalBytes, Estimated: plan.Estimated, ElevationSources: []string{}}
+		for _, p := range plan.Parents {
+			est.Parents = append(est.Parents, server.CatalogParent(p))
+		}
+		if sb := plan.SingleBest; sb != nil {
+			p := server.CatalogParent(*sb)
+			est.SingleBest = &p
+		}
+		if coverage != nil && len(bbox) == 4 {
+			if s := coverage(catalog.BBox{bbox[0], bbox[1], bbox[2], bbox[3]}); s != nil {
+				est.ElevationSources = s
+			}
+		}
+		return est, nil
+	}
 	return cat
 }
 
@@ -105,6 +132,18 @@ func catalogJSON(entries []catalog.Entry) map[string]any {
 		sources = append(sources, s.SourceInfo)
 	}
 	return map[string]any{"entries": out, "elevation_sources": sources}
+}
+
+// customArea turns the admin API's bbox / ring into the catalog's bbox / polygon.
+func customArea(bbox []float64, ring [][2]float64) (*catalog.BBox, [][][2]float64) {
+	if len(ring) >= 3 {
+		return nil, [][][2]float64{ring}
+	}
+	if len(bbox) == 4 {
+		b := catalog.BBox{bbox[0], bbox[1], bbox[2], bbox[3]}
+		return &b, nil
+	}
+	return nil, nil
 }
 
 // buildRegions turns the installed regions into build regions.
@@ -145,17 +184,16 @@ func storeRegion(ctx context.Context, cat *catalog.Catalog, rg *store.Region) (c
 	if err != nil {
 		return catalog.Region{}, err
 	}
+	// Fill real extract sizes (cached for a week) so the parents chosen now match the plan shown
+	// when the region was added.
+	if _, err := cat.PlanCustom(ctx, bbox, poly); err != nil {
+		return catalog.Region{}, err
+	}
 	r, err := cat.CustomRegion(rg.Name, bbox, poly)
 	if err != nil {
 		return catalog.Region{}, err
 	}
 	r.ID = rg.ID
-	if p := &r.Custom.Parent; p.ID != "" {
-		_ = cat.FillSizes(ctx, []string{p.ID})
-		if e, ok := cat.Get(p.ID); ok && e.Size > 0 {
-			p.SizeHint = e.Size
-		}
-	}
 	return r, nil
 }
 
