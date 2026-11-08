@@ -41,6 +41,9 @@ type Options struct {
 
 	// ImageryUpstream returns the upstream URL for an imagery tile (default: ImageryUpstream).
 	ImageryUpstream func(z, x, y int) (string, bool)
+	// ImageryOverride: an operator-configured imagery URL is in use, so styles get
+	// ImageryAttribution() in place of their built-in imagery attribution.
+	ImageryOverride bool
 	HTTPClient      *http.Client
 }
 
@@ -163,7 +166,7 @@ func (s *Server) Mount(mux *http.ServeMux, wrap func(kind string, h http.Handler
 
 // baseURL is the public base URL for links inside styles and TileJSON.
 func (s *Server) baseURL(r *http.Request) string {
-	if s.opt.PublicURL != "" {
+	if p, _ := auth.FromContext(r.Context()); s.opt.PublicURL != "" && !p.Internal {
 		return strings.TrimRight(s.opt.PublicURL, "/")
 	}
 	scheme := "http"

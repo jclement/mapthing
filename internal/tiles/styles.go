@@ -99,35 +99,72 @@ func (s *Server) handleStyle(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, r, http.StatusNotFound, "not_found", "unknown style")
 		return
 	}
+	qs := keyQS(r)
 	b = bytes.ReplaceAll(b, []byte("{{BASE_URL}}"), []byte(s.baseURL(r)))
-	b = bytes.ReplaceAll(b, []byte("{{KEY_QS}}"), []byte(keyQS(r)))
+	b = bytes.ReplaceAll(b, []byte("{{KEY_QS}}"), []byte(qs))
+	b = s.patchStyle(b, qs)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	_, _ = w.Write(b)
 }
 
-// handleGlyphs serves /fonts/{fontstack}/{range}.pbf: the first font of the comma-separated
-// stack that exists. A missing range answers an empty (valid) glyph set, so labels in other
-// scripts do not break the map.
+// patchStyle appends the key query to the sprite URL (GL clients insert "@2x.json" before the
+// query) and, with an imagery override, sets the imagery source's attribution.
+func (s *Server) patchStyle(b []byte, qs string) []byte {
+	needSprite := qs != "" && bytes.Contains(b, []byte(`"sprite"`))
+	if !needSprite && !s.opt.ImageryOverride {
+		return b
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var st map[string]any
+	if dec.Decode(&st) != nil {
+		return b
+	}
+	changed := false
+	if sp, ok := st["sprite"].(string); ok && needSprite && !strings.Contains(sp, "key=") && !strings.Contains(sp, "?") {
+		st["sprite"] = sp + qs
+		changed = true
+	}
+	if s.opt.ImageryOverride {
+		if srcs, ok := st["sources"].(map[string]any); ok {
+			if img, ok := srcs["imagery"].(map[string]any); ok {
+				img["attribution"] = ImageryAttribution()
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return b
+	}
+	out, err := json.Marshal(st)
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+// handleGlyphs serves /fonts/{fontstack}/{range}.pbf from assets/fonts/<font>/<range>.pbf,
+// trying each font of a comma-separated stack in order; 404 when none has the range.
 func (s *Server) handleGlyphs(w http.ResponseWriter, r *http.Request) {
 	rng := r.PathValue("range")
 	if !rangeRE.MatchString(rng) || s.opt.Assets == nil {
 		jsonError(w, r, http.StatusBadRequest, "bad_request", "invalid glyph range")
 		return
 	}
-	w.Header().Set("Content-Type", "application/x-protobuf")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
 	for _, font := range strings.Split(r.PathValue("fontstack"), ",") {
 		font = strings.TrimSpace(font)
 		if font == "" || strings.ContainsAny(font, "/\\") || strings.Contains(font, "..") {
 			continue
 		}
 		if b, err := fs.ReadFile(s.opt.Assets, "fonts/"+font+"/"+rng); err == nil {
+			w.Header().Set("Content-Type", "application/x-protobuf")
+			w.Header().Set("Cache-Control", "public, max-age=86400")
 			_, _ = w.Write(b)
 			return
 		}
 	}
-	w.WriteHeader(http.StatusOK)
+	jsonError(w, r, http.StatusNotFound, "not_found", "glyph range not found")
 }
 
 // handleSprite serves /sprites/{name}[@2x].{json,png}.

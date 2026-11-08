@@ -32,7 +32,8 @@ const SessionTTL = 7 * 24 * time.Hour
 
 // Principal is who made a keyed request.
 type Principal struct {
-	Admin  bool
+	Admin    bool
+	Internal bool // the local renderer, authenticated by the internal token
 	KeyID  int64  // 0 for the admin session
 	Secret string // the key as presented (for templating it into style URLs); "" for admin
 }
@@ -59,6 +60,37 @@ type Auth struct {
 	publicURL  string // optional, to accept its origin for CSRF checks
 
 	logins *loginLimiter
+
+	internalToken [32]byte // SHA-256 of the renderer's token; zero = disabled
+	hasInternal   bool
+}
+
+// SetInternalToken enables internal requests: from a loopback address with header
+// X-Mapthing-Internal: <token>. They need no API key and count as kind "raster-internal".
+func (a *Auth) SetInternalToken(tok string) {
+	if tok == "" {
+		return
+	}
+	a.internalToken, a.hasInternal = sha256.Sum256([]byte(tok)), true
+}
+
+// InternalHeader carries the internal token.
+const InternalHeader = "X-Mapthing-Internal"
+
+// KindInternal is the usage kind for internal (renderer) requests.
+const KindInternal = "raster-internal"
+
+func (a *Auth) isInternal(r *http.Request) bool {
+	h := r.Header.Get(InternalHeader)
+	if !a.hasInternal || h == "" {
+		return false
+	}
+	ip := net.ParseIP(clientIP(r))
+	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	sum := sha256.Sum256([]byte(h))
+	return subtle.ConstantTimeCompare(sum[:], a.internalToken[:]) == 1
 }
 
 // New returns an Auth for the given admin credential.
@@ -240,6 +272,11 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			return
 		}
 		cors(w, r)
+		if a.isInternal(r) {
+			a.stats.Count(0, KindInternal)
+			h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{Internal: true})))
+			return
+		}
 		secret := KeyFromRequest(r)
 		if secret == "" {
 			if a.IsAdmin(r) {

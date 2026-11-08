@@ -104,7 +104,6 @@ func build(t *testing.T, maxZ uint8, tile func(z uint8, x, y uint32) []byte) *Re
 	return r
 }
 
-
 func TestWriteReadWithDedupAndLeaves(t *testing.T) {
 	// z0..8 = 87381 tiles: forces leaf directories. Many tiles share content (dedup + runs).
 	tile := func(z uint8, x, y uint32) []byte {
