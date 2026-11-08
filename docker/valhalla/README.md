@@ -8,9 +8,9 @@ itself (see below). JSON has no comments, so this file explains each override.
 | File | What |
 |---|---|
 | `overrides.json` | the merged config overrides |
-| `default_speeds.json` | road speeds for tracks and service roads (see "Speeds") |
-| `dev-build.sh` | builds a graph for one Geofabrik extract with these overrides: the reference for the pipeline's steps |
-| `dev-serve.sh` | serves that graph on 127.0.0.1:8002 for development and the integration tests |
+| `default_speeds.json` | rural road speeds by road class, plus tracks and service roads (see "Speeds") |
+| `dev-build.sh` | builds a graph for one Geofabrik extract, or a local `.osm.pbf` such as an osmium clip, with these overrides: the reference for the pipeline's steps |
+| `dev-serve.sh` | serves that graph on 127.0.0.1:8002 (or `PORT=…`, to run several side by side) for development and the integration tests |
 
 ## What the pipeline must provide
 
@@ -111,25 +111,90 @@ enough for a single-box service; raise it for heavier load).
 
 ## Speeds
 
-Valhalla 3.9.1's Lua tag handler gives `highway=track` a speed of **5 km/h** (10–20 km/h only
-with a `tracktype` grade1–4). The graph enhancer then halves the speed of anything unpaved,
-so an untagged gravel track ends up at **2 km/h**, and an unpaved `highway=service` road at
-about 12 km/h. Those speeds suit farm tracks. Oilfield lease roads are maintained gravel that
-trucks drive at 30–60 km/h, and at 2 km/h a 1 km lease road adds about 30 minutes to the ETA.
+`default_speeds.json` is Valhalla's `default_speeds_config` (schema from
+OpenStreetMapSpeeds). It holds one table with no `iso3166` keys, so it applies everywhere.
+Only the **rural** entries listed below are set. Every other slot is `null`, which keeps
+Valhalla's own speed: the `maxspeed` tag if the road has one, otherwise a per-class default.
 
-`default_speeds.json` (Valhalla's `default_speeds_config`, schema from
-OpenStreetMapSpeeds) sets **only the `service_other` road class** (tracks and service roads
-that are not driveways, alleys, parking aisles or drive-throughs) to 30 km/h in rural areas
-and 25 km/h in suburban areas. Every other entry is `null`, so all other roads keep
-Valhalla's normal speeds, including the urban ones. Configured speeds are not halved for
-surface.
+| Rural road class | Stock speed with no `maxspeed` | mapthing |
+|---|---|---|
+| primary | 75 km/h | **90** |
+| secondary | 60 | **80** |
+| tertiary | 50 (25 if unpaved) | **65** |
+| unclassified | 40 (20 if unpaved) | **55** |
+| `service_other` (tracks, service roads other than driveways or parking aisles) | 5 for an ungraded track (2 if unpaved); 25 for service (12 if unpaved) | **30** (suburban **25**) |
 
-This changes ETAs only, not which roads a route prefers. Measured on Delaware (2026-11-08):
-the same paths before and after; the route to a 0.79 km private gravel track dropped from
-2,785 s to 1,455 s (the track leg alone from about 1,430 s to 95 s). In 112 town-to-town auto
-and truck routes, no route used a track or unpaved road anywhere except at its two ends. Tracks
-still carry the costing penalty `use_tracks` (0.3 by default, set per request by the Go
-client), and private tracks are destination-only.
+Motorway, trunk, residential, links and roundabouts keep Valhalla's speeds, as do all
+suburban and urban roads (except suburban `service_other`).
 
-Caveats: a `maxspeed` tag on a track or service road is overridden by this table (rare on such
-roads), and farm tracks get the same 30 km/h as lease roads.
+### How Valhalla applies the table (3.9.1, measured)
+
+- **Rural / suburban / urban** comes from the edge's road density, 0–15. Density 0–5 is
+  rural, 6–10 suburban, 11 and above urban. The density does not depend on the speed table: a
+  build without the table gives the same density on every edge (checked on 672 edges).
+- **A table value replaces the `maxspeed` tag** and is not capped by it (`speed_assigner.h`:
+  the config lookup runs before the tagged-speed branch, and the edge becomes `classified`).
+  A rural primary tagged 121 km/h gets 90, and a rural one tagged 60 km/h also gets 90.
+  That is why only rural classes are set and trunk is left alone (trunk roads are well tagged).
+- **Table values are not halved for unpaved surfaces**, so a gravel unclassified road gets
+  the same 55 km/h as a paved one. The `use_tracks` and `exclude_unpaved` costing options
+  still apply.
+- `iso3166-1` / `iso3166-2` entries (per country or state) only match when the build's
+  `admin.sqlite` contains that boundary. A custom clip usually cuts the boundary relations,
+  so its admin database comes out empty (the Permian and Grande Prairie dev builds have zero
+  admin rows). That is why the table has no per-region entries.
+
+### Why these values
+
+Without the table, stock speeds were badly off in rural areas:
+
+- An untagged gravel track ran at 2 km/h, so a 0.8 km lease road added about 24 minutes.
+- An untagged rural primary ran at 75 km/h. US two-lane state highways are posted
+  65–75 mph (105–121 km/h). Midland, TX → Carlsbad, NM took I-20 and US 285 (295 km, 165 min)
+  instead of TX/NM 176 (Google: 242 km, 155 min).
+- An untagged gravel range road ran at 20 km/h, while one tagged `maxspeed=80` ran at
+  70 km/h. In the Peace Country grid, Grande Prairie → a lease road south-west of town went
+  out of its way to the tagged range roads: 49.7 km and 52 min, against Google's 39.9 km
+  and 33 min. The graph is connected (forcing the route along Range Roads 85/90 works), so
+  this was speed, not missing data.
+
+Tagging differs a lot by region. In the dev extracts, the share of primary roads with a
+`maxspeed` tag is 98% in the Grande Prairie area (mostly 100 km/h), 61% in Delaware (mostly
+80 or 72) and 27% in the Permian (mostly 121 or 113). The values are a compromise: close to
+the posted limit on the West's rural highways, a little above Delaware's 50 mph roads, and
+a realistic speed on gravel for unclassified roads.
+
+Measured on 2026-11-08 against Google on the comparison cases (auto; km / min):
+
+| Case | Google | Before | After |
+|---|---|---|---|
+| Midland → Carlsbad | 241.7 / 155 | 295.4 / 165 | **244.5 / 159** |
+| Grande Prairie → Montney lease | 39.9 / 33 | 49.7 / 52 | **40.0 / 32** |
+| Fox Creek → Duvernay lease (gravel) | 32.6 / 40 | 32.8 / 32 | 32.6 / 31 |
+| Pecos → Reeves Co. pad | 34.0 / 31 | 40.0 / 32 | 40.0 / 32 |
+| Jal → Lea Co. pad | 33.4 / 58 | 28.7 / 30 | 28.7 / 30 |
+| Dover → Hartly (DE county roads) | 18.0 / 20 | 18.1 / 16 | 18.1 / 14 |
+| Wilmington → Lewes (DE highway) | 142.8 / 92 | 143.0 / 94 | 143.0 / 93 |
+
+On town-to-town routes (each ordered pair of 8 towns, auto and truck):
+- **Delaware (112 routes):** 4 routes changed distance by more than 2%, and all 4 are
+  shorter. The median time change is −0.7%, and nothing uses unpaved road away from the ends.
+- **Permian (112 routes):** 39 routes changed. Most are shorter and faster, and trucks now
+  take TX/NM 176 as well.
+- **Grande Prairie area (60 routes):** 2 routes changed, both shorter. No unpaved road
+  away from the ends.
+
+**Known cost:** a well-tagged fast rural road loses its tag. Midland → Hobbs used FM 1788
+(a secondary tagged 121 km/h) and now rates it at 80, so the route went from 100 to
+108 min (+3.5 km).
+
+Tracks still carry the `use_tracks` costing penalty (0.3 by default, set per request by the
+Go client), and private tracks can only be used at the start or end of a route.
+
+Caveats:
+- A `maxspeed` tag on any rural primary, secondary, tertiary, unclassified, track or service
+  road is ignored (see above).
+- Farm tracks get the same 30 km/h as lease roads.
+- The best fix for regional differences is per-state and per-province entries. That needs
+  admin boundaries in the build, which today means a full Geofabrik state or province
+  extract rather than a clip.

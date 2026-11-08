@@ -4,6 +4,8 @@
 # this script is the reference for the steps and flags it should run.
 #
 #   docker/valhalla/dev-build.sh [geofabrik-path]     default: north-america/us/delaware
+#   docker/valhalla/dev-build.sh path/to/local.osm.pbf  a local extract (e.g. an osmium clip);
+#                                                       the graph is named after the file
 #
 # Output: data/valhalla/<name>/ (tiles.tar, admin.sqlite, tz_world.sqlite, valhalla.json).
 # Serve it with docker/valhalla/dev-serve.sh (in its own terminal tab; it stays up).
@@ -12,12 +14,19 @@ set -euo pipefail
 
 IMAGE=${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla:3.9.1}
 REGION=${1:-north-america/us/delaware}
-NAME=$(basename "$REGION")
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-OUT=$ROOT/data/valhalla/$NAME
-mkdir -p "$OUT"
-
-PBF=$OUT/$NAME-latest.osm.pbf
+if [[ -f $REGION ]]; then
+  NAME=$(basename "$REGION" .pbf); NAME=${NAME%.osm}
+  OUT=$ROOT/data/valhalla/$NAME
+  mkdir -p "$OUT"
+  PBF=$OUT/$NAME.osm.pbf
+  [[ $REGION -ef $PBF ]] || cp "$REGION" "$PBF"
+else
+  NAME=$(basename "$REGION")
+  OUT=$ROOT/data/valhalla/$NAME
+  mkdir -p "$OUT"
+  PBF=$OUT/$NAME-latest.osm.pbf
+fi
 if [[ ! -s $PBF ]]; then
   curl -fL --retry 3 -o "$PBF.part" "https://download.geofabrik.de/$REGION-latest.osm.pbf"
   mv "$PBF.part" "$PBF"
