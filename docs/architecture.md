@@ -115,21 +115,85 @@ docker/               Dockerfile, renderer sidecar, style assets, fonts
 
 ## Elevation
 
-Sources, in priority order where they overlap (the build records which source each terrain tile
-came from, and the API returns the source for each sample):
+Sources, in priority order where they overlap. A higher-priority source wins wherever it has
+data; its nodata falls through to the next. Choices, licences and datums are in
+[elevation-sources.md](elevation-sources.md).
 
-- **US:** USGS 3DEP. The seamless 1/3 arc-second DEM (~10 m) everywhere; 1 m where it exists
-  for small regions (optional, large).
-- **Canada, national:** NRCan HRDEM (LiDAR-derived, 1–2 m) where it exists; otherwise MRDEM
-  (30 m) or CDEM.
-- **Alberta / BC:** provincial open DEMs where they beat the national grid (BC TRIM 25 m, LidarBC
-  where open; Alberta's open products).
-- **Everywhere else:** Copernicus GLO-30.
+1. `hrdem`: NRCan HRDEM 2 m mosaic (LiDAR, patchy), Canada.
+2. `3dep13`: USGS 3DEP 1/3 arc-second (~10 m), US.
+3. `mrdem`: NRCan MRDEM-30 (30 m, all of Canada; supersedes CDEM, and in practice the open
+   Alberta and BC provincial grids).
+4. `glo30`: Copernicus GLO-30 (30 m DSM), everywhere else and as gap filler.
 
-The build reprojects the chosen sources to Web Mercator and writes `terrain.pmtiles` as
-Terrarium PNG tiles at a zoom matched to the best source resolution available in the region.
-Profiles sample terrain tiles with bilinear interpolation. The same archive drives hillshade in
-the styles.
+Provincial products (BC TRIM/CDED 25 m, Alberta 25 m, LidarBC 1 m) are not used in v1: they
+are either not anonymously automatable or not better than the national products at our zoom.
+
+**Build** (`internal/build/terrain*.go`). The pipeline calls the registered
+`build.TerrainFunc(ctx, r build.Reporter, regions []catalog.Region, workDir, outPath string)`
+(`RegisterTerrain` from `init()`), plus `RegisterTerrainEstimate` (bytes, for the disk guard)
+and `RegisterElevationCheck(ctx, terrainPath, pts)` (verify). It needs the GDAL CLI
+(`gdalwarp` ≥ 3.6 with LERC, which the official GDAL builds include) in the container. Steps:
+
+- Max zoom: the coarsest zoom whose pixel is ≤ 1.7 × the best source resolution at the area's
+  latitude, capped at 13. That gives z13 for 3DEP and HRDEM areas and z12 for 30 m-only areas.
+  The zoom is lowered while the max-zoom tile count exceeds `MAPTHING_TERRAIN_MAX_TILES`
+  (default 400 000 ≈ 20 GB at the measured ~50 KB per max-zoom tile including lower zooms).
+  `MAPTHING_TERRAIN_MAXZOOM` forces a zoom.
+- Sources are COGs read by HTTP range. Windows (1° cells clipped to the region bbox plus one max-zoom tile,
+  at 0.8 × the max-zoom pixel size, LERC-compressed with ≤ 5 cm error) are cached in
+  `/data/elevation/cache/<source>/<cell>_<hash>.tif`, with a `.json` sidecar holding the
+  upstream URL, ETag and Last-Modified. A rebuild reuses a window whose ETag is unchanged.
+  When the upstream is unreachable, any cached copy is used. Windows are fetched lazily: a
+  lower-priority source is fetched only where higher ones left holes.
+- Chunks of 16×16 max-zoom tiles are warped to EPSG:3857 (bilinear, float32), composited by
+  priority, and cut into tiles. The next four zooms are 2×2 averages of the chunk raster; the
+  rest of the pyramid (down to z0) is averaged from those tiles. Averaging is always done on
+  elevations, never on encoded RGB. Only tiles touching a region (its polygon if it has one,
+  else its bbox) are written.
+- Besides the archive, it writes `<outPath>.json`: zooms, tile count, bytes, per-source pixel
+  counts, pieces fetched or reused, and duration.
+
+**`terrain.pmtiles`**: tile type PNG, **256 px Terrarium** (`elevation = R·256 + G + B/256 −
+32768`). Elevations are rounded before encoding: **0.25 m at max zoom**, doubling for each zoom
+out (0.5 m at max−1, 1 m at max−2, …, capped at 8 m), which keeps slope precision per pixel
+constant. The rounding step is `MAPTHING_TERRAIN_QUANTUM_M` (default 0.25). Full 1/256 m
+precision is incompressible noise and cost 2.3–3.2× more disk; see
+[elevation-sources.md](elevation-sources.md#tile-size). Pixels with no source are encoded as 0 m so hillshading stays calm at
+coverage edges. Max-zoom tiles also carry a private ancillary PNG chunk `mtSr`
+(zlib-compressed 256×256 bytes: per-pixel source index, 0 = no data). Browsers and MapLibre
+ignore it; the elevation API uses it for nodata and per-sample `source`. The PMTiles JSON
+metadata is `elevation.Metadata`: `format`, `encoding: "terrarium"`, `tile_size: 256`,
+`minzoom`, `maxzoom`, `bounds`, `regions`, `attribution`, and `sources[]` (index order = chunk
+index − 1: id, name, resolution, licence, attribution, datum, kind dtm/dsm, footprint boxes,
+pixel count).
+
+**API** (`internal/elevation`; `Handler` is a `server.Mountable` and wraps every route with usage
+kind `elevation`; wired in `cmd/mapthing/features.go`. `elevation.NewTerrainForData(dataDir)`
+reads `/data/current/terrain.pmtiles` and reopens it within 2 s of a `current` swap.
+`GET /api/v1/elevation/sources` and `/admin/api/system` list only sources that contributed pixels):
+
+- Points and profiles sample the max zoom with bilinear interpolation on pixel centres. A
+  neighbour without data is dropped and the remaining weights renormalised; if there are no
+  valid neighbours the result is `elevation_m: null`. `resolution_m` = max(source resolution,
+  max-zoom pixel size at that latitude).
+- `GET /api/v1/elevation?points=lon,lat|lon,lat` and `POST {"points":[[lon,lat],…]}` (≤ 10 000)
+  → `{"results":[{lon,lat,elevation_m,source,resolution_m}],"sources":[…]}`.
+- `POST /api/v1/elevation/profile` with `{"path":[[lon,lat],…]}` or `{"polyline":"…",
+  "precision":5|6}`, plus `interval_m` (default 30, vertices kept), or `samples` (exactly N,
+  Google semantics), and `hysteresis_m` (default 2; negative = off). Returns `samples[]` (with
+  `distance_m`), `length_m`, `gain_m`/`loss_m` (hysteresis-smoothed), `gain_raw_m`/`loss_raw_m`,
+  `min_m`, `max_m`, `sources`. Distances are great-circle; at most 10 000 samples (the interval
+  grows to fit).
+- `GET /api/v1/elevation/sources` → sources in the live archive.
+- `GET /maps/api/elevation/json`: Google-compatible (`locations=` / `path=`+`samples=` ≤ 512,
+  `lat,lng|…` or `enc:`). Errors are `INVALID_REQUEST` (HTTP 400). Google's shape has no null,
+  so an uncovered point returns `elevation: 0, resolution: -1`; if no point is covered (or no
+  generation is live) the status is `DATA_NOT_AVAILABLE`.
+- Heights are each source's native orthometric datum (NAVD88 / CGVD2013 / EGM2008), with no
+  geoid conversion. US values read ≈ 1 m below EGM96-based answers; Canadian values are within
+  ≈ ±0.5 m.
+- `elevation.CoverageIDs(bbox)` / `CoverageFor(bbox)`: static, offline list of the sources
+  expected in a bbox, for the catalog.
 
 ## Routing
 
