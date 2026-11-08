@@ -87,7 +87,7 @@ func (s *state) valhalla(ctx context.Context) error {
 // timezones returns a cached timezone database path, building it once. Failure is not fatal:
 // Valhalla then builds tiles without time zones (time-dependent routing is less accurate).
 func (s *state) timezones(ctx context.Context) string {
-	dir := filepath.Join(s.b.DataDir, "sources", "valhalla")
+	dir := filepath.Join(s.b.DataDir, "cache", "valhalla")
 	p := filepath.Join(dir, "timezones.sqlite")
 	if st, err := os.Stat(p); err == nil && st.Size() > 0 {
 		return p
@@ -100,13 +100,13 @@ func (s *state) timezones(ctx context.Context) string {
 		return p
 	}
 	_, err = s.execOut(ctx, dir, f, "valhalla_build_timezones")
-	f.Close()
+	_ = f.Close()
 	if err != nil {
 		s.logf("valhalla: timezone db unavailable (%v); continuing without", err)
-		os.Remove(p + ".part")
+		_ = os.Remove(p + ".part")
 		return p
 	}
-	os.Rename(p+".part", p)
+	_ = os.Rename(p+".part", p)
 	return p
 }
 

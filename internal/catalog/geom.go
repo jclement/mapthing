@@ -48,6 +48,15 @@ func (mp multiPolygon) bbox() BBox {
 	return b
 }
 
+// rings flattens every ring of every part (even-odd semantics).
+func (mp multiPolygon) rings() [][][2]float64 {
+	var out [][][2]float64
+	for _, p := range mp {
+		out = append(out, p...)
+	}
+	return out
+}
+
 func (mp multiPolygon) contains(pt [2]float64) bool {
 	for _, p := range mp {
 		if len(p) == 0 || !ringContains(p[0], pt) {
@@ -130,7 +139,7 @@ func (c *Catalog) FillSizes(ctx context.Context, ids []string) error {
 			if err != nil {
 				return
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK && resp.ContentLength > 0 {
 				mu.Lock()
 				results[j.id] = sizeRec{Size: resp.ContentLength, Checked: time.Now()}

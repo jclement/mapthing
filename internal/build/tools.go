@@ -23,6 +23,7 @@ type Tools struct {
 	ValhallaBuildTiles   string
 	ValhallaBuildExtract string
 	ValhallaService      string
+	Ogr2ogr              string
 	ValhallaOverrides    string // JSON deep-merged over valhalla_build_config output; "" = none
 }
 
@@ -37,6 +38,7 @@ func ToolsFromEnv() Tools {
 		ValhallaBuildTiles:   getenv("MAPTHING_VALHALLA_BUILD_TILES", "valhalla_build_tiles"),
 		ValhallaBuildExtract: getenv("MAPTHING_VALHALLA_BUILD_EXTRACT", "valhalla_build_extract"),
 		ValhallaService:      getenv("MAPTHING_VALHALLA_SERVICE", "valhalla_service"),
+		Ogr2ogr:              getenv("MAPTHING_OGR2OGR", "ogr2ogr"),
 		ValhallaOverrides:    getenv("MAPTHING_VALHALLA_OVERRIDES", "/usr/share/mapthing/valhalla/overrides.json"),
 	}
 }

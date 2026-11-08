@@ -64,14 +64,17 @@ type Region struct {
 	PBFURL     string `json:"pbf_url,omitempty"`
 	UpdatesURL string `json:"updates_url,omitempty"`
 	SizeHint   int64  `json:"size_hint,omitempty"` // bytes of the extract (parent extract for custom)
+	// Polygon is the region's outline as lon/lat rings, read with the even-odd rule (outer rings
+	// and holes of every part). Geofabrik regions: the extract boundary from index-v1.json.
+	// Custom regions: the drawn polygon, or the bbox as a rectangle.
+	Polygon [][][2]float64 `json:"polygon,omitempty"`
 	// Custom regions only.
 	Custom *Custom `json:"custom,omitempty"`
 }
 
 // Custom describes a clipped region.
 type Custom struct {
-	Parent  Region         `json:"parent"`            // the Geofabrik extract it is clipped from
-	Polygon [][][2]float64 `json:"polygon,omitempty"` // rings, lon/lat; nil = clip by Region.BBox
+	Parent Region `json:"parent"` // the Geofabrik extract it is clipped from
 }
 
 // Catalog loads and caches the Geofabrik index.
@@ -159,7 +162,7 @@ func (c *Catalog) fetch(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
@@ -169,12 +172,12 @@ func (c *Catalog) fetch(ctx context.Context, path string) error {
 		return err
 	}
 	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	// Validate before replacing the cache.
@@ -183,7 +186,7 @@ func (c *Catalog) fetch(ctx context.Context, path string) error {
 		_, err = parseIndex(data)
 	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("index invalid: %w", err)
 	}
 	return os.Rename(tmp, path)
@@ -277,7 +280,8 @@ func (c *Catalog) Region(id string) (Region, error) {
 
 // Region converts an entry to a Region.
 func (e Entry) Region() Region {
-	return Region{ID: e.ID, Name: e.Name, BBox: e.BBox, PBFURL: e.PBFURL, UpdatesURL: e.UpdatesURL, SizeHint: e.Size}
+	return Region{ID: e.ID, Name: e.Name, BBox: e.BBox, PBFURL: e.PBFURL, UpdatesURL: e.UpdatesURL,
+		SizeHint: e.Size, Polygon: e.geom.rings()}
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -316,6 +320,7 @@ func (c *Catalog) CustomRegion(name string, bbox *BBox, polygon [][][2]float64) 
 	case bbox != nil:
 		box = *bbox
 		pts = [][2]float64{{box[0], box[1]}, {box[2], box[1]}, {box[2], box[3]}, {box[0], box[3]}}
+		polygon = [][][2]float64{append(pts, pts[0])}
 	default:
 		return Region{}, errors.New("catalog: custom region needs a bbox or polygon")
 	}
@@ -331,7 +336,8 @@ func (c *Catalog) CustomRegion(name string, bbox *BBox, polygon [][][2]float64) 
 		Name:     name,
 		BBox:     box,
 		SizeHint: parent.Size,
-		Custom:   &Custom{Parent: parent.Region(), Polygon: polygon},
+		Polygon:  polygon,
+		Custom:   &Custom{Parent: parent.Region()},
 	}, nil
 }
 

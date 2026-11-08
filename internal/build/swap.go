@@ -22,7 +22,9 @@ type Manifest struct {
 	Stages     []StageResult    `json:"stages"`
 	Checks     []Check          `json:"checks"`
 	Disk       *DiskEstimate    `json:"disk,omitempty"`
-	TotalS     float64          `json:"total_s"`
+	// Ocean is where ocean/land polygons came from: osm, approximate:ne-10m or missing.
+	Ocean  string  `json:"ocean,omitempty"`
+	TotalS float64 `json:"total_s"`
 }
 
 // ManifestRegion records which source a region was built from.
@@ -97,7 +99,7 @@ func atomicSymlink(target, link string) error {
 		return err
 	}
 	if err := os.Rename(tmp, link); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil
@@ -178,7 +180,7 @@ func (b *Builder) prune(keepWork string) ([]string, error) {
 			if e.Name() == keepWork {
 				continue
 			}
-			os.RemoveAll(filepath.Join(b.workRoot(), e.Name()))
+			_ = os.RemoveAll(filepath.Join(b.workRoot(), e.Name()))
 		}
 	}
 	return removed, firstErr
@@ -186,7 +188,7 @@ func (b *Builder) prune(keepWork string) ([]string, error) {
 
 func dirSize(dir string) int64 {
 	var n int64
-	filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
 			if fi, err := d.Info(); err == nil {
 				n += fi.Size()

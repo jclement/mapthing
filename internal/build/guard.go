@@ -78,7 +78,7 @@ func memAvailable() int64 {
 	if err != nil {
 		return 0
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		if v, ok := strings.CutPrefix(sc.Text(), "MemAvailable:"); ok {

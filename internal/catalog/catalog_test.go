@@ -34,7 +34,7 @@ func newTestCatalog(t *testing.T) (*Catalog, *int32) {
 			w.Header().Set("Content-Length", "12345")
 			return
 		}
-		w.Write([]byte(testIndex))
+		_, _ = w.Write([]byte(testIndex))
 	}))
 	t.Cleanup(srv.Close)
 	c := New(t.TempDir())
@@ -61,6 +61,9 @@ func TestLoadParsesAndCaches(t *testing.T) {
 	if e.BBox != (BBox{-75.8, 38.4, -75.0, 39.9}) {
 		t.Errorf("bbox %v", e.BBox)
 	}
+	if r := e.Region(); len(r.Polygon) != 2 || len(r.Polygon[0]) != 5 {
+		t.Errorf("region polygon %v", r.Polygon)
+	}
 	if !strings.HasSuffix(e.UpdatesURL, "delaware-updates") {
 		t.Errorf("updates %q", e.UpdatesURL)
 	}
@@ -75,7 +78,7 @@ func TestLoadParsesAndCaches(t *testing.T) {
 	}
 	// An old cache is refreshed.
 	old := time.Now().Add(-8 * 24 * time.Hour)
-	os.Chtimes(c.indexPath(), old, old)
+	_ = os.Chtimes(c.indexPath(), old, old)
 	c2.Client = c.Client
 	if err := c2.Load(context.Background()); err != nil {
 		t.Fatal(err)
@@ -87,11 +90,11 @@ func TestLoadParsesAndCaches(t *testing.T) {
 
 func TestStaleCacheSurvivesFetchFailure(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "catalog"), 0o755)
+	_ = os.MkdirAll(filepath.Join(dir, "catalog"), 0o755)
 	p := filepath.Join(dir, "catalog", "geofabrik-index-v1.json")
-	os.WriteFile(p, []byte(testIndex), 0o644)
+	_ = os.WriteFile(p, []byte(testIndex), 0o644)
 	old := time.Now().Add(-30 * 24 * time.Hour)
-	os.Chtimes(p, old, old)
+	_ = os.Chtimes(p, old, old)
 	c := New(dir)
 	c.IndexURL = "http://127.0.0.1:1/nope"
 	if err := c.Load(context.Background()); err != nil {
@@ -104,7 +107,7 @@ func TestStaleCacheSurvivesFetchFailure(t *testing.T) {
 
 func TestEntriesFilter(t *testing.T) {
 	c, _ := newTestCatalog(t)
-	c.Load(context.Background())
+	_ = c.Load(context.Background())
 	c.Coverage = func(b BBox) []string { return []string{"test-dem"} }
 	na := c.Entries(Filter{})
 	if len(na) != 3 {
@@ -120,7 +123,7 @@ func TestEntriesFilter(t *testing.T) {
 
 func TestCustomRegion(t *testing.T) {
 	c, _ := newTestCatalog(t)
-	c.Load(context.Background())
+	_ = c.Load(context.Background())
 	tests := []struct {
 		name    string
 		bbox    *BBox
@@ -143,6 +146,9 @@ func TestCustomRegion(t *testing.T) {
 			if err != nil {
 				return
 			}
+			if len(r.Polygon) != 1 || len(r.Polygon[0]) < 4 {
+				t.Errorf("custom polygon %v", r.Polygon)
+			}
 			if r.ID != "custom/my-lease-area" || r.Custom.Parent.ID != tt.parent {
 				t.Errorf("got id=%s parent=%s", r.ID, r.Custom.Parent.ID)
 			}
@@ -155,7 +161,7 @@ func TestCustomRegion(t *testing.T) {
 
 func TestFillSizes(t *testing.T) {
 	c, hits := newTestCatalog(t)
-	c.Load(context.Background())
+	_ = c.Load(context.Background())
 	// Point delaware's URL at the test server.
 	c.mu.Lock()
 	srvURL := c.IndexURL
@@ -169,7 +175,7 @@ func TestFillSizes(t *testing.T) {
 		t.Fatalf("size=%d", e.Size)
 	}
 	before := *hits
-	c.FillSizes(context.Background(), []string{"north-america/us/delaware"})
+	_ = c.FillSizes(context.Background(), []string{"north-america/us/delaware"})
 	if *hits != before {
 		t.Error("cached size re-fetched")
 	}

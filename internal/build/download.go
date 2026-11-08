@@ -152,7 +152,7 @@ func (s *state) ensureExtract(ctx context.Context, r catalog.Region) (string, *D
 	if err != nil {
 		return "", nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotModified && have {
 		s.logf("%s: not modified", r.ID)
 		meta.CheckedAt = s.b.now().UTC()
@@ -166,21 +166,21 @@ func (s *state) ensureExtract(ctx context.Context, r catalog.Region) (string, *D
 	part := file + ".part"
 	sum, n, err := s.copyWithProgress(part, resp.Body, resp.ContentLength, r.ID)
 	if err != nil {
-		os.Remove(part)
+		_ = os.Remove(part)
 		return "", nil, err
 	}
 	if resp.ContentLength > 0 && n != resp.ContentLength {
-		os.Remove(part)
+		_ = os.Remove(part)
 		return "", nil, fmt.Errorf("short download: %d of %d bytes", n, resp.ContentLength)
 	}
 	if want, err := s.fetchMD5(ctx, r.PBFURL+".md5"); err == nil && want != "" && want != sum {
-		os.Remove(part)
+		_ = os.Remove(part)
 		return "", nil, fmt.Errorf("md5 mismatch: got %s, published %s", sum, want)
 	} else if err != nil {
 		s.logf("%s: no published md5 (%v); size and header checks only", r.ID, err)
 	}
 	if err := checkPBFHeader(part); err != nil {
-		os.Remove(part)
+		_ = os.Remove(part)
 		return "", nil, err
 	}
 	if err := os.Rename(part, file); err != nil {
@@ -216,7 +216,7 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 	clip, _ := json.Marshal(struct {
 		B catalog.BBox
 		P [][][2]float64
-	}{r.BBox, r.Custom.Polygon})
+	}{r.BBox, r.Polygon})
 	h := sha256.Sum256(clip)
 	clipHash := hex.EncodeToString(h[:8])
 	if meta, err := readMeta(dir); err == nil && meta.ParentMD5 == parentMeta.MD5 && meta.ClipHash == clipHash {
@@ -227,11 +227,11 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 	}
 	part := file + ".part"
 	args := []string{"extract", "--overwrite", "-f", "pbf", "-o", part}
-	if len(r.Custom.Polygon) > 0 {
+	if len(r.Polygon) > 0 {
 		gj := filepath.Join(dir, "clip.geojson")
 		data, _ := json.Marshal(map[string]any{
 			"type": "Feature", "properties": map[string]any{},
-			"geometry": map[string]any{"type": "Polygon", "coordinates": r.Custom.Polygon},
+			"geometry": map[string]any{"type": "Polygon", "coordinates": r.Polygon},
 		})
 		if err := os.WriteFile(gj, data, 0o644); err != nil {
 			return "", nil, err
@@ -243,7 +243,7 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 	}
 	args = append(args, parentFile)
 	if err := s.exec(ctx, dir, s.b.Tools.Osmium, args...); err != nil {
-		os.Remove(part)
+		_ = os.Remove(part)
 		return "", nil, err
 	}
 	if err := os.Rename(part, file); err != nil {
@@ -312,7 +312,7 @@ func (s *state) getSmall(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
@@ -324,7 +324,7 @@ func (s *state) copyWithProgress(dst string, src io.Reader, total int64, label s
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := md5.New()
 	var n atomic.Int64
 	done := make(chan struct{})
@@ -375,7 +375,7 @@ func checkPBFHeader(file string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	head := make([]byte, 64)
 	k, _ := io.ReadFull(f, head)
 	if !bytes.Contains(head[:k], []byte("OSMHeader")) {
@@ -389,7 +389,7 @@ func md5File(file string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := md5.New()
 	n, err := io.Copy(h, f)
 	return hex.EncodeToString(h.Sum(nil)), n, err

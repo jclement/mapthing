@@ -9,10 +9,11 @@ import (
 )
 
 // planetilerMemory sizes the JVM heap and Planetiler storage from available memory and the
-// extract size: heap is 60% of available memory (1–32 GiB); node locations and features stay in
-// RAM while they comfortably fit, otherwise they go to memory-mapped files on disk.
+// extract size: 2 GiB plus 6x the extract, capped at 60% of available memory (1–32 GiB); node
+// locations and features stay in RAM while they comfortably fit, otherwise they go to
+// memory-mapped files on disk.
 func planetilerMemory(avail, pbf int64) (heapMB int64, storage string) {
-	heap := avail * 6 / 10
+	heap := min(avail*6/10, 2<<30+pbf*6)
 	if heap < 1<<30 {
 		heap = 1 << 30
 	}
@@ -41,7 +42,7 @@ func (s *state) basemap(ctx context.Context) error {
 		return err
 	}
 	link := filepath.Join(wd, "data", "sources")
-	os.Remove(link)
+	_ = os.Remove(link)
 	if err := os.Symlink(s.b.sourcesDir(), link); err != nil {
 		return err
 	}
@@ -72,14 +73,13 @@ func (s *state) basemap(ctx context.Context) error {
 		"--nodemap-storage=" + storage,
 		fmt.Sprintf("--threads=%d", threads),
 	}
-	// The ocean/land polygons have one upstream (osmdata.openstreetmap.de); allow a mirror.
-	for envName, arg := range map[string]string{
-		"MAPTHING_WATER_POLYGONS_URL": "--osm_water_url=",
-		"MAPTHING_LAND_POLYGONS_URL":  "--osm_land_url=",
-	} {
-		if v := os.Getenv(envName); v != "" {
-			args = append(args, arg+v)
-		}
+	ocean, waterZip, landZip, err := s.ensureSources(ctx, wd)
+	if err != nil {
+		return err
+	}
+	s.m.Ocean = ocean
+	if waterZip != "" {
+		args = append(args, "--osm_water_path="+waterZip, "--osm_land_path="+landZip)
 	}
 	if err := s.exec(ctx, wd, s.b.Tools.Java, args...); err != nil {
 		return err

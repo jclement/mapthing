@@ -49,33 +49,39 @@ func fakeTool(tool string, args []string) int {
 	}
 	switch tool {
 	case "osmium":
-		os.WriteFile(flag("-o"), []byte("\x00\x00\x00\x0d\x0a\x09OSMHeader fake"), 0o644)
+		_ = os.WriteFile(flag("-o"), []byte("\x00\x00\x00\x0d\x0a\x09OSMHeader fake"), 0o644)
 		fmt.Println("osmium " + args[0] + " ok")
 	case "java":
-		os.WriteFile(flag("--output"), testPMTiles(), 0o644)
+		_ = os.WriteFile(flag("--output"), testPMTiles(), 0o644)
 		fmt.Println("planetiler: done")
 	case "valhalla_build_config":
 		cfg := map[string]any{
 			"mjolnir": map[string]any{"tile_dir": flag("--mjolnir-tile-dir"), "tile_extract": flag("--mjolnir-tile-extract"), "concurrency": 2},
 			"httpd":   map[string]any{"service": map[string]any{"listen": flag("--httpd-service-listen")}},
 		}
-		json.NewEncoder(os.Stdout).Encode(cfg)
+		_ = json.NewEncoder(os.Stdout).Encode(cfg)
 	case "valhalla_build_admins", "valhalla_build_tiles":
 		fmt.Fprintln(os.Stderr, tool+" ok")
 	case "valhalla_build_extract":
 		cfg := readCfg(flag("-c"))
-		os.WriteFile(cfg.Mjolnir.TileExtract, []byte("tar"), 0o644)
+		_ = os.WriteFile(cfg.Mjolnir.TileExtract, []byte("tar"), 0o644)
+	case "ogr2ogr":
+		// ... <dst.shp> <src> <layer>
+		dst := args[len(args)-3]
+		for _, ext := range []string{".shp", ".shx", ".dbf"} {
+			_ = os.WriteFile(strings.TrimSuffix(dst, ".shp")+ext, []byte("x"), 0o644)
+		}
 	case "valhalla_build_timezones":
 		fmt.Print("tzdb")
 	case "valhalla_service":
 		cfg := readCfg(args[0])
 		addr := strings.TrimPrefix(cfg.HTTPD.Service.Listen, "tcp://")
 		mux := http.NewServeMux()
-		mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) })
+		mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 		mux.HandleFunc("/route", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(`{"trip":{"summary":{"length":12.3}}}`))
+			_, _ = w.Write([]byte(`{"trip":{"summary":{"length":12.3}}}`))
 		})
-		http.ListenAndServe(addr, mux)
+		_ = http.ListenAndServe(addr, mux)
 	default:
 		return 1
 	}
@@ -96,7 +102,7 @@ type fakeCfg struct {
 func readCfg(p string) fakeCfg {
 	var c fakeCfg
 	data, _ := os.ReadFile(p)
-	json.Unmarshal(data, &c)
+	_ = json.Unmarshal(data, &c)
 	return c
 }
 
@@ -155,11 +161,11 @@ func newEnv(t *testing.T) *env {
 				return
 			}
 			w.Header().Set("ETag", etag)
-			w.Write(e.pbf)
+			_, _ = w.Write(e.pbf)
 		case "/de-latest.osm.pbf.md5":
-			fmt.Fprintf(w, "%s  de-latest.osm.pbf\n", e.md5)
+			_, _ = fmt.Fprintf(w, "%s  de-latest.osm.pbf\n", e.md5)
 		case "/de-updates/state.txt":
-			fmt.Fprintf(w, "#x\nsequenceNumber=%d\ntimestamp=2026-11-07T20\\:21\\:02Z\n", e.sequence)
+			_, _ = fmt.Fprintf(w, "#x\nsequenceNumber=%d\ntimestamp=2026-11-07T20\\:21\\:02Z\n", e.sequence)
 		default:
 			http.NotFound(w, r)
 		}
@@ -170,7 +176,7 @@ func newEnv(t *testing.T) *env {
 	exe, _ := os.Executable()
 	tool := func(name string) string {
 		p := filepath.Join(bin, name)
-		os.WriteFile(p, []byte(fmt.Sprintf("#!/bin/sh\nMAPTHING_FAKE_TOOL=%s exec %q \"$@\"\n", name, exe)), 0o755)
+		_ = os.WriteFile(p, []byte(fmt.Sprintf("#!/bin/sh\nMAPTHING_FAKE_TOOL=%s exec %q \"$@\"\n", name, exe)), 0o755)
 		return p
 	}
 	tool("valhalla_build_timezones")
@@ -182,8 +188,13 @@ func newEnv(t *testing.T) *env {
 			Java: tool("java"), PlanetilerJar: "/fake.jar", Osmium: tool("osmium"),
 			ValhallaBuildConfig: tool("valhalla_build_config"), ValhallaBuildAdmins: tool("valhalla_build_admins"),
 			ValhallaBuildTiles: tool("valhalla_build_tiles"), ValhallaBuildExtract: tool("valhalla_build_extract"),
-			ValhallaService: tool("valhalla_service"),
+			ValhallaService: tool("valhalla_service"), Ogr2ogr: tool("ogr2ogr"),
 		},
+	}
+	// Planetiler's auxiliary sources are already cached.
+	_ = os.MkdirAll(e.b.sourcesDir(), 0o755)
+	for _, src := range planetilerSources {
+		_ = os.WriteFile(filepath.Join(e.b.sourcesDir(), src.file), []byte("cached"), 0o644)
 	}
 	// Distinct generation ids per run.
 	var tick atomic.Int64
@@ -460,10 +471,10 @@ func TestPlanetilerMemory(t *testing.T) {
 		heapMB     int64
 		storage    string
 	}{
-		{8 << 30, 25 << 20, 4915, "ram"},
+		{8 << 30, 25 << 20, 2198, "ram"},
 		{8 << 30, 6 << 30, 4915, "mmap"},
 		{1 << 30, 1 << 20, 1024, "ram"},
-		{128 << 30, 1 << 30, 32768, "ram"},
+		{128 << 30, 1 << 30, 8192, "ram"},
 	}
 	for _, tt := range tests {
 		h, s := planetilerMemory(tt.avail, tt.pbf)
@@ -479,5 +490,87 @@ func TestDeepMerge(t *testing.T) {
 	got, _ := json.Marshal(dst)
 	if string(got) != `{"a":{"b":1,"c":9,"e":5},"d":3,"f":"x"}` {
 		t.Error(string(got))
+	}
+}
+
+func TestSourcesDownloadRetryAndOceanFallback(t *testing.T) {
+	e := newEnv(t)
+	old := sourceBackoff
+	sourceBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { sourceBackoff = old })
+	_ = os.RemoveAll(e.b.sourcesDir())
+
+	var flaky atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/qrank":
+			if flaky.Add(1) < 3 { // fails twice, then works
+				http.Error(w, "busy", http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write([]byte("qrank"))
+		case "/water", "/land":
+			http.Error(w, "down", http.StatusBadGateway)
+		default:
+			_, _ = w.Write([]byte("data"))
+		}
+	}))
+	defer srv.Close()
+	for _, src := range planetilerSources {
+		u := srv.URL + "/other"
+		switch src.file {
+		case "qrank.csv.gz":
+			u = srv.URL + "/qrank"
+		case "water-polygons-split-3857.zip":
+			u = srv.URL + "/water"
+		case "land-polygons-split-3857.zip":
+			u = srv.URL + "/land"
+		}
+		t.Setenv(src.env, u)
+	}
+	rep := &testRep{}
+	m, err := e.b.Run(context.Background(), rep, Options{Regions: []catalog.Region{e.region}})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(rep.logs, "\n"))
+	}
+	if m.Ocean != OceanNaturalEarth {
+		t.Errorf("ocean = %q", m.Ocean)
+	}
+	if flaky.Load() != 3 {
+		t.Errorf("qrank attempts = %d", flaky.Load())
+	}
+	if !rep.has("--osm_water_path=") {
+		t.Error("planetiler not pointed at fallback water polygons")
+	}
+	if _, err := os.Stat(filepath.Join(e.b.sourcesDir(), "water-polygons-split-3857.zip")); err == nil {
+		t.Error("fallback written into the shared cache")
+	}
+
+	// Natural Earth fallback failing too: placeholders, ocean missing.
+	t.Setenv("MAPTHING_FAKE_FAIL", "ogr2ogr")
+	m, err = e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}})
+	if err != nil || m.Ocean != OceanMissing {
+		t.Fatalf("err=%v ocean=%q", err, m.Ocean)
+	}
+
+	// A required source that never downloads fails the build with the env var to set.
+	_ = os.Remove(filepath.Join(e.b.sourcesDir(), "qrank.csv.gz"))
+	t.Setenv("MAPTHING_QRANK_URL", srv.URL+"/water")
+	_, err = e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}})
+	if err == nil || !strings.Contains(err.Error(), "MAPTHING_QRANK_URL") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTinyShapefile(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "w")
+	if err := writeTinyShapefile(base); err != nil {
+		t.Fatal(err)
+	}
+	for ext, size := range map[string]int64{".shp": 236, ".shx": 108, ".dbf": 68} {
+		st, err := os.Stat(base + ext)
+		if err != nil || st.Size() != size {
+			t.Errorf("%s size %v err %v", ext, st, err)
+		}
 	}
 }

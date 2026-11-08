@@ -73,7 +73,7 @@ func (s *state) verifyTiles() []Check {
 	if err != nil {
 		return []Check{{Name: "basemap", OK: false, Detail: err.Error()}}
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	out := []Check{{Name: "basemap", OK: r.h.tileType == 1 && r.h.maxZoom >= 14,
 		Detail: fmt.Sprintf("type=%d zoom %d-%d bounds %v", r.h.tileType, r.h.minZoom, r.h.maxZoom, r.h.bounds)}}
 	z := r.h.maxZoom
@@ -147,7 +147,7 @@ func (s *state) verifyRoutes(ctx context.Context) []Check {
 	ready := false
 	for i := 0; i < 120 && !ready; i++ {
 		if resp, err := client.Get(base + "/status"); err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			ready = resp.StatusCode == http.StatusOK
 		}
 		if !ready {
@@ -194,7 +194,7 @@ func routeOnce(ctx context.Context, c *http.Client, base string, p [2][2]float64
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("route %s: %s", resp.Status, truncate(string(raw), 200))
@@ -217,7 +217,7 @@ func freePort() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 

@@ -90,7 +90,7 @@ func (b *Builder) downloadsDir() string   { return filepath.Join(b.DataDir, "dow
 func (b *Builder) generationsDir() string { return filepath.Join(b.DataDir, "generations") }
 func (b *Builder) workRoot() string       { return filepath.Join(b.DataDir, "work") }
 func (b *Builder) currentLink() string    { return filepath.Join(b.DataDir, "current") }
-func (b *Builder) sourcesDir() string     { return filepath.Join(b.DataDir, "sources", "planetiler") }
+func (b *Builder) sourcesDir() string     { return filepath.Join(b.DataDir, "cache", "planetiler") }
 
 // Run performs a whole build. On success the new generation is live and its manifest is
 // returned. On failure the live generation is untouched, the new one is deleted and a
@@ -117,10 +117,10 @@ func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest
 	err := st.run(ctx)
 	m.TotalS = b.now().Sub(start).Seconds()
 	if !opt.KeepWork {
-		os.RemoveAll(workDir)
+		_ = os.RemoveAll(workDir)
 	}
 	if err != nil {
-		os.RemoveAll(genDir)
+		_ = os.RemoveAll(genDir)
 		var se *StageError
 		if errors.As(err, &se) && se.LogTail == nil {
 			se.LogTail = st.tail.lines()

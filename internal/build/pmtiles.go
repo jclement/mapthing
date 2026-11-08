@@ -42,11 +42,11 @@ func openPMTiles(path string) (*pmReader, error) {
 	}
 	buf := make([]byte, 127)
 	if _, err := io.ReadFull(f, buf); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("pmtiles header: %w", err)
 	}
 	if string(buf[:7]) != "PMTiles" || buf[7] != 3 {
-		f.Close()
+		_ = f.Close()
 		return nil, errors.New("not a PMTiles v3 archive")
 	}
 	le := binary.LittleEndian
