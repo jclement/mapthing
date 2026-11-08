@@ -27,7 +27,9 @@ func (h *Handlers) Mount(mux *http.ServeMux, wrap func(kind string, h http.Handl
 	add := func(pattern, kind string, f http.HandlerFunc) { mux.Handle(pattern, wrap(kind, f)) }
 
 	add("POST /api/v1/route", "route", h.nativeRoute)
-	add("/api/v1/valhalla/{action}", "valhalla", h.passthrough)
+	// Methods are explicit: a method-less pattern conflicts with the server's "GET /" UI route.
+	add("GET /api/v1/valhalla/{action}", "valhalla", h.passthrough)
+	add("POST /api/v1/valhalla/{action}", "valhalla", h.passthrough)
 
 	add("POST /directions/v2:computeRoutes", "route", h.googleComputeRoutes)
 

@@ -13,12 +13,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 IMAGE=${SMOKE_IMAGE:-mapthing:dev}
 NAME=mapthing-smoke-$$
-PORT=${SMOKE_PORT:-18080}
+PORT=${SMOKE_PORT:-}   # empty: Docker picks a free host port
 REGION=${SMOKE_REGION:-north-america/us/delaware}
 BUILD_TIMEOUT=${SMOKE_BUILD_TIMEOUT:-3600}
 ADMIN_USER=smoke
 ADMIN_PASSWORD=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
-BASE=http://127.0.0.1:$PORT
 OWN_DATA=0
 if [[ -z "${SMOKE_DATA:-}" ]]; then
   SMOKE_DATA=$(mktemp -d "${TMPDIR:-/tmp}/mapthing-smoke.XXXXXX")
@@ -82,11 +81,14 @@ if [[ "${SMOKE_MODE:-full}" == pipeline ]]; then
   exit 0
 fi
 
-log "starting container (data $SMOKE_DATA, port $PORT)"
-docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8080" -v "$SMOKE_DATA:/data" -e MAPTHING_IMAGE_ID="$IMAGE_ID" \
+log "starting container (data $SMOKE_DATA)"
+docker run -d --name "$NAME" -p "127.0.0.1:${PORT}:8080" -v "$SMOKE_DATA:/data" -e MAPTHING_IMAGE_ID="$IMAGE_ID" \
   ${SMOKE_MEMORY:+--memory "$SMOKE_MEMORY"} \
   -e ADMIN_USER="$ADMIN_USER" -e ADMIN_PASSWORD="$ADMIN_PASSWORD" "$IMAGE" >/dev/null
 
+PORT=$(docker port "$NAME" 8080/tcp | head -1 | sed 's/.*://')
+BASE=http://127.0.0.1:$PORT
+log "listening on $BASE"
 for i in $(seq 1 60); do
   curl -fsS "$BASE/healthz" >/dev/null 2>&1 && break
   sleep 1
