@@ -3,6 +3,7 @@
 //
 //	mt-terrain build -bbox w,s,e,n [-id name] -out data/t/terrain.pmtiles [-work dir] [-cache dir] [-maxzoom 13]
 //	mt-terrain sample -in terrain.pmtiles lon,lat [lon,lat…]
+//	mt-terrain contours -in terrain.pmtiles -out contours.pmtiles [-minzoom 10 -maxzoom 12 -grid 256 -gridmax 512 -simplify 1.5 -blur 1]
 //
 // Set MAPTHING_GDAL_DOCKER=ghcr.io/osgeo/gdal:ubuntu-small-3.11.4 when GDAL
 // is not installed locally.
@@ -22,6 +23,7 @@ import (
 
 	"github.com/jclement/mapthing/internal/build"
 	"github.com/jclement/mapthing/internal/catalog"
+	"github.com/jclement/mapthing/internal/contours"
 	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/routing"
 )
@@ -39,7 +41,7 @@ func (r *logReporter) Logf(format string, a ...any) { slog.Info(fmt.Sprintf(form
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: mt-terrain build|sample …")
+		fmt.Fprintln(os.Stderr, "usage: mt-terrain build|sample|profile|contours …")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -71,6 +73,30 @@ func main() {
 			fail(err)
 		}
 		fmt.Fprintf(os.Stderr, "built in %s\n", time.Since(start).Round(time.Second))
+	case "contours":
+		fs := flag.NewFlagSet("contours", flag.ExitOnError)
+		in := fs.String("in", "", "terrain archive")
+		out := fs.String("out", "contours.pmtiles", "output archive")
+		var o contours.Options
+		fs.IntVar(&o.MinZoom, "minzoom", 0, "min zoom (default 10)")
+		fs.IntVar(&o.MaxZoom, "maxzoom", 0, "max zoom (default 12)")
+		fs.IntVar(&o.Grid, "grid", 0, "grid pixels per tile below max zoom (default 256)")
+		fs.IntVar(&o.GridMax, "gridmax", 0, "grid pixels per tile at max zoom (default 512)")
+		fs.Float64Var(&o.Simplify, "simplify", 0, "simplify tolerance, tile units of 4096 (default 1.5)")
+		fs.Float64Var(&o.MinRing, "minring", 0, "drop closed lines shorter than this, grid px (default 8)")
+		fs.IntVar(&o.Blur, "blur", 0, "smoothing passes (default 1, -1 none)")
+		_ = fs.Parse(os.Args[2:])
+		o.Progress = (&logReporter{}).Progress
+		res, err := contours.Build(ctx, *in, *out, o)
+		if err != nil {
+			fail(err)
+		}
+		st, err := os.Stat(*out)
+		if err != nil {
+			fail(err)
+		}
+		j, _ := json.Marshal(res)
+		fmt.Printf("%s\n%s: %d bytes\n", j, *out, st.Size())
 	case "sample":
 		fs := flag.NewFlagSet("sample", flag.ExitOnError)
 		in := fs.String("in", "data/terrain/terrain.pmtiles", "archive")

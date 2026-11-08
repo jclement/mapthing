@@ -266,7 +266,13 @@ export function generations(): Generation[] {
       status: "live",
       manifest: {
         regions,
-        sizes: { basemap: 1.42 * GB, terrain: 3.1 * GB, routing: 1.9 * GB, total: 6.42 * GB },
+        sizes: {
+          basemap: 1.42 * GB,
+          terrain: 3.1 * GB,
+          contours: 0.21 * GB,
+          routing: 1.9 * GB,
+          total: 6.63 * GB,
+        },
         timings: {
           download: 212,
           merge: 48,

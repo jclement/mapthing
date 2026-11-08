@@ -22,8 +22,9 @@ import (
 
 // Tilesets served from each generation: name → file.
 var tilesets = map[string]string{
-	"basemap": "basemap.pmtiles",
-	"terrain": "terrain.pmtiles",
+	"basemap":  "basemap.pmtiles",
+	"terrain":  "terrain.pmtiles",
+	"contours": "contours.pmtiles",
 }
 
 // Options configure a Server.

@@ -164,6 +164,19 @@ export default {
     highlight: "rgba(255, 255, 255, 0.35)",
     accent: "rgba(60, 40, 20, 0.18)",
   },
+  // stronger: darker brown, wider index lines, larger labels for sunlight
+  contours: {
+    ...base.contours,
+    minorColor: "#8a5a2b",
+    majorColor: "#6e4320",
+    minorOpacity: [11, 0, 12, 0.45, 15, 0.55],
+    majorOpacity: [10, 0.5, 12, 0.7, 15, 0.8],
+    minorWidth: [11, 0.5, 14, 0.8, 17, 1.2],
+    majorWidth: [10, 0.8, 14, 1.4, 17, 2],
+    labelSize: [12, 11, 16, 13],
+    labelColor: "#5a3818",
+    labelHalo: "rgba(255, 255, 255, 0.95)",
+  },
   tweak: (layers) => {
     setPaint(layers, MAJOR_FILLS.slice(0, 2), { "line-color": majorFill });
     setPaint(layers, MAJOR_FILLS, { "line-width": widthByClass(Z, majorWidth) });

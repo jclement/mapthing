@@ -5,8 +5,9 @@
 // Base layers come from @protomaps/basemaps (BSD-3-Clause, see ../LICENSE-protomaps-basemaps.md)
 // for the Protomaps v4 tile schema. On top of them this file adds: field road layers (tracks,
 // unpaved overlay), tuned minor/service road widths and casings, simplified English labels with
-// fonts we ship, a hillshade from the terrain source and a raster layer with id "satellite" from
-// the imagery source (present in every theme; visible or not per theme).
+// fonts we ship, a hillshade from the terrain source, contour lines with elevation labels from the
+// contours source (contours.pmtiles, built from the same terrain), and a raster layer with id
+// "satellite" from the imagery source (present in every theme; visible or not per theme).
 //
 // Output must load in mapbox-gl 1.13.1 and current MapLibre GL JS: validate.mjs enforces it.
 //
@@ -53,6 +54,13 @@ function sources(theme) {
       minzoom: 0,
       maxzoom: theme.terrainMaxzoom ?? 12,
       attribution: ATTR_TERRAIN,
+    },
+    contours: {
+      type: "vector",
+      tiles: ["{{BASE_URL}}/tiles/contours/{z}/{x}/{y}.mvt{{KEY_QS}}"],
+      minzoom: 10,
+      maxzoom: theme.contourMaxzoom ?? 12,
+      attribution: ATTR_TERRAIN, // same string as terrain: GL shows it once
     },
     imagery: {
       type: "raster",
@@ -222,6 +230,52 @@ function hillshadeLayer(t) {
   };
 }
 
+// Contour lines from contours.pmtiles (layer "contours": ele in metres, major on index lines).
+// The archive holds 100/20 m lines in its z10-11 tiles and 50/10 m in its z12 tiles, which are
+// overzoomed beyond z12. Themes set colours, widths and opacities in t.contours.
+function contourLayers(t) {
+  const c = t.contours;
+  const hidden = c.enabled === false ? { visibility: "none" } : {};
+  const line = (id, major, minzoom) => ({
+    id,
+    type: "line",
+    source: "contours",
+    "source-layer": "contours",
+    minzoom,
+    filter: ["==", "major", major],
+    layout: { ...hidden, "line-join": "round" },
+    paint: {
+      "line-color": major ? c.majorColor : c.minorColor,
+      "line-width": lin(major ? c.majorWidth : c.minorWidth),
+      "line-opacity": lin(major ? c.majorOpacity : c.minorOpacity),
+    },
+  });
+  return {
+    lines: [line("contours_minor", false, c.minorMinzoom), line("contours_major", true, 10)],
+    labels: [
+      {
+        id: "contours_labels",
+        type: "symbol",
+        source: "contours",
+        "source-layer": "contours",
+        minzoom: c.labelMinzoom,
+        filter: ["==", "major", true],
+        layout: {
+          ...hidden,
+          "symbol-placement": "line",
+          "symbol-spacing": c.labelSpacing,
+          "text-field": ["concat", ["to-string", ["get", "ele"]], " m"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": lin(c.labelSize),
+          "text-max-angle": 25,
+          "text-padding": 4,
+        },
+        paint: { "text-color": c.labelColor, "text-halo-color": c.labelHalo, "text-halo-width": 1.2 },
+      },
+    ],
+  };
+}
+
 function satelliteLayer(t) {
   return {
     id: "satellite",
@@ -271,18 +325,23 @@ export function buildStyle(t) {
   insertAt(ls, "roads_minor_service_casing", road.casings, false);
   insertAt(ls, "roads_minor", road.fills, true);
 
+  const contours = contourLayers(t);
   if (t.overImagery) {
     ls = overImagery(ls, t);
     ls.unshift(
       { id: "background", type: "background", paint: { "background-color": t.overImagery.background } },
       satelliteLayer(t),
+      ...contours.lines,
     );
   } else {
-    // hillshade over land cover / land use, under water; imagery above every fill and under
-    // roads, so toggling "satellite" on gives a hybrid map
-    insertAt(ls, "water", [hillshadeLayer(t)], false);
+    // hillshade over land cover / land use, under water; contour lines on the hillshade (lakes
+    // cover them); imagery above every fill and under roads, so toggling "satellite" on gives
+    // a hybrid map
+    insertAt(ls, "water", [hillshadeLayer(t), ...contours.lines], false);
     insertAt(ls, "roads_tunnels_other_casing", [satelliteLayer(t)], false);
   }
+  // contour labels under every other label: they give way to roads, places and POIs
+  insertAt(ls, ls.find((l) => l.type === "symbol").id, contours.labels, false);
 
   for (const id of t.hide || []) {
     const l = ls.find((x) => x.id === id);

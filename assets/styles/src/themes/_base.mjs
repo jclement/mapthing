@@ -50,6 +50,25 @@ export const base = {
     accent: "rgba(70, 60, 50, 0.12)",
   },
 
+  // contour lines and labels (contours.pmtiles). Widths and opacities are linear zoom stops.
+  // The z10-11 tiles carry 100 m major / 20 m minor lines, z12+ 50 m / 10 m.
+  contourMaxzoom: 12, // the archive's max zoom; overzoomed beyond
+  contours: {
+    enabled: true,
+    minorColor: "#9c7b5a",
+    majorColor: "#8a6a4a",
+    minorWidth: [11, 0.4, 14, 0.6, 17, 1],
+    majorWidth: [10, 0.6, 14, 1, 17, 1.6],
+    minorOpacity: [11, 0, 12, 0.3, 15, 0.4],
+    majorOpacity: [10, 0.3, 12, 0.5, 15, 0.6],
+    minorMinzoom: 11,
+    labelMinzoom: 12,
+    labelSize: [12, 10, 16, 12],
+    labelSpacing: 350,
+    labelColor: "#7a5c3e",
+    labelHalo: "rgba(255, 255, 255, 0.85)",
+  },
+
   // every theme has the raster layer "satellite"; only its visibility differs
   satellite: { visible: false, paint: {} },
 

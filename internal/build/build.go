@@ -1,5 +1,5 @@
 // Package build produces generations: it refreshes region downloads, merges them, runs
-// Planetiler (Protomaps profile), builds the Valhalla graph and the terrain archive, verifies the
+// Planetiler (Protomaps profile), builds the Valhalla graph and the terrain and contour archives, verifies the
 // result and atomically swaps /data/current to it. See docs/architecture.md.
 package build
 
@@ -236,6 +236,15 @@ func (s *state) terrainStage(ctx context.Context) error {
 		s.m.Artifacts["terrain.pmtiles"] = st.Size()
 	}
 	s.terrain = true
+	if cf := hooks.contoursFunc(); cf != nil {
+		cout := filepath.Join(s.genDir, "contours.pmtiles")
+		if err := cf(ctx, &stageReporter{s}, out, cout); err != nil {
+			return fmt.Errorf("contours: %w", err)
+		}
+		if st, err := os.Stat(cout); err == nil {
+			s.m.Artifacts["contours.pmtiles"] = st.Size()
+		}
+	}
 	return nil
 }
 

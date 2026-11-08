@@ -14,6 +14,11 @@ type TerrainFunc func(ctx context.Context, r Reporter, regions []catalog.Region,
 // TerrainEstimateFunc estimates the disk bytes a terrain build needs (DEM cache + output).
 type TerrainEstimateFunc func(regions []catalog.Region) int64
 
+// ContoursFunc builds contours.pmtiles at outPath from the terrain archive at terrainPath.
+// internal/build/contours.go registers one from init(); the terrain stage runs it after a
+// successful terrain build.
+type ContoursFunc func(ctx context.Context, r Reporter, terrainPath, outPath string) error
+
 // ElevationCheckFunc verifies terrainPath answers at each lon/lat point.
 type ElevationCheckFunc func(ctx context.Context, terrainPath string, pts [][2]float64) error
 
@@ -22,6 +27,7 @@ type hookSet struct {
 	terrainF TerrainFunc
 	estimate TerrainEstimateFunc
 	check    ElevationCheckFunc
+	contours ContoursFunc
 }
 
 var hooks hookSet
@@ -41,6 +47,15 @@ func RegisterElevationCheck(f ElevationCheckFunc) {
 	hooks.mu.Lock()
 	hooks.check = f
 	hooks.mu.Unlock()
+}
+
+// RegisterContours installs the contour builder.
+func RegisterContours(f ContoursFunc) { hooks.mu.Lock(); hooks.contours = f; hooks.mu.Unlock() }
+
+func (h *hookSet) contoursFunc() ContoursFunc {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.contours
 }
 
 func (h *hookSet) terrain() TerrainFunc {
