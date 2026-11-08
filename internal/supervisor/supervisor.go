@@ -266,7 +266,7 @@ func (s *Supervisor) wait(ctx context.Context, p *proc, d time.Duration) bool {
 // because a restart was requested.
 func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarted bool, err error) {
 	p.set(StateStarting, "")
-	cmd := exec.Command(bin, p.spec.Command[1:]...)
+	cmd := exec.Command(bin, p.spec.Command[1:]...) //nolint:noctx // lifetime is managed here: SIGTERM to the group, then SIGKILL
 	cmd.Dir = p.spec.Dir
 	cmd.Env = append(os.Environ(), p.spec.Env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -361,10 +361,12 @@ func stop(cmd *exec.Cmd, exited chan error) {
 	pgid := -cmd.Process.Pid
 	_ = syscall.Kill(pgid, syscall.SIGTERM)
 	select {
-	case <-exited:
+	case err := <-exited:
+		_ = err // the exit status of a process we stopped is not interesting
 	case <-time.After(stopTimeout):
 		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		<-exited
+		err := <-exited
+		_ = err
 	}
 }
 

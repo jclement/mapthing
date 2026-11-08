@@ -47,7 +47,7 @@ func NewDiskCache(dir string, maxBytes int64) (*DiskCache, error) {
 	var all []found
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
-			return nil
+			return nil //nolint:nilerr // skip unreadable entries
 		}
 		if strings.HasPrefix(d.Name(), ".tmp-") {
 			_ = os.Remove(p)
@@ -55,7 +55,7 @@ func NewDiskCache(dir string, maxBytes int64) (*DiskCache, error) {
 		}
 		fi, err := d.Info()
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // skip unreadable entries
 		}
 		rel, _ := filepath.Rel(dir, p)
 		all = append(all, found{filepath.ToSlash(rel), fi.Size(), fi.ModTime()})

@@ -58,7 +58,7 @@ func (d *diskStats) get() diskReport {
 	dl := filepath.Join(d.dataDir, "downloads")
 	_ = filepath.WalkDir(dl, func(p string, de fs.DirEntry, err error) error {
 		if err != nil || de.IsDir() {
-			return nil
+			return nil //nolint:nilerr // skip unreadable entries
 		}
 		if fi, err := de.Info(); err == nil {
 			rel, _ := filepath.Rel(dl, filepath.Dir(p))

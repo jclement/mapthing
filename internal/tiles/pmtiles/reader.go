@@ -82,7 +82,7 @@ func (r *Reader) read(off, n uint64) ([]byte, error) {
 		return nil, errors.New("range outside archive")
 	}
 	b := make([]byte, n)
-	if _, err := r.ra.ReadAt(b, int64(off)); err != nil && !(errors.Is(err, io.EOF) && uint64(len(b)) == n) {
+	if _, err := r.ra.ReadAt(b, int64(off)); err != nil && (!errors.Is(err, io.EOF) || uint64(len(b)) != n) {
 		return nil, err
 	}
 	return b, nil

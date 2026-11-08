@@ -24,6 +24,12 @@ linters:
         - G306 # WriteFile permissions: data files are not secret
         - G301 # MkdirAll 0755: data directories are not secret
         - G302
+        - G122 # WalkDir TOCTOU: walks are over mapthing's own data dir
+        - G124 # cookie attributes: Secure is set per request (isHTTPS), HttpOnly+SameSite always
+        - G602 # false positive on guarded entries[i-1]
+        - G703 # taint path traversal: cache keys are validated (validKey), paths built from them
+        - G704 # taint SSRF: upstream URLs come from operator config, not requests
+        - G705 # taint XSS: JSON/protobuf/png bodies with explicit content types and nosniff
     revive:
       rules:
         - name: exported

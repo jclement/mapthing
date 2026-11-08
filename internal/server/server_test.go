@@ -51,10 +51,10 @@ var testAssets = fstest.MapFS{
 "glyphs":"{{BASE_URL}}/fonts/{fontstack}/{range}.pbf{{KEY_QS}}",
 "sources":{"protomaps":{"type":"vector","url":"{{BASE_URL}}/tiles/basemap.json{{KEY_QS}}"},"imagery":{"type":"raster","tiles":["{{BASE_URL}}/tiles/imagery/{z}/{x}/{y}.jpg{{KEY_QS}}"],"attribution":"built-in"}},
 "layers":[{"id":"satellite","type":"raster","source":"imagery","layout":{"visibility":"none"}}]}`)},
-	"styles/outdoors-dark.json":           {Data: []byte(`{"version":8,"layers":[]}`)},
-	"fonts/Noto Sans Regular/0-255.pbf":   {Data: []byte("glyphs")},
-	"sprites/outdoors@2x.png":             {Data: []byte("\x89PNG")},
-	"sprites/outdoors.json":               {Data: []byte(`{}`)},
+	"styles/outdoors-dark.json":         {Data: []byte(`{"version":8,"layers":[]}`)},
+	"fonts/Noto Sans Regular/0-255.pbf": {Data: []byte("glyphs")},
+	"sprites/outdoors@2x.png":           {Data: []byte("\x89PNG")},
+	"sprites/outdoors.json":             {Data: []byte(`{}`)},
 }
 
 // fixtureTile returns the uncompressed body of a fixture tile; empty at z6 x>=32.
@@ -722,9 +722,9 @@ func TestStatsFlushAndReport(t *testing.T) {
 	e.do(nil, "GET", "/tiles/basemap/0/0/0.mvt?key="+secret, nil, nil) // unflushed, still reported
 	_, b := e.do(c, "GET", "/admin/api/stats?days=7", nil, nil)
 	var rep struct {
-		Total  int64 `json:"total"`
-		ByDay  []struct{ Day string } `json:"by_day"`
-		ByKey  []struct {
+		Total int64                  `json:"total"`
+		ByDay []struct{ Day string } `json:"by_day"`
+		ByKey []struct {
 			KeyID int64 `json:"key_id"`
 			Total int64 `json:"total"`
 			Label string

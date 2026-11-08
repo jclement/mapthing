@@ -60,7 +60,7 @@ func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, err := s.client.Do(req)
 		if err != nil {
-			return fmt.Errorf("%w: renderer: %v", errUpstream, err)
+			return fmt.Errorf("%w: renderer: %w", errUpstream, err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {

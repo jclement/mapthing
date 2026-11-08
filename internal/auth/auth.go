@@ -33,9 +33,9 @@ const SessionTTL = 7 * 24 * time.Hour
 // Principal is who made a keyed request.
 type Principal struct {
 	Admin    bool
-	Internal bool // the local renderer, authenticated by the internal token
-	KeyID  int64  // 0 for the admin session
-	Secret string // the key as presented (for templating it into style URLs); "" for admin
+	Internal bool   // the local renderer, authenticated by the internal token
+	KeyID    int64  // 0 for the admin session
+	Secret   string // the key as presented (for templating it into style URLs); "" for admin
 }
 
 type ctxKey struct{}

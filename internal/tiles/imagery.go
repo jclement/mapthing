@@ -30,7 +30,7 @@ func (s *Server) serveImagery(w http.ResponseWriter, r *http.Request, z, x, y in
 		req.Header.Set("User-Agent", userAgent)
 		resp, err := s.client.Do(req)
 		if err != nil {
-			return fmt.Errorf("%w: %v", errUpstream, err)
+			return fmt.Errorf("%w: %w", errUpstream, err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
