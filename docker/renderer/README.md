@@ -88,6 +88,7 @@ basemap tiles from local PMTiles, terrain and imagery proxied from public source
 bun docker/renderer/dev/devserver.js data/delaware.pmtiles      # in its own terminal, :8080 (DEV_PORT)
 docker run --rm --network host -e MAPTHING_INTERNAL_TOKEN=dev mapthing-renderer:dev
 bun docker/renderer/dev/screens.js http://127.0.0.1:8081 data/screens
+bun docker/renderer/dev/glcheck.js http://127.0.0.1:8080 data/screens/gl   # styles in mapbox-gl 1.13.1 + MapLibre 6
 ```
 
 A small PMTiles for testing: `pmtiles extract https://build.protomaps.com/<YYYYMMDD>.pmtiles

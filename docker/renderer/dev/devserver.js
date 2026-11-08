@@ -40,13 +40,13 @@ if (!archives.length) console.warn("no PMTiles archives given: basemap tiles wil
 
 const proxied = new Map(); // tiny in-memory cache for the upstream proxies
 async function proxy(url, type) {
-  if (proxied.has(url)) return new Response(proxied.get(url), { headers: { "Content-Type": type } });
+  if (proxied.has(url)) return new Response(proxied.get(url), { headers: { "Content-Type": type, "Access-Control-Allow-Origin": "*" } });
   const r = await fetch(url, { headers: { "User-Agent": "mapthing-devserver" } });
   if (!r.ok) return new Response(null, { status: r.status === 404 ? 404 : 502 });
   const body = new Uint8Array(await r.arrayBuffer());
   if (proxied.size > 5000) proxied.clear();
   proxied.set(url, body);
-  return new Response(body, { headers: { "Content-Type": type } });
+  return new Response(body, { headers: { "Content-Type": type, "Access-Control-Allow-Origin": "*" } });
 }
 
 Bun.serve({
