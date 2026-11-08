@@ -145,3 +145,21 @@ Government Licence – Canada); Province of BC (Open Government Licence – Brit
 (Open Government Licence – Alberta); Copernicus DEM (© DLR/Airbus, ESA licence). Imagery
 attribution depends on the configured imagery source. Attributions appear in every style, the
 UI footer and the README.
+
+## Renderer and internal requests
+
+The renderer (`docker/renderer/`, Node 24 + MapLibre Native on a private Xvfb display; Bun cannot
+load the addon, see its README) listens on `127.0.0.1:8081`:
+`GET /render/{style}/{size}/{z}/{x}/{y}[@2x].png`, `GET /healthz`, `POST /reload`. mapthing
+proxies `/styles/{name}/{size}/{z}/{x}/{y}[@2x].png` to it.
+
+The renderer reads styles, tiles, glyphs and sprites from mapthing itself. Those requests come
+from localhost with the header `X-Mapthing-Internal: $MAPTHING_INTERNAL_TOKEN` and need no API
+key. `MAPTHING_INTERNAL_TOKEN` is a secret shared by mapthing and the renderer: the supervisor
+generates a random one at start when it is unset and passes it to the child. mapthing accepts
+the header only from loopback addresses. `GET /styles/{name}.json?internal=1` returns the style
+with `{{KEY_QS}}` empty. The renderer sends every `/tiles/`, `/fonts/`, `/sprites/`, `/styles/`
+URL to `MAPTHING_URL` (default `http://127.0.0.1:8080`) whatever host the style names.
+
+Styles are generated from themes (`assets/styles/src/`, `mise run styles`); see `docs/styles.md`.
+Imagery sources and licences: `docs/imagery.md`.

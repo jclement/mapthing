@@ -1,0 +1,29 @@
+#!/bin/sh
+# Start the renderer on a private Xvfb display. MapLibre Native's Linux build renders through
+# GLX; Mesa's llvmpipe does the work in software, so no GPU is needed.
+#   RENDERER_RUNTIME   node (default). Bun cannot load the addon: see README.md.
+#   RENDERER_DISPLAY   X display number to use (default 99)
+# xvfb-run is not used: it hangs when it runs as PID 1 in a container.
+set -eu
+cd "$(dirname "$0")"
+RUNTIME=${RENDERER_RUNTIME:-node}
+DISP=${RENDERER_DISPLAY:-99}
+export LIBGL_ALWAYS_SOFTWARE=1 DISPLAY=":$DISP"
+
+rm -f "/tmp/.X$DISP-lock" "/tmp/.X11-unix/X$DISP"
+Xvfb ":$DISP" -screen 0 1024x768x24 -nolisten tcp -noreset >/dev/null 2>&1 &
+XPID=$!
+i=0
+while [ ! -S "/tmp/.X11-unix/X$DISP" ]; do
+  i=$((i + 1))
+  if [ $i -gt 100 ] || ! kill -0 $XPID 2>/dev/null; then echo "Xvfb did not start" >&2; exit 1; fi
+  sleep 0.1
+done
+
+"$RUNTIME" server.js &
+RPID=$!
+trap 'kill -TERM $RPID 2>/dev/null; wait $RPID; kill $XPID 2>/dev/null' TERM INT
+# exit as soon as either process dies, so the supervisor restarts the pair
+while kill -0 $RPID 2>/dev/null && kill -0 $XPID 2>/dev/null; do sleep 1; done
+kill $RPID $XPID 2>/dev/null || true
+wait $RPID 2>/dev/null
