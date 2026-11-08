@@ -1,0 +1,17 @@
+{
+  "name": "mapthing-styles",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Generator for mapthing's GL styles: one theme object per style (src/themes) through one layer builder (src/layers.mjs).",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node src/build.mjs",
+    "check": "node src/build.mjs --check"
+  },
+  "devDependencies": {
+    "@mapbox/mapbox-gl-style-spec": "13.28.0",
+    "@maplibre/maplibre-gl-style-spec": "26.5.1",
+    "@protomaps/basemaps": "5.7.2"
+  }
+}

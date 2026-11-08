@@ -1,0 +1,18 @@
+{
+  "name": "mapthing-renderer",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Raster tile renderer for mapthing: renders GL styles to PNG with MapLibre Native.",
+  "license": "MIT",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "bun server.js",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@maplibre/maplibre-gl-native": "6.4.1",
+    "sharp": "0.35.5"
+  },
+  "trustedDependencies": ["@maplibre/maplibre-gl-native", "sharp"]
+}

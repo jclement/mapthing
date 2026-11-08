@@ -1,0 +1,35 @@
+# Styles, glyphs, sprites
+
+GL styles (`/styles/{name}.json`) are generated: one theme object per style in
+`assets/styles/src/themes/` goes through one layer builder (`assets/styles/src/layers.mjs`) and
+`mise run styles` writes `assets/styles/<name>.json`, validated against the Mapbox GL style spec
+v13 (mapbox-gl 1.13.x) and the current MapLibre spec, plus a ban-list of newer expressions and
+properties. `mise run lint` fails if a committed style is stale. Fields:
+`assets/styles/src/themes/README.md`.
+
+Themes: `outdoors` (light, field use), `outdoors-dark`, `satellite` (imagery with roads and
+labels). Every style has the raster layer `satellite` (source `imagery`), hidden unless the
+theme shows it, so Mapbox GL 1.13 clients can toggle it.
+
+Base layers: `@protomaps/basemaps` 5.7.2 (BSD-3-Clause, `assets/styles/LICENSE-protomaps-basemaps.md`)
+for the Protomaps v4 tile schema, with field changes:
+
+- `highway=track` (`kind=path`, `kind_detail=track`) drawn brown and dashed with a light casing
+  from z12, the zoom the tiles start carrying them;
+- service roads cased from z13; minor roads wider and cased from z12; minor road names from z13;
+- an `roads_unpaved` dashed overlay on minor/major roads whose `surface` is unpaved. The stock
+  Protomaps profile does not emit `surface`, so this layer is inert until the tile build keeps
+  it;
+- hillshade from the `terrain` raster-dem source (Terrarium, 256 px, maxzoom 12);
+- labels: English name, else local name; single-font stacks only.
+
+Placeholders filled in by the server: `{{BASE_URL}}` and `{{KEY_QS}}`.
+
+Glyphs: `assets/fonts/<Noto Sans Regular|Medium|Italic>/<range>.pbf`, SDF PBFs from
+protomaps/basemaps-assets (SIL OFL 1.1, `assets/fonts/OFL.txt`). Only Latin, Latin Extended,
+IPA, combining marks, Greek, Cyrillic and general punctuation are committed (~2.5 MB);
+`assets/fonts/fetch.sh --all [dest]` fetches every range (~18 MB) at a pinned commit, e.g. at
+image build time.
+
+Sprites: `assets/sprites/outdoors{,@2x}` and `outdoors-dark{,@2x}`, the Protomaps v4 light/dark
+sprite sheets (derived from MIT-licensed tangrams/icons; `assets/sprites/LICENSE-tangrams-icons.md`).
