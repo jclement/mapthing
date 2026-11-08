@@ -2,6 +2,8 @@
 // water, near-neutral vegetation; roads lighten with rank. Built so light and saturated data
 // colours (cyan, orange, light grey, green) read on top. POI icons are off.
 import { base } from "./_base.mjs";
+import { ex } from "../layers.mjs";
+import { streams, thinShields } from "./_roads.mjs";
 
 const casing = "#111213";
 
@@ -16,8 +18,8 @@ export default {
     earth: "#1b1d1f",
     park_a: "#1c211e",
     park_b: "#1e2621",
-    wood_a: "#1c211e",
-    wood_b: "#1e2520",
+    wood_a: "#1d2420",
+    wood_b: "#1f2621",
     scrub_a: "#1d201d",
     scrub_b: "#1f231f",
     glacier: "#25282b",
@@ -51,13 +53,13 @@ export default {
     highway_casing_late: casing,
     major_casing_early: casing,
     highway_casing_early: casing,
-    other: "#2e3235",
-    minor_service: "#3a3e42",
-    minor_a: "#42474c",
-    minor_b: "#42474c",
-    link: "#474d52",
-    major: "#474d52",
-    highway: "#5b6268",
+    other: "#33373b",
+    minor_service: "#4a4f56",
+    minor_a: "#4f555b",
+    minor_b: "#4f555b",
+    link: "#5a6066",
+    major: "#5a6066",
+    highway: "#6a7178",
     railway: "#43494e",
     boundaries: "#5a636b",
     bridges_other_casing: casing,
@@ -65,11 +67,11 @@ export default {
     bridges_link_casing: casing,
     bridges_major_casing: casing,
     bridges_highway_casing: casing,
-    bridges_other: "#2e3235",
-    bridges_minor: "#42474c",
-    bridges_link: "#474d52",
-    bridges_major: "#474d52",
-    bridges_highway: "#5b6268",
+    bridges_other: "#33373b",
+    bridges_minor: "#4f555b",
+    bridges_link: "#5a6066",
+    bridges_major: "#5a6066",
+    bridges_highway: "#6a7178",
     roads_label_minor: "#8c959b",
     roads_label_minor_halo: "#141617",
     roads_label_major: "#9ba4aa",
@@ -91,13 +93,20 @@ export default {
       farmland: "rgba(30, 33, 31, 1)",
       glacier: "rgba(40, 43, 46, 1)",
       scrub: "rgba(31, 33, 29, 1)",
-      forest: "rgba(27, 34, 30, 1)",
+      forest: "rgba(29, 37, 32, 1)",
     },
   },
+  roads: {
+    ...base.roads,
+    // lease and service roads get a body (1.25 px over a dark casing) that the client's 1 px
+    // survey-grid lines do not have
+    serviceWidth: [13, 1.25, 15, 2, 18, 8],
+    serviceCasingWidth: [13, 0.5, 18, 1],
+  },
   colors: {
-    minor: "#42474c",
+    minor: "#4f555b",
     minor_casing: casing,
-    service: "#3a3e42",
+    service: "#4a4f56",
     service_casing: casing,
     track: "#8a7f71",
     track_casing: "rgba(15, 16, 17, 0.6)",
@@ -106,10 +115,27 @@ export default {
     road_label_halo: "#141617",
   },
   labels: { ...base.labels, pois: false },
+  // on charcoal a shadow has almost nothing to darken: relief has to come from the highlight
   hillshade: {
     ...base.hillshade,
-    shadow: "rgba(0, 0, 0, 0.65)",
-    highlight: "rgba(255, 255, 255, 0.09)",
-    accent: "rgba(0, 0, 0, 0.2)",
+    exaggeration: [4, 0.7, 10, 0.65, 15, 0.45],
+    shadow: "rgba(0, 0, 0, 0.6)",
+    highlight: "rgba(255, 255, 255, 0.2)",
+    accent: "rgba(255, 255, 255, 0.03)",
+  },
+  tweak: (layers) => {
+    thinShields(layers);
+    // route numbers as grey rounded tags, not the sprite's black pill with a white ring, which
+    // looks like a junction point in the client's data
+    for (const l of layers.filter((x) => x.id.startsWith("roads_shields"))) {
+      delete l.layout["icon-image"];
+      delete l.layout["icon-size"];
+      delete l.layout["icon-rotation-alignment"];
+      l.layout["text-size"] = 10;
+      l.layout["text-padding"] = 4;
+      l.paint = { "text-color": "#c4c8cc", "text-halo-color": "#3a3e44", "text-halo-width": 2.4 };
+    }
+    streams(layers, "#3b5466", ex([12, 1, 15, 2, 18, 4]));
+    return layers;
   },
 };

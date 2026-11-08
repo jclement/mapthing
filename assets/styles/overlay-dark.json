@@ -90,7 +90,7 @@
      "rgba(40, 43, 46, 1)",
      "scrub",
      "rgba(31, 33, 29, 1)",
-     "rgba(27, 34, 30, 1)"
+     "rgba(29, 37, 32, 1)"
     ],
     "fill-opacity": [
      "interpolate",
@@ -176,7 +176,7 @@
       ],
       "wood"
      ],
-     "#1e2520",
+     "#1f2621",
      [
       "in",
       [
@@ -428,15 +428,15 @@
       "zoom"
      ],
      4,
-     0.5,
+     0.7,
      10,
-     0.45,
+     0.65,
      15,
-     0.3
+     0.45
     ],
-    "hillshade-shadow-color": "rgba(0, 0, 0, 0.65)",
-    "hillshade-highlight-color": "rgba(255, 255, 255, 0.09)",
-    "hillshade-accent-color": "rgba(0, 0, 0, 0.2)",
+    "hillshade-shadow-color": "rgba(0, 0, 0, 0.6)",
+    "hillshade-highlight-color": "rgba(255, 255, 255, 0.2)",
+    "hillshade-accent-color": "rgba(255, 255, 255, 0.03)",
     "hillshade-illumination-direction": 335
    }
   },
@@ -459,15 +459,30 @@
    "type": "line",
    "source": "protomaps",
    "source-layer": "water",
-   "minzoom": 14,
+   "minzoom": 12,
    "filter": [
     "in",
     "kind",
     "stream"
    ],
    "paint": {
-    "line-color": "#25313b",
-    "line-width": 0.5
+    "line-color": "#3b5466",
+    "line-width": [
+     "interpolate",
+     [
+      "exponential",
+      1.6
+     ],
+     [
+      "zoom"
+     ],
+     12,
+     1,
+     15,
+     2,
+     18,
+     4
+    ]
    }
   },
   {
@@ -1158,9 +1173,9 @@
       "zoom"
      ],
      13,
-     0.6,
+     1.25,
      15,
-     1.5,
+     2,
      18,
      8
     ],
@@ -1439,7 +1454,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#2e3235",
+    "line-color": "#33373b",
     "line-width": [
      "interpolate",
      [
@@ -1466,7 +1481,7 @@
     "is_link"
    ],
    "paint": {
-    "line-color": "#474d52",
+    "line-color": "#5a6066",
     "line-width": [
      "interpolate",
      [
@@ -1512,7 +1527,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#3a3e42",
+    "line-color": "#4a4f56",
     "line-width": [
      "interpolate",
      [
@@ -1523,9 +1538,9 @@
       "zoom"
      ],
      13,
-     0.6,
+     1.25,
      15,
-     1.5,
+     2,
      18,
      8
     ]
@@ -1558,7 +1573,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#42474c",
+    "line-color": "#4f555b",
     "line-width": [
      "interpolate",
      [
@@ -1769,7 +1784,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#474d52",
+    "line-color": "#5a6066",
     "line-width": [
      "interpolate",
      [
@@ -1876,7 +1891,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#5b6268",
+    "line-color": "#6a7178",
     "line-width": [
      "interpolate",
      [
@@ -2225,7 +2240,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#2e3235",
+    "line-color": "#33373b",
     "line-dasharray": [
      2,
      1
@@ -2265,7 +2280,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#42474c",
+    "line-color": "#4f555b",
     "line-width": [
      "interpolate",
      [
@@ -2304,7 +2319,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#42474c",
+    "line-color": "#4f555b",
     "line-width": [
      "interpolate",
      [
@@ -2342,7 +2357,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#474d52",
+    "line-color": "#5a6066",
     "line-width": [
      "interpolate",
      [
@@ -2443,7 +2458,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#5b6268",
+    "line-color": "#6a7178",
     "line-width": [
      "interpolate",
      [
@@ -2736,6 +2751,77 @@
    }
   },
   {
+   "id": "roads_shields_major",
+   "type": "symbol",
+   "source": "protomaps",
+   "source-layer": "roads",
+   "filter": [
+    "all",
+    [
+     "in",
+     [
+      "get",
+      "kind"
+     ],
+     [
+      "literal",
+      [
+       "highway",
+       "major_road"
+      ]
+     ]
+    ],
+    [
+     "has",
+     "shield_text"
+    ],
+    [
+     "<=",
+     [
+      "length",
+      [
+       "get",
+       "shield_text"
+      ]
+     ],
+     5
+    ],
+    [
+     "in",
+     [
+      "get",
+      "network"
+     ],
+     [
+      "literal",
+      [
+       "US:I",
+       "US:US"
+      ]
+     ]
+    ]
+   ],
+   "layout": {
+    "text-field": [
+     "get",
+     "shield_text"
+    ],
+    "text-font": [
+     "Noto Sans Medium"
+    ],
+    "text-size": 10,
+    "symbol-placement": "line",
+    "text-rotation-alignment": "viewport",
+    "text-padding": 4
+   },
+   "paint": {
+    "text-color": "#c4c8cc",
+    "text-halo-color": "#3a3e44",
+    "text-halo-width": 2.4
+   },
+   "maxzoom": 11
+  },
+  {
    "id": "roads_shields",
    "type": "symbol",
    "source": "protomaps",
@@ -2773,51 +2859,6 @@
     ]
    ],
    "layout": {
-    "icon-image": [
-     "match",
-     [
-      "get",
-      "network"
-     ],
-     "US:I",
-     [
-      "concat",
-      "US:I-",
-      [
-       "length",
-       [
-        "get",
-        "shield_text"
-       ]
-      ],
-      "char"
-     ],
-     "NL:S-road",
-     [
-      "concat",
-      "NL:S-road-",
-      [
-       "length",
-       [
-        "get",
-        "shield_text"
-       ]
-      ],
-      "char"
-     ],
-     [
-      "concat",
-      "generic_shield-",
-      [
-       "length",
-       [
-        "get",
-        "shield_text"
-       ]
-      ],
-      "char"
-     ]
-    ],
     "text-field": [
      "get",
      "shield_text"
@@ -2825,15 +2866,17 @@
     "text-font": [
      "Noto Sans Medium"
     ],
-    "text-size": 8,
-    "icon-size": 0.8,
+    "text-size": 10,
     "symbol-placement": "line",
-    "icon-rotation-alignment": "viewport",
-    "text-rotation-alignment": "viewport"
+    "text-rotation-alignment": "viewport",
+    "text-padding": 4
    },
    "paint": {
-    "text-color": "#9ba4aa"
-   }
+    "text-color": "#c4c8cc",
+    "text-halo-color": "#3a3e44",
+    "text-halo-width": 2.4
+   },
+   "minzoom": 11
   },
   {
    "id": "roads_labels_major",

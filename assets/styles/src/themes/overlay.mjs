@@ -3,8 +3,37 @@
 // greens stay distinct, white roads ranked by width and casing (not hue), muted taupe tracks.
 // Labels stay >= 4.5:1 for places and >= 3:1 for roads. POI icons are off.
 import { base } from "./_base.mjs";
+import { ex } from "../layers.mjs";
+import {
+  HIGHWAY_CASINGS, HIGHWAY_FILLS, MAJOR_CASINGS, MAJOR_FILLS, byClass, setPaint, streams, thinShields, widthByClass,
+} from "./_roads.mjs";
 
-const casing = { minor: "#b3bcc2", service: "#bec6cb", major: "#a6afb6", highway: "#959fa7", link: "#abb4ba" };
+// Rank is carried by width and casing darkness: every road is white, casings darken with rank.
+const casing = {
+  highway: "#8c969e",
+  primary: "#97a1a9", // trunk and primary
+  secondary: "#a9b2b9",
+  tertiary: "#b6bec4", // and links
+  link: "#abb4ba",
+  minor: "#bcc4c9",
+  service: "#b9c1c7",
+};
+// total widths (px) at z6, 10, 12, 14, 16, 18; at z14: motorway 6, primary 5, secondary 4,
+// tertiary 3, residential 2
+const Z = [6, 10, 12, 14, 16, 18];
+const majorWidth = {
+  "trunk,primary": [0.3, 1, 2.2, 5, 9, 14],
+  secondary: [0, 0.6, 1.8, 4, 7.5, 12],
+  default: [0, 0.4, 1.3, 3, 6, 10],
+};
+const majorCasingWidth = {
+  "trunk,primary": [0, 0.6, 0.9, 1, 1.2, 1.5],
+  secondary: [0, 0.4, 0.8, 0.9, 1.1, 1.4],
+  default: [0, 0, 0.7, 0.8, 1, 1.3],
+};
+const highwayWidth = ex([3, 0, 6, 1.1, 10, 1.6, 12, 2.6, 14, 6, 16, 10, 18, 16]);
+// neutral fill for schools, hospitals, industry etc.: no warm or pink notes in a cool theme
+const neutralUse = "#e3e6e9";
 
 export default {
   ...base,
@@ -22,16 +51,16 @@ export default {
     scrub_a: "#e6eae5",
     scrub_b: "#dde5dd",
     glacier: "#f6f7f7",
-    sand: "#efede7",
-    beach: "#f0eee7",
-    hospital: "#ebe8e8",
-    industrial: "#e5e8ea",
-    school: "#ebe9e6",
-    pedestrian: "#eceded",
+    sand: neutralUse,
+    beach: neutralUse,
+    hospital: neutralUse,
+    industrial: neutralUse,
+    school: neutralUse,
+    pedestrian: neutralUse,
     aerodrome: "#e4e7e9",
     runway: "#d6dadd",
     zoo: "#e3e9e5",
-    military: "#e6e8e8",
+    military: neutralUse,
     water: "#c3d1da",
     buildings: "#dadee1",
     pier: "#e2e5e7",
@@ -48,9 +77,9 @@ export default {
     minor_service_casing: casing.service,
     minor_casing: casing.minor,
     link_casing: casing.link,
-    major_casing_late: casing.major,
+    major_casing_late: casing.primary,
     highway_casing_late: casing.highway,
-    major_casing_early: casing.major,
+    major_casing_early: casing.primary,
     highway_casing_early: casing.highway,
     other: "#f8f9f9",
     minor_service: "#fbfcfc",
@@ -64,7 +93,7 @@ export default {
     bridges_other_casing: casing.service,
     bridges_minor_casing: casing.minor,
     bridges_link_casing: casing.link,
-    bridges_major_casing: casing.major,
+    bridges_major_casing: casing.primary,
     bridges_highway_casing: casing.highway,
     bridges_other: "#f8f9f9",
     bridges_minor: "#ffffff",
@@ -95,10 +124,19 @@ export default {
       forest: "rgba(222, 231, 225, 1)",
     },
   },
+  roads: {
+    ...base.roads,
+    minorWidth: [11, 0.4, 12, 0.9, 14, 2, 15, 2.6, 18, 11],
+    minorCasingWidth: [11, 0.3, 12, 0.6, 14, 0.75, 18, 1.2],
+    // lease and service roads: a white-cored road from z13, never a single grey line (which
+    // would read as one more survey-grid line)
+    serviceWidth: [13, 1, 14, 1.5, 15, 2, 18, 8],
+    serviceCasingWidth: [13, 0.6, 15, 0.75, 18, 1],
+  },
   colors: {
     minor: "#ffffff",
     minor_casing: casing.minor,
-    service: "#fbfcfc",
+    service: "#ffffff",
     service_casing: casing.service,
     track: "#7c7165", // taupe, not orange: orange belongs to the data (trucks, batteries)
     track_casing: "rgba(255,255,255,0.7)",
@@ -109,9 +147,25 @@ export default {
   labels: { ...base.labels, pois: false },
   hillshade: {
     ...base.hillshade,
-    exaggeration: [4, 0.4, 10, 0.3, 15, 0.2],
-    shadow: "rgba(45, 55, 65, 0.28)",
-    highlight: "rgba(255, 255, 255, 0.35)",
-    accent: "rgba(45, 55, 65, 0.08)",
+    exaggeration: [4, 0.55, 10, 0.5, 15, 0.35],
+    shadow: "rgba(70, 82, 95, 0.5)",
+    highlight: "rgba(255, 255, 255, 0.4)",
+    accent: "rgba(70, 82, 95, 0.12)",
+  },
+  tweak: (layers) => {
+    setPaint(layers, MAJOR_FILLS, { "line-width": widthByClass(Z, majorWidth) });
+    setPaint(layers, MAJOR_CASINGS, {
+      "line-gap-width": widthByClass(Z, majorWidth),
+      "line-width": widthByClass(Z, majorCasingWidth),
+    });
+    // tunnels keep their pale casing
+    setPaint(layers, MAJOR_CASINGS.slice(0, 3), {
+      "line-color": byClass({ "trunk,primary": casing.primary, secondary: casing.secondary, default: casing.tertiary }),
+    });
+    setPaint(layers, HIGHWAY_FILLS, { "line-width": highwayWidth });
+    setPaint(layers, HIGHWAY_CASINGS, { "line-gap-width": highwayWidth });
+    thinShields(layers);
+    streams(layers, "#a7b8c4", ex([12, 1, 15, 2, 18, 4]));
+    return layers;
   },
 };
