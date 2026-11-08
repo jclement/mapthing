@@ -29,6 +29,17 @@ live.
 - **Compatibility endpoints**, so existing clients can switch by changing a URL: Google
   Elevation API, Google Routes `computeRoutes`, and OpenRouteService v2.
 
+## Stack
+
+- **Go** for the service itself: one static binary that serves the API, tiles and admin UI,
+  supervises the other processes and runs the build pipeline.
+- **Valhalla** (C++) for routing. It has truck and car costing, handles unpaved and track roads
+  with penalties rather than exclusion, and includes matrix, isochrone and snapping.
+- **Planetiler** with the Protomaps profile for vector tiles, **GDAL** for the elevation build,
+  and **osmium** for OSM extracts. These are bundled tools, each the best at its job.
+- **MapLibre Native** for the raster renderer, and a React + MapLibre GL JS admin UI that is
+  compiled into the Go binary.
+
 ## Licence and data attribution
 
 Code: [MIT](LICENSE).
