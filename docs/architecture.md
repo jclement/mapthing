@@ -145,3 +145,31 @@ Government Licence – Canada); Province of BC (Open Government Licence – Brit
 (Open Government Licence – Alberta); Copernicus DEM (© DLR/Airbus, ESA licence). Imagery
 attribution depends on the configured imagery source. Attributions appear in every style, the
 UI footer and the README.
+
+## Go contracts between parts
+
+**Jobs** (`internal/jobs`). A job is `func(ctx context.Context, j *jobs.Job) error`
+registered by name with `runner.Register(name, f)`; one job runs at a time, the rest queue.
+`*jobs.Job` satisfies the pipeline's `build.Reporter`: `Stage(name string)` starts a stage
+(progress resets to 0), `Progress(frac float64, msg string)` reports 0..1 within the stage,
+`Logf(format, args...)` appends a persisted log line. `j.Context()`, `j.Decode(&params)` and
+`j.Params()` give the context and the JSON params it was enqueued with. Progress and log lines
+stream to the admin UI over `/admin/api/events` (SSE events `job`, `log`). A job error is
+recorded in `history`; `runner.Details` turns a structured error (such as `*build.StageError`)
+into history details. The build job is named `build`, params `{"refresh": bool}`; the
+scheduler enqueues it with `{"refresh": true}`.
+
+**Mounting feature handlers** (`internal/server`). Routing and elevation expose a value with
+`Mount(mux *http.ServeMux, wrap func(kind string, h http.Handler) http.Handler)` and register
+each keyed path as `mux.Handle(pattern, wrap(kind, h))`; `wrap` applies API-key/session auth,
+per-key limits, and usage counting under `kind` (`route`, `elevation`, `compat`). Patterns use
+Go 1.22 mux syntax; a wildcard is a whole path segment.
+
+**Generation swaps.** Core polls the `current` symlink (every 2 s) and, when its target
+changes, reopens the PMTiles archives, drops raster caches of old generations and restarts the
+supervised children. The build's `Options.Restart` hook is wired to the same swap handler, so a
+swap takes effect immediately.
+
+**Imagery source** (`internal/tiles/imagery_sources.go`, style worker):
+`func ImageryUpstream(z, x, y int) (url string, ok bool)` returns the upstream tile URL
+(`ok=false` = not configured / outside coverage) and `func ImageryAttribution() string`.
