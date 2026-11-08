@@ -22,6 +22,8 @@ type Manifest struct {
 	Stages     []StageResult    `json:"stages"`
 	Checks     []Check          `json:"checks"`
 	Disk       *DiskEstimate    `json:"disk,omitempty"`
+	Memory     *MemBudget       `json:"memory,omitempty"`
+	Image      ImageInfo        `json:"image"`
 	// Ocean is where ocean/land polygons came from: osm, approximate:ne-10m or missing.
 	Ocean  string  `json:"ocean,omitempty"`
 	TotalS float64 `json:"total_s"`

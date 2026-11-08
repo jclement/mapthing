@@ -71,6 +71,9 @@ type Builder struct {
 	Now func() time.Time
 
 	mu sync.Mutex
+
+	hostMu      sync.Mutex
+	failedHosts map[string]time.Time // source hosts that exhausted their retry budget
 }
 
 // New returns a Builder with tool paths from the environment.
@@ -108,7 +111,7 @@ func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest
 	genID := start.Format("20060102T150405Z")
 	genDir := filepath.Join(b.generationsDir(), genID)
 	workDir := filepath.Join(b.workRoot(), genID)
-	m := &Manifest{Generation: genID, CreatedAt: start, Artifacts: map[string]int64{}}
+	m := &Manifest{Generation: genID, CreatedAt: start, Artifacts: map[string]int64{}, Image: imageInfo(b.Tools)}
 	for _, r := range opt.Regions {
 		m.Regions = append(m.Regions, ManifestRegion{ID: r.ID, Name: r.Name, BBox: r.BBox})
 	}

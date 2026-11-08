@@ -574,3 +574,141 @@ func TestTinyShapefile(t *testing.T) {
 		}
 	}
 }
+
+func TestOceanRetryBudgetAndFailedHost(t *testing.T) {
+	e := newEnv(t)
+	oldB, oldBudget := sourceBackoff, fallbackRetryBudget
+	sourceBackoff = []time.Duration{50 * time.Millisecond, 50 * time.Millisecond, 50 * time.Millisecond}
+	fallbackRetryBudget = 80 * time.Millisecond
+	t.Cleanup(func() { sourceBackoff, fallbackRetryBudget = oldB, oldBudget })
+
+	var water atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		water.Add(1)
+		http.Error(w, "down", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	t.Setenv("MAPTHING_WATER_POLYGONS_URL", srv.URL+"/water")
+	t.Setenv("MAPTHING_LAND_POLYGONS_URL", srv.URL+"/land")
+	for _, f := range []string{"water-polygons-split-3857.zip", "land-polygons-split-3857.zip"} {
+		_ = os.Remove(filepath.Join(e.b.sourcesDir(), f))
+	}
+	rep := &testRep{}
+	m, err := e.b.Run(context.Background(), rep, Options{Regions: []catalog.Region{e.region}})
+	if err != nil || m.Ocean != OceanNaturalEarth {
+		t.Fatalf("err=%v ocean=%q", err, m.Ocean)
+	}
+	// Water: attempt at 0 and 50ms, then 100ms would exceed the 80ms budget. Land: same host,
+	// already marked failed, so no request at all.
+	if got := water.Load(); got != 2 {
+		t.Errorf("requests in first build = %d, want 2", got)
+	}
+	if !rep.has("not retrying until") {
+		t.Error("land polygons not skipped after the host failed")
+	}
+	if _, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := water.Load(); got != 2 {
+		t.Errorf("second build contacted the failed host (%d requests)", got)
+	}
+}
+
+func TestMemoryBudget(t *testing.T) {
+	dir := t.TempDir()
+	w := func(name, s string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := []string{meminfoPath, cgroupV2Max, cgroupV2Stat, cgroupV1Limit, cgroupV1Stat}
+	t.Cleanup(func() {
+		meminfoPath, cgroupV2Max, cgroupV2Stat, cgroupV1Limit, cgroupV1Stat = old[0], old[1], old[2], old[3], old[4]
+	})
+	meminfoPath = w("meminfo", "MemTotal: 49000000 kB\nMemAvailable:   20971520 kB\n") // 20 GiB
+	missing := filepath.Join(dir, "missing")
+	tests := []struct {
+		name          string
+		v2max, v2stat string
+		v1lim, v1stat string
+		effective     int64
+		source        string
+	}{
+		{"no cgroup", "", "", "", "", 20 << 30, "host"},
+		{"v2 unlimited", "max\n", "anon 0\n", "", "", 20 << 30, "host"},
+		{"v2 limit 3g", "3221225472\n", "anon 536870912\nfile 999999999\n", "", "", 2560 << 20, "cgroup v2"},
+		{"v2 limit above host", "68719476736\n", "anon 0\n", "", "", 20 << 30, "host"},
+		{"v1 limit 4g", "", "", "4294967296\n", "total_rss 1073741824\n", 3 << 30, "cgroup v1"},
+		{"v1 unlimited", "", "", "9223372036854771712\n", "total_rss 0\n", 20 << 30, "host"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cgroupV2Max, cgroupV2Stat, cgroupV1Limit, cgroupV1Stat = missing, missing, missing, missing
+			if tt.v2max != "" {
+				cgroupV2Max, cgroupV2Stat = w("v2max", tt.v2max), w("v2stat", tt.v2stat)
+			}
+			if tt.v1lim != "" {
+				cgroupV1Limit, cgroupV1Stat = w("v1lim", tt.v1lim), w("v1stat", tt.v1stat)
+			}
+			b := memoryBudget()
+			if b.Effective != tt.effective || b.Source != tt.source {
+				t.Errorf("got %d (%s), want %d (%s)", b.Effective, b.Source, tt.effective, tt.source)
+			}
+		})
+	}
+}
+
+func TestParseJavaSize(t *testing.T) {
+	for in, want := range map[string]int64{"4g": 4 << 30, "4096m": 4 << 30, "512M": 512 << 20, "1073741824": 1 << 30} {
+		if got, err := parseJavaSize(in); err != nil || got != want {
+			t.Errorf("parseJavaSize(%q) = %d, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "g", "-1g", "lots"} {
+		if _, err := parseJavaSize(bad); err == nil {
+			t.Errorf("parseJavaSize(%q) accepted", bad)
+		}
+	}
+}
+
+func TestPlanetilerXmxOverride(t *testing.T) {
+	e := newEnv(t)
+	t.Setenv("MAPTHING_PLANETILER_XMX", "3g")
+	rep := &testRep{}
+	m, err := e.b.Run(context.Background(), rep, Options{Regions: []catalog.Region{e.region}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.has("-Xmx3072m") {
+		t.Error("override not passed to java")
+	}
+	if m.Memory == nil || m.Memory.Effective <= 0 {
+		t.Errorf("manifest memory %+v", m.Memory)
+	}
+	t.Setenv("MAPTHING_PLANETILER_XMX", "lots")
+	if _, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}}); err == nil ||
+		!strings.Contains(err.Error(), "MAPTHING_PLANETILER_XMX") {
+		t.Fatalf("bad override accepted: %v", err)
+	}
+}
+
+func TestManifestImage(t *testing.T) {
+	e := newEnv(t)
+	jar := filepath.Join(t.TempDir(), "p.jar")
+	_ = os.WriteFile(jar, []byte("jar"), 0o644)
+	e.b.Tools.PlanetilerJar = jar
+	t.Setenv("MAPTHING_IMAGE_ID", "sha256:abc")
+	t.Setenv("MAPTHING_IMAGE_REVISION", "deadbeef")
+	t.Setenv("MAPTHING_VALHALLA_VERSION", "3.9.1")
+	m, err := e.b.Run(context.Background(), &testRep{}, Options{Regions: []catalog.Region{e.region}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, _ := ReadManifest(filepath.Join(e.b.DataDir, "current"))
+	img := disk.Image
+	if img.ID != "sha256:abc" || img.Revision != "deadbeef" || img.Valhalla != "3.9.1" || len(img.PlanetilerJarSHA2) != 64 {
+		t.Errorf("image %+v (run %+v)", img, m.Image)
+	}
+}

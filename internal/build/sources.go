@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -41,6 +42,14 @@ var planetilerSources = []planetilerSource{
 // sourceBackoff is the wait before each retry of a failed source download.
 var sourceBackoff = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute}
 
+// fallbackRetryBudget caps the total retry time for a source that has a fallback (the ocean
+// polygons), and failedHostTTL is how long a host that exhausted it is skipped by later builds
+// of the same process (a long-running server retries it twice a day).
+var (
+	fallbackRetryBudget = 60 * time.Second
+	failedHostTTL       = 12 * time.Hour
+)
+
 // ensureSources makes every auxiliary source available in the cache. It returns the ocean
 // status and, when the OSM polygons could not be had, paths to substitute water/land zips.
 func (s *state) ensureSources(ctx context.Context, wd string) (ocean, waterZip, landZip string, err error) {
@@ -55,17 +64,21 @@ func (s *state) ensureSources(ctx context.Context, wd string) (ocean, waterZip, 
 		if st, err := os.Stat(path); err == nil && st.Size() > 0 {
 			continue
 		}
-		url := src.url
+		srcURL := src.url
 		if v := os.Getenv(src.env); v != "" {
-			url = v
+			srcURL = v
 		}
-		if err := s.downloadRetry(ctx, url, path, src.name); err != nil {
+		budget := time.Duration(0)
+		if src.ocean {
+			budget = fallbackRetryBudget
+		}
+		if err := s.downloadRetry(ctx, srcURL, path, src.name, budget); err != nil {
 			if src.ocean {
 				s.logf("sources: %s unavailable after retries (%v)", src.name, err)
 				oceanOK = false
 				continue
 			}
-			return "", "", "", fmt.Errorf("%s from %s: %w (set %s to a mirror)", src.name, url, err, src.env)
+			return "", "", "", fmt.Errorf("%s from %s: %w (set %s to a mirror)", src.name, srcURL, err, src.env)
 		}
 	}
 	if oceanOK {
@@ -74,17 +87,30 @@ func (s *state) ensureSources(ctx context.Context, wd string) (ocean, waterZip, 
 	return s.oceanFallback(ctx, wd)
 }
 
-func (s *state) downloadRetry(ctx context.Context, url, path, name string) error {
+// downloadRetry downloads with backoff. budget > 0 caps the total time spent (the source has
+// a fallback); such a source's host is then remembered as failed and skipped for failedHostTTL.
+func (s *state) downloadRetry(ctx context.Context, rawURL, path, name string, budget time.Duration) error {
+	host := hostOf(rawURL)
+	if budget > 0 {
+		if at, ok := s.b.hostFailedAt(host); ok {
+			return fmt.Errorf("%s failed at %s; not retrying until %s", host,
+				at.Format(time.RFC3339), at.Add(failedHostTTL).Format(time.RFC3339))
+		}
+	}
+	start := time.Now()
 	var err error
 	for attempt := 0; ; attempt++ {
-		s.logf("sources: downloading %s from %s", name, url)
-		if err = s.downloadFile(ctx, url, path, name); err == nil {
+		s.logf("sources: downloading %s from %s", name, rawURL)
+		if err = s.downloadFile(ctx, rawURL, path, name); err == nil {
 			return nil
 		}
 		if attempt >= len(sourceBackoff) || ctx.Err() != nil {
-			return err
+			break
 		}
 		wait := sourceBackoff[attempt]
+		if budget > 0 && time.Since(start)+wait > budget {
+			break
+		}
 		s.logf("sources: %s failed (%v); retrying in %s", name, err, wait)
 		select {
 		case <-ctx.Done():
@@ -92,10 +118,40 @@ func (s *state) downloadRetry(ctx context.Context, url, path, name string) error
 		case <-time.After(wait):
 		}
 	}
+	if budget > 0 && ctx.Err() == nil {
+		s.b.markHostFailed(host)
+	}
+	return err
 }
 
-func (s *state) downloadFile(ctx context.Context, url, path, name string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func hostOf(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return rawURL
+}
+
+func (b *Builder) hostFailedAt(host string) (time.Time, bool) {
+	b.hostMu.Lock()
+	defer b.hostMu.Unlock()
+	at, ok := b.failedHosts[host]
+	if !ok || time.Since(at) > failedHostTTL {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
+func (b *Builder) markHostFailed(host string) {
+	b.hostMu.Lock()
+	defer b.hostMu.Unlock()
+	if b.failedHosts == nil {
+		b.failedHosts = map[string]time.Time{}
+	}
+	b.failedHosts[host] = time.Now()
+}
+
+func (s *state) downloadFile(ctx context.Context, rawURL, path, name string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
@@ -105,7 +161,7 @@ func (s *state) downloadFile(ctx context.Context, url, path, name string) error 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", url, resp.Status)
+		return fmt.Errorf("GET %s: %s", rawURL, resp.Status)
 	}
 	part := path + ".part"
 	_, n, err := s.copyWithProgress(part, resp.Body, resp.ContentLength, name)

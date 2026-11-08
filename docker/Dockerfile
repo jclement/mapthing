@@ -88,6 +88,8 @@ FROM ghcr.io/valhalla/valhalla:${VALHALLA_VERSION}
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=unknown
+ARG VALHALLA_VERSION
+ARG BASEMAPS_REF
 LABEL org.opencontainers.image.title="mapthing" \
       org.opencontainers.image.description="Self-hosted map service: vector and raster tiles, offline packs, routing and elevation in one container" \
       org.opencontainers.image.source="https://github.com/jclement/mapthing" \
@@ -127,7 +129,12 @@ ENV JAVA_HOME=/opt/java/openjdk \
     MAPTHING_PLANETILER_JAR=/opt/mapthing/protomaps-basemap.jar \
     MAPTHING_VALHALLA_OVERRIDES=/usr/share/mapthing/valhalla/overrides.json \
     MAPTHING_RENDERER_DIR=/opt/renderer \
-    MAPTHING_ASSETS=/usr/share/mapthing/assets
+    MAPTHING_ASSETS=/usr/share/mapthing/assets \
+    MAPTHING_IMAGE_VERSION=${VERSION} \
+    MAPTHING_IMAGE_REVISION=${REVISION} \
+    MAPTHING_IMAGE_CREATED=${CREATED} \
+    MAPTHING_VALHALLA_VERSION=${VALHALLA_VERSION} \
+    MAPTHING_BASEMAPS_REF=${BASEMAPS_REF}
 
 RUN useradd --system --uid 10001 --user-group --home-dir /data --shell /usr/sbin/nologin mapthing && \
     mkdir -p /data && chown mapthing:mapthing /data && \

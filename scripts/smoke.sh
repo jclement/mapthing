@@ -61,12 +61,14 @@ if [[ -z "${SMOKE_SKIP_BUILD:-}" ]]; then
 fi
 
 chmod 0777 "$SMOKE_DATA"
+IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$IMAGE")
 
 # SMOKE_MODE=pipeline: only the data build (mapthing-build in the container), no server.
 if [[ "${SMOKE_MODE:-full}" == pipeline ]]; then
   log "pipeline-only build of $REGION"
   start=$(date +%s)
-  docker run --name "$NAME" -v "$SMOKE_DATA:/data" --entrypoint /usr/bin/tini "$IMAGE" -- \
+  docker run --name "$NAME" -v "$SMOKE_DATA:/data" -e MAPTHING_IMAGE_ID="$IMAGE_ID" \
+    ${SMOKE_MEMORY:+--memory "$SMOKE_MEMORY"} --entrypoint /usr/bin/tini "$IMAGE" -- \
     mapthing-build -data /data -region "$REGION" -refresh || true
   code=$(docker inspect -f '{{.State.ExitCode}}' "$NAME")
   [[ "$code" == 0 ]] || die "mapthing-build exited $code"
@@ -75,12 +77,14 @@ if [[ "${SMOKE_MODE:-full}" == pipeline ]]; then
   jq -r '.stages[] | "  \(.name): \(.duration_s|floor)s rss=\((.peak_rss_kb // 0)/1024|floor)MiB\(if .skipped then " (skipped)" else "" end)"' <<<"$M"
   jq -r '.artifacts | to_entries[] | "  \(.key): \(.value/1048576*10|floor/10) MiB"' <<<"$M"
   jq -r '.checks[] | "  check \(.name) \(.region // ""): \(.detail)"' <<<"$M"
+  jq -r '"  image: \(.image)\n  memory: \(.memory)\n  ocean: \(.ocean)"' <<<"$M"
   ok "pipeline build in $(( $(date +%s) - start ))s"
   exit 0
 fi
 
 log "starting container (data $SMOKE_DATA, port $PORT)"
-docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8080" -v "$SMOKE_DATA:/data" \
+docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8080" -v "$SMOKE_DATA:/data" -e MAPTHING_IMAGE_ID="$IMAGE_ID" \
+  ${SMOKE_MEMORY:+--memory "$SMOKE_MEMORY"} \
   -e ADMIN_USER="$ADMIN_USER" -e ADMIN_PASSWORD="$ADMIN_PASSWORD" "$IMAGE" >/dev/null
 
 for i in $(seq 1 60); do

@@ -20,12 +20,16 @@ func planetilerMemory(avail, pbf int64) (heapMB int64, storage string) {
 	if heap > 32<<30 {
 		heap = 32 << 30
 	}
-	storage = "ram"
-	// Planetiler needs roughly 1.5x the PBF size of heap to keep everything in RAM.
+	return heap >> 20, planetilerStorage(heap, pbf)
+}
+
+// planetilerStorage keeps nodes and features in RAM while they fit comfortably in the heap
+// (Planetiler needs roughly 1.5x the PBF size), otherwise uses memory-mapped files.
+func planetilerStorage(heap, pbf int64) string {
 	if pbf*3/2 > heap*7/10 {
-		storage = "mmap"
+		return "mmap"
 	}
-	return heap >> 20, storage
+	return "ram"
 }
 
 func (s *state) basemap(ctx context.Context) error {
@@ -50,11 +54,24 @@ func (s *state) basemap(ctx context.Context) error {
 	if st, err := os.Stat(s.merged); err == nil {
 		pbf = st.Size()
 	}
-	avail := memAvailable()
-	if avail == 0 {
-		avail = 4 << 30
+	var heapMB int64
+	var storage string
+	if v := os.Getenv("MAPTHING_PLANETILER_XMX"); v != "" {
+		n, err := parseJavaSize(v)
+		if err != nil {
+			return fmt.Errorf("MAPTHING_PLANETILER_XMX: %w", err)
+		}
+		heapMB, storage = n>>20, planetilerStorage(n, pbf)
+		s.logf("planetiler: heap from MAPTHING_PLANETILER_XMX=%s", v)
+	} else {
+		mb := memoryBudget()
+		avail := mb.Effective
+		if avail <= 0 {
+			avail = 4 << 30
+		}
+		heapMB, storage = planetilerMemory(avail, pbf)
+		s.logf("planetiler: sizing from %s of memory (%s)", humanBytes(avail), mb.Source)
 	}
-	heapMB, storage := planetilerMemory(avail, pbf)
 	out := filepath.Join(s.genDir, "basemap.pmtiles")
 	threads := runtime.NumCPU()
 	s.logf("planetiler: heap %d MiB, storage %s, %d threads", heapMB, storage, threads)

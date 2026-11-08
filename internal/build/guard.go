@@ -1,13 +1,10 @@
 package build
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 
 	"github.com/jclement/mapthing/internal/catalog"
@@ -72,23 +69,6 @@ func freeBytes(dir string) int64 {
 	return int64(st.Bavail) * int64(st.Bsize)
 }
 
-// memAvailable returns MemAvailable from /proc/meminfo, or 0.
-func memAvailable() int64 {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), "MemAvailable:"); ok {
-			kb, _ := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(v), "kB")), 10, 64)
-			return kb * 1024
-		}
-	}
-	return 0
-}
-
 func (s *state) guard(ctx context.Context) error {
 	if err := os.MkdirAll(s.b.DataDir, 0o755); err != nil {
 		return err
@@ -102,8 +82,11 @@ func (s *state) guard(ctx context.Context) error {
 		return fmt.Errorf("not enough disk on %s: this build needs about %s but only %s is free; "+
 			"remove regions or grow the volume", s.b.DataDir, humanBytes(e.NeedBytes), humanBytes(e.FreeBytes))
 	}
-	if mem := memAvailable(); mem > 0 {
-		s.logf("memory available: %s", humanBytes(mem))
+	mb := memoryBudget()
+	s.m.Memory = &mb
+	if mem := mb.Effective; mem > 0 {
+		s.logf("memory available: %s (host %s, container limit %s, %s)", humanBytes(mem),
+			humanBytes(mb.HostAvailable), humanBytes(mb.CgroupLimit), mb.Source)
 		if mem < 2<<30 {
 			return fmt.Errorf("only %s of memory available; a build needs at least 2 GiB", humanBytes(mem))
 		}
