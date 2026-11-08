@@ -28,8 +28,11 @@ export interface MockOptions {
   empty?: boolean;
   /** Start already signed in. */
   authed?: boolean;
-  /** Milliseconds per simulated build tick. */
+  /** Milliseconds per simulated build tick; 0 = never tick on a timer (tests drive builds
+   *  with finishBuilds()). */
   tickMs?: number;
+  /** Fixed response latency in ms; default is a random 60-180 ms to feel like a network. */
+  latencyMs?: number;
 }
 
 interface State {
@@ -41,6 +44,7 @@ interface State {
   keys: ApiKey[];
   schedule: Schedule;
   tickMs: number;
+  latencyMs?: number;
 }
 
 let S: State;
@@ -74,6 +78,7 @@ export function resetMock(opts: MockOptions = {}) {
       regions: regions.map((r) => ({ id: r.id, enabled: r.id !== "custom/permian-core" })),
     },
     tickMs: opts.tickMs ?? 350,
+    latencyMs: opts.latencyMs,
   };
 }
 
@@ -221,7 +226,7 @@ function startBuild(refresh: boolean, trigger: Job["trigger"] = "manual"): Job {
   log(job, `build started (${trigger}${refresh ? ", refreshing downloads" : ""})`);
   for (const r of S.regions)
     if (r.status === "pending") log(job, `region ${r.name}: new, will download`);
-  if (!timer) timer = setInterval(tick, S.tickMs);
+  if (!timer && S.tickMs > 0) timer = setInterval(tick, S.tickMs);
   return job;
 }
 
@@ -775,7 +780,8 @@ async function handle(input: RequestInfo | URL, init?: RequestInit): Promise<Res
       return json(401, { error: { code: "unauthorized", message: "Sign in required" } });
     let body: unknown;
     if (typeof init?.body === "string" && init.body) body = JSON.parse(init.body);
-    await new Promise((r) => setTimeout(r, 60 + Math.random() * 120));
+    const delay = S.latencyMs ?? 60 + Math.random() * 120;
+    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
     const out = h(match, body, url);
     return out instanceof Response ? out : json(200, out);
   }

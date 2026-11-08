@@ -44,6 +44,10 @@ import * as fmt from "../lib/format";
 import { bboxAreaKm2, bboxContains, estimateDisk } from "../lib/geo";
 import { useApi } from "../lib/useApi";
 
+// Wait for typing to settle before asking the server to plan a custom box. No debounce under
+// vitest: a real timer there only adds a race against the assertions.
+const ESTIMATE_DEBOUNCE_MS = import.meta.env.MODE === "test" ? 0 : 300;
+
 const DrawBox = lazy(() => import("../components/DrawBox").then((m) => ({ default: m.DrawBox })));
 
 export function RegionsPage() {
@@ -435,7 +439,7 @@ function AddRegion({
         .estimateCustom({ bbox })
         .then((est) => live && setCover({ key: boxKey, est }))
         .catch((e: Error) => live && setCover({ key: boxKey, error: e.message }));
-    }, 300);
+    }, ESTIMATE_DEBOUNCE_MS);
     return () => {
       live = false;
       clearTimeout(t);

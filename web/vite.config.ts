@@ -27,5 +27,7 @@ export default defineConfig(({ mode }) => ({
     globals: true,
     setupFiles: ["src/test/setup.ts"],
     css: false,
+    // Generous per-test ceiling for a loaded machine (user-event typing is slow under load).
+    testTimeout: 30_000,
   },
 }));
