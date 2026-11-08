@@ -1,0 +1,17 @@
+# Secrets and private material (never committed)
+.env
+.env.*
+!.env.example
+mise.local.toml
+private/
+# Build / data
+/data/
+/dist/
+/bin/
+web/node_modules/
+web/dist/
+*.pmtiles
+*.mbtiles
+*.osm.pbf
+*.tif
+coverage.out
