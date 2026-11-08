@@ -110,8 +110,13 @@ admin GET /admin/api/catalog | jq -e --arg r "$REGION" '[.. | objects | select(.
   || die "catalog lists $REGION"
 ok "catalog lists $REGION"
 
-admin POST /admin/api/regions -d "$(jq -n --arg r "$REGION" '{id:$r}')" >/dev/null || die "add region"
-ok "region added"
+code=$(curl -sS -o /dev/null -w '%{http_code}' -b "$JAR" -c "$JAR" -X POST -H "Origin: $BASE" -H 'Content-Type: application/json' \
+  "$BASE/admin/api/regions" -d "$(jq -n --arg r "$REGION" '{id:$r}')")
+case "$code" in
+  200|201) ok "region added" ;;
+  409) ok "region already installed (reused data dir)" ;;
+  *) die "add region: HTTP $code" ;;
+esac
 
 JOB=$(admin POST /admin/api/build -d '{"refresh":true}' | jq -r '.id // empty')   # 202 + job row
 [[ -n "$JOB" ]] || die "start build (no job id)"
