@@ -8,15 +8,15 @@ export const base = {
   flavorOverrides: {}, // any Protomaps Flavor colour key, e.g. { earth: "#efe9df" }
   sprite: "outdoors", // assets/sprites/<sprite>{,@2x}.{json,png}
   terrainMaxzoom: 12,
-  imageryMaxzoom: 18,
+  imageryMaxzoom: 16, // USGS imagery ends at z16; Sentinel-2 cloudless at z14 (see docs/imagery.md)
 
   // field-use colours for the roads and labels this generator adds or retunes
   colors: {
     minor: "#ffffff",
-    minor_casing: "#bdb6ab",
+    minor_casing: "#a89f92",
     service: "#fbfaf7",
-    service_casing: "#c9c2b6",
-    track: "#8a5a2b",
+    service_casing: "#b3aa9c",
+    track: "#7a4a1c",
     track_casing: "rgba(255,255,255,0.75)",
     unpaved: "#a86f3a",
     road_label: "#5e5850",
@@ -24,12 +24,12 @@ export const base = {
   },
 
   roads: {
-    minorWidth: [11, 0, 12, 1, 15, 2.5, 18, 11],
-    minorCasingWidth: [11, 0, 12, 0.6, 14, 0.8, 18, 1.2],
+    minorWidth: [11, 0.4, 12, 1.2, 15, 2.6, 18, 11],
+    minorCasingWidth: [11, 0.3, 12, 0.7, 14, 0.9, 18, 1.2],
     serviceWidth: [13, 0.6, 15, 1.5, 18, 8],
     serviceCasingWidth: [13, 0.5, 18, 1],
     trackMinzoom: 12,
-    trackWidth: [12, 0.9, 14, 1.4, 18, 4],
+    trackWidth: [12, 1.1, 14, 1.7, 18, 4],
     trackCasingWidth: [12, 2, 14, 3, 18, 8],
     trackDash: [3, 1.5],
     unpavedWidth: [11, 0.6, 14, 1, 18, 3],
@@ -44,8 +44,8 @@ export const base = {
 
   hillshade: {
     enabled: true,
-    exaggeration: [4, 0.45, 10, 0.35, 15, 0.25],
-    shadow: "rgba(70, 60, 50, 0.32)",
+    exaggeration: [4, 0.5, 10, 0.45, 15, 0.3],
+    shadow: "rgba(60, 50, 40, 0.5)",
     highlight: "rgba(255, 255, 255, 0.25)",
     accent: "rgba(70, 60, 50, 0.12)",
   },

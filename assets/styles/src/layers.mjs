@@ -25,7 +25,7 @@ const ATTR_TERRAIN = "Elevation: USGS 3DEP, NRCan, Copernicus DEM © DLR/Airbus"
 // time when MAPTHING_IMAGERY_URL points somewhere else (tiles.ImageryAttribution()).
 export const ATTR_IMAGERY =
   'Imagery: <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map" target="_blank">USGS The National Map</a>; ' +
-  '<a href="https://s2maps.eu" target="_blank">Sentinel-2 cloudless by EOX IT Services GmbH</a> (contains modified Copernicus Sentinel data)';
+  '<a href="https://s2maps.eu" target="_blank">Sentinel-2 cloudless</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016, CC BY 4.0)';
 
 export const FONTS = ["Noto Sans Regular", "Noto Sans Medium", "Noto Sans Italic"];
 
@@ -59,7 +59,7 @@ function sources(theme) {
       tiles: ["{{BASE_URL}}/tiles/imagery/{z}/{x}/{y}.jpg{{KEY_QS}}"],
       tileSize: 256,
       minzoom: 0,
-      maxzoom: theme.imageryMaxzoom ?? 18,
+      maxzoom: theme.imageryMaxzoom ?? 16,
       attribution: ATTR_IMAGERY,
     },
   };
