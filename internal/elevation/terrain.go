@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jclement/mapthing/internal/elevation/pmtiles"
+	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
 // ErrUnavailable means no terrain archive is live.
@@ -51,7 +51,7 @@ func OpenArchive(path string, cacheTiles int) (*Archive, error) {
 	if a.cap <= 0 {
 		a.cap = DefaultTileCache
 	}
-	if err := r.Metadata(&a.meta); err != nil {
+	if err := r.MetadataJSON(&a.meta); err != nil {
 		_ = r.Close()
 		return nil, fmt.Errorf("%s: metadata: %w", path, err)
 	}
@@ -88,7 +88,7 @@ func (a *Archive) tile(x, y int) (*Tile, error) {
 	}
 	a.mu.Unlock()
 
-	data, ok, err := a.r.Tile(uint8(a.maxZoom), uint32(x), uint32(y))
+	data, ok, err := a.r.Get(uint8(a.maxZoom), uint32(x), uint32(y))
 	if err != nil {
 		return nil, err
 	}

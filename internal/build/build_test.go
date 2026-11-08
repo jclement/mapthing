@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/catalog"
-	"github.com/jclement/mapthing/internal/tiles/pmtiles"
+	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
 // The test binary doubles as every external tool: scripts in a temp dir re-exec it with

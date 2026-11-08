@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jclement/mapthing/internal/tiles/pmtiles"
+	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
 const (

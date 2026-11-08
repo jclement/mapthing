@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jclement/mapthing/internal/elevation/pmtiles"
+	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
 const testZ = 12
@@ -58,7 +58,7 @@ func writeTestArchive(t *testing.T, bbox BBox, noDataLon, src2Lat float64) strin
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := w.Add(testZ, uint32(tx), uint32(ty), data); err != nil {
+			if err := w.AddTile(testZ, uint32(tx), uint32(ty), data); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -68,7 +68,8 @@ func writeTestArchive(t *testing.T, bbox BBox, noDataLon, src2Lat float64) strin
 			{SourceInfo: SourceInfo{ID: "3dep13", ResolutionM: 10}},
 			{SourceInfo: SourceInfo{ID: "glo30", ResolutionM: 30}},
 		}}
-	if err := w.Finish(pmtiles.Header{TileType: pmtiles.TileTypePNG, TileCompression: pmtiles.CompressionNone, MinZoom: testZ, MaxZoom: testZ}, meta); err != nil {
+	metaJSON, _ := json.Marshal(meta)
+	if err := w.Commit(pmtiles.Header{TileType: pmtiles.TypePNG, TileCompression: pmtiles.CompressionNone, MinZoom: testZ, MaxZoom: testZ}, metaJSON); err != nil {
 		t.Fatal(err)
 	}
 	return path

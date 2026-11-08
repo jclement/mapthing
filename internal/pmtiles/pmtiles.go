@@ -1,7 +1,14 @@
 // Package pmtiles reads and writes PMTiles v3 archives (https://github.com/protomaps/PMTiles,
-// spec v3). It is a small, dependency-free implementation of the parts mapthing needs:
-// tile lookup with leaf directories, metadata, and writing clustered archives (for packs and
-// test fixtures).
+// spec v3). It is mapthing's one dependency-free implementation:
+//
+//   - Reader: tile lookup through leaf directories (cached), metadata, whole-archive access.
+//   - Writer: tiles in any order, from several goroutines, with content deduplication, run
+//     merging and leaf directories. Create writes tile data straight into the final file
+//     (no second copy; multi-GB terrain archives), NewWriter spools to a temporary file and
+//     Finish streams the archive to any io.Writer (packs over HTTP). Archives are clustered
+//     when tiles arrive in tile-ID order.
+//   - Extract: a bbox/zoom subset of an archive (offline packs).
+//   - Tile IDs (Hilbert), tile ranges, header and directory encoding.
 package pmtiles
 
 import (

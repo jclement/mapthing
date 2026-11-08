@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 )
 
@@ -173,5 +177,163 @@ func TestExtract(t *testing.T) {
 	}
 	if _, err := Extract(context.Background(), src, b, 0, 6, 10, t.TempDir(), &bytes.Buffer{}); err == nil {
 		t.Fatal("expected tile budget error")
+	}
+}
+
+// TestCreateAnyOrder covers Create mode: tiles from several goroutines in random order,
+// duplicates stored once, metadata, and an unclustered header. (Leaf directories: see
+// TestWriteReadWithDedupAndLeaves.)
+func TestCreateAnyOrder(t *testing.T) {
+	for _, n := range []int{1, 300, 40000} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "t.pmtiles")
+			w, err := Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const z = 10
+			perm := rand.Perm(n)
+			var wg sync.WaitGroup
+			errs := make(chan error, 4)
+			for g := 0; g < 4; g++ {
+				wg.Add(1)
+				go func(g int) {
+					defer wg.Done()
+					for k := g; k < n; k += 4 {
+						i := perm[k]
+						if err := w.AddTile(z, uint32(i%1024), uint32(i/1024), fmt.Appendf(nil, "tile-%d", i%97)); err != nil {
+							errs <- err
+							return
+						}
+					}
+				}(g)
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatal("archive visible before Commit")
+			}
+			h := Header{TileType: TypePNG, TileCompression: CompressionNone, MinZoom: z, MaxZoom: z}
+			if err := w.Commit(h, []byte(`{"name":"test"}`)); err != nil {
+				t.Fatal(err)
+			}
+			r, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+			if r.Header.AddressedTiles != uint64(n) {
+				t.Errorf("addressed = %d, want %d", r.Header.AddressedTiles, n)
+			}
+			if n > 97 && r.Header.TileContents != 97 {
+				t.Errorf("contents = %d, want 97 (dedupe)", r.Header.TileContents)
+			}
+			if n > 1 && r.Header.Clustered {
+				t.Error("random-order archive marked clustered")
+			}
+			for i := 0; i < n; i++ {
+				got, ok, err := r.Get(z, uint32(i%1024), uint32(i/1024))
+				if err != nil || !ok || string(got) != fmt.Sprintf("tile-%d", i%97) {
+					t.Fatalf("tile %d = %q %v %v", i, got, ok, err)
+				}
+			}
+			if _, ok, _ := r.Get(z+1, 0, 0); ok {
+				t.Error("tile at another zoom reported present")
+			}
+			var meta map[string]any
+			if err := r.MetadataJSON(&meta); err != nil || meta["name"] != "test" {
+				t.Errorf("metadata = %v %v", meta, err)
+			}
+		})
+	}
+}
+
+func TestCreateInOrderIsClustered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.pmtiles")
+	w, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id := uint64(0); id < 85; id++ { // z0..z3
+		if err := w.Add(id, []byte("same")); err != nil { // one run
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(Header{TileType: TypePNG, MaxZoom: 3}, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	if !r.Header.Clustered || r.Header.TileEntries != 1 || r.Header.TileContents != 1 || r.Header.AddressedTiles != 85 {
+		t.Fatalf("header %+v", r.Header)
+	}
+	if got, ok, _ := r.Get(3, 7, 7); !ok || string(got) != "same" {
+		t.Fatalf("run lookup %q %v", got, ok)
+	}
+}
+
+func TestWriterErrors(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := Create(filepath.Join(dir, "a.pmtiles"))
+	_ = w.Add(5, []byte("x"))
+	if err := w.Add(5, []byte("y")); err == nil {
+		t.Error("in-order duplicate accepted")
+	}
+	if err := w.Finish(&bytes.Buffer{}, Header{}, nil); err == nil {
+		t.Error("Finish accepted on a Create writer")
+	}
+	w.Abort()
+	if _, err := os.Stat(filepath.Join(dir, "a.pmtiles.part")); !os.IsNotExist(err) {
+		t.Error("Abort left the partial file")
+	}
+
+	w, _ = Create(filepath.Join(dir, "b.pmtiles"))
+	_ = w.Add(9, []byte("a"))
+	_ = w.Add(3, []byte("b"))
+	_ = w.Add(9, []byte("c")) // out-of-order duplicate: caught at Commit
+	if err := w.Commit(Header{}, nil); err == nil {
+		t.Error("out-of-order duplicate accepted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.pmtiles")); !os.IsNotExist(err) {
+		t.Error("failed Commit left an archive")
+	}
+
+	s, _ := NewWriter(dir)
+	if err := s.Commit(Header{}, nil); err == nil {
+		t.Error("Commit accepted on a spooling writer")
+	}
+	s.Abort()
+}
+
+// Out-of-order adds whose contents repeat must still merge into runs.
+func TestRunsMergeAcrossOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.pmtiles")
+	w, _ := Create(path)
+	for _, id := range []uint64{20, 10, 11, 12, 21, 13} {
+		if err := w.Add(id, []byte("ocean")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(Header{TileType: TypePNG, MaxZoom: 3}, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := Open(path)
+	defer func() { _ = r.Close() }()
+	if r.Header.TileEntries != 2 || r.Header.AddressedTiles != 6 {
+		t.Fatalf("entries %d addressed %d, want 2 and 6", r.Header.TileEntries, r.Header.AddressedTiles)
+	}
+	for _, id := range []uint64{10, 13, 20, 21} {
+		if b, ok, _ := r.GetID(id); !ok || string(b) != "ocean" {
+			t.Errorf("id %d: %q %v", id, b, ok)
+		}
+	}
+	if _, ok, _ := r.GetID(14); ok {
+		t.Error("id 14 should be absent")
 	}
 }

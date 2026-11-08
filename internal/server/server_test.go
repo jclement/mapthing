@@ -22,12 +22,12 @@ import (
 	"github.com/jclement/mapthing/internal/auth"
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/keys"
+	"github.com/jclement/mapthing/internal/pmtiles"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/stats"
 	"github.com/jclement/mapthing/internal/store"
 	"github.com/jclement/mapthing/internal/supervisor"
 	"github.com/jclement/mapthing/internal/tiles"
-	"github.com/jclement/mapthing/internal/tiles/pmtiles"
 )
 
 const (
