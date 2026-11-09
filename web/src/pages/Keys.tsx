@@ -1,6 +1,13 @@
 import { KeyRound, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { type ApiKey, api, type CreatedKey, keySnippets, type StyleInfo } from "../api";
+import {
+  type ApiKey,
+  api,
+  type CreatedKey,
+  DEFAULT_STYLE,
+  keySnippets,
+  type StyleInfo,
+} from "../api";
 import { Sparkline } from "../components/charts";
 import {
   Badge,
@@ -49,7 +56,7 @@ function CreateKey({
   onCreated: () => void;
   styles: StyleInfo[];
 }) {
-  const [style, setStyle] = useState("outdoors");
+  const [style, setStyle] = useState<string>(DEFAULT_STYLE);
   const [label, setLabel] = useState("");
   const [rpm, setRpm] = useState("");
   const [rpd, setRpd] = useState("");

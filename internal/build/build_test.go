@@ -150,6 +150,10 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	resetHooks()
 	t.Cleanup(resetHooks)
+	// The guard's floor is 3 GiB of scratch, which the host running the tests may not have
+	// free. Scale it down so tests don't depend on the machine's disk; the tests that check
+	// the guard itself set their own factor or size hint.
+	t.Setenv("MAPTHING_DISK_GUARD_FACTOR", "0.0001")
 	e := &env{sequence: 100}
 	e.setPBF([]byte("\x00\x00\x00\x0d\x0a\x09OSMHeader delaware v1"))
 	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -721,6 +725,7 @@ func TestValhallaMissingSpeedsFails(t *testing.T) {
 
 func TestDiskGuardItemised(t *testing.T) {
 	e := newEnv(t)
+	t.Setenv("MAPTHING_DISK_GUARD_FACTOR", "") // the default factor is what this test checks
 	// A 10°×10° "Texas" parent of 700 MiB and five 1°×1° custom boxes inside it.
 	texas := catalog.Region{ID: "north-america/us/texas", Name: "Texas", BBox: catalog.BBox{-106, 26, -96, 36},
 		PBFURL: "http://127.0.0.1:1/texas-latest.osm.pbf", SizeHint: 700 << 20,

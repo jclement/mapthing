@@ -18,7 +18,7 @@ describe("API keys", () => {
     expect(secret).toMatch(/^mt_[A-Za-z0-9]{20,}$/);
     // usage snippets carry the secret and follow the chosen style
     expect(
-      screen.getByText(`${location.origin}/styles/outdoors.json?key=${secret}`),
+      screen.getByText(`${location.origin}/styles/overlay-dark.json?key=${secret}`),
     ).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Style for the snippets"), "satellite");
     expect(

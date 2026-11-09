@@ -418,9 +418,12 @@ export function styleThumbUrl(name: StyleName, z: number, x: number, y: number):
   return `/styles/${encodeURIComponent(name)}/256/${z}/${x}/${y}.png`;
 }
 
-/** Pick the style to show by default: outdoors / outdoors-dark per theme, else the first match. */
+/** The style a fresh map shows, whatever the UI theme. */
+export const DEFAULT_STYLE: StyleName = "overlay-dark";
+
+/** Pick the style to show by default: overlay-dark, else one matching the UI theme, else the first. */
 export function defaultStyle(styles: StyleInfo[] | undefined, dark: boolean): StyleName {
-  const want = dark ? "outdoors-dark" : "outdoors";
+  const want = DEFAULT_STYLE;
   if (!styles?.length) return want;
   return (
     styles.find((s) => s.id === want)?.id ?? styles.find((s) => s.dark === dark)?.id ?? styles[0].id
@@ -438,7 +441,7 @@ function mockStyleUrl(name: StyleName): string {
 }
 
 /** Snippets shown when a key is created. `origin` is the public base URL. */
-export function keySnippets(origin: string, secret: string, style: StyleName = "outdoors") {
+export function keySnippets(origin: string, secret: string, style: StyleName = DEFAULT_STYLE) {
   return [
     {
       label: "MapLibre / Mapbox GL style URL",

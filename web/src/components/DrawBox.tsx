@@ -2,9 +2,8 @@ import type { Map as MlMap } from "maplibre-gl";
 import { useCallback, useEffect, useRef } from "react";
 import { TerraDraw, TerraDrawRectangleMode } from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
-import { type BBox, type StyleName, styleUrl } from "../api";
+import { type BBox, DEFAULT_STYLE, type StyleName, styleUrl } from "../api";
 import { bboxOf } from "../lib/geo";
-import { useTheme } from "../lib/theme";
 import { MapCanvas } from "./MapCanvas";
 
 /** A map on which the user drags out one rectangle. Reports its bbox. */
@@ -17,11 +16,10 @@ export function DrawBox({
   initialBounds?: BBox;
   hasData: boolean;
 }) {
-  const { dark } = useTheme();
   const draw = useRef<TerraDraw | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  const name: StyleName = dark ? "outdoors-dark" : "outdoors";
+  const name: StyleName = DEFAULT_STYLE;
 
   const start = useCallback((m: MlMap) => {
     if (draw.current) return;
