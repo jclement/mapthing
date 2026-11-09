@@ -230,6 +230,7 @@ function GenerationCard({ g }: { g: Generation }) {
         <Stat label="Basemap" value={fmt.bytes(m.sizes.basemap)} />
         <Stat label="Routing" value={fmt.bytes(m.sizes.routing)} />
         <Stat label="Terrain" value={fmt.bytes(m.sizes.terrain)} />
+        {m.sizes.contours ? <Stat label="Contours" value={fmt.bytes(m.sizes.contours)} /> : null}
       </div>
       <div className="mt-3">
         <div className="mb-1 flex justify-between text-[11px] text-faint">

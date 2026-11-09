@@ -19,9 +19,10 @@ Add a theme: copy `outdoors.mjs` to `<name>.mjs`, set `name` (must equal the fil
 | `roads` | widths (zoom stops), casings, track min zoom and dash pattern |
 | `labels` | minor-road label min zoom, halo width, `pois: false` to hide POIs |
 | `hillshade` | `enabled`, exaggeration stops, shadow/highlight/accent colours |
+| `contours` | contour lines and labels (`contours.pmtiles`): `enabled`, minor/major colours, width and opacity stops, `minorMinzoom`, label min zoom, size, spacing, colour and halo |
 | `satellite` | `visible` and extra raster paint for the **required** `satellite` layer (source `imagery`) |
 | `overImagery` | when set, the style is drawn over imagery: fills dropped, roads translucent, light labels |
-| `terrainMaxzoom`, `imageryMaxzoom` | source max zooms (overzoomed beyond) |
+| `terrainMaxzoom`, `contourMaxzoom`, `imageryMaxzoom` | source max zooms (overzoomed beyond) |
 | `hide` | layer ids to hide |
 | `tweak(layers)` | last-resort hook to edit the final layer list |
 

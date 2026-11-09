@@ -152,6 +152,18 @@ export default {
     highlight: "rgba(255, 255, 255, 0.4)",
     accent: "rgba(70, 82, 95, 0.12)",
   },
+  // subtle: cool grey, thin, low opacity; data drawn on top must dominate
+  contours: {
+    ...base.contours,
+    minorColor: "#98a3ab",
+    majorColor: "#8a959d",
+    minorOpacity: [11, 0, 12, 0.2, 15, 0.3],
+    majorOpacity: [10, 0.25, 12, 0.35, 15, 0.45],
+    minorWidth: [11, 0.3, 14, 0.5, 17, 0.8],
+    majorWidth: [10, 0.5, 14, 0.8, 17, 1.2],
+    labelColor: "#7b858c",
+    labelHalo: "rgba(242, 244, 244, 0.9)",
+  },
   tweak: (layers) => {
     setPaint(layers, MAJOR_FILLS, { "line-width": widthByClass(Z, majorWidth) });
     setPaint(layers, MAJOR_CASINGS, {

@@ -8,6 +8,16 @@ export default {
   flavor: "light",
   sprite: "outdoors",
   colors: { ...base.colors, track: "#ffd27f", track_casing: "rgba(0,0,0,0.45)", unpaved: "#ffd27f" },
+  // thin white lines over photos, labels like the other labels
+  contours: {
+    ...base.contours,
+    minorColor: "#ffffff",
+    majorColor: "#ffffff",
+    minorOpacity: [11, 0, 12, 0.2, 15, 0.3],
+    majorOpacity: [10, 0.3, 12, 0.45, 15, 0.55],
+    labelColor: "#ffffff",
+    labelHalo: "rgba(0, 0, 0, 0.85)",
+  },
   satellite: { visible: true, paint: {} },
   overImagery: {
     background: "#1d2a1f", // shown where imagery has no tile

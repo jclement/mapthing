@@ -21,6 +21,10 @@ for the Protomaps v4 tile schema, with field changes:
   Protomaps profile does not emit `surface`, so this layer is inert until the tile build keeps
   it;
 - hillshade from the `terrain` raster-dem source (Terrarium, 256 px, maxzoom 12);
+- contour lines and `"750 m"` labels from the `contours` vector source (layer `contours`, z10–12,
+  overzoomed). The source carries 100/20 m lines at z10–11 and 50/10 m from z12. Minor lines fade
+  in from z11; labels on major lines start at z12. Colours and opacities are per theme: subtle in
+  `overlay`, stronger in `field`;
 - labels: English name, else local name; single-font stacks only;
 - `outdoors` and `outdoors-dark`: main roads coloured by rank and stepped in width (z14:
   motorway 6 px, trunk 5, primary 4.5, secondary 3.5, tertiary 2.6; `src/themes/_ranked.mjs`),

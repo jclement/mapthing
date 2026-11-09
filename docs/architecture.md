@@ -41,6 +41,7 @@ swapped in.
                               "osm" | "approximate:ne-10m" | "missing" (where ocean polygons came from)
       basemap.pmtiles         Protomaps v4 schema vector tiles (z0–15)
       terrain.pmtiles         elevation tiles (see Elevation) for profiles + hillshade
+      contours.pmtiles        contour lines (MVT, z10–12) built from terrain.pmtiles (see Contours)
       valhalla/               tiles.tar + valhalla.json (point valhalla_service at this config)
   current -> generations/<gen-id>   atomic symlink swap
   imagery-cache/              cached satellite imagery tiles (bounded LRU)
@@ -71,6 +72,7 @@ UI's own map needs no key. `/healthz` and `/readyz` are open.
 | GET | `/tiles/basemap/{z}/{x}/{y}.mvt` | vector tile (Protomaps v4 layers) |
 | GET | `/tiles/basemap.pmtiles` | the whole archive, HTTP Range supported (206), for clients that read PMTiles directly |
 | GET | `/tiles/terrain/{z}/{x}/{y}.png` | Terrarium-encoded elevation tiles (hillshade / 3D) |
+| GET | `/tiles/contours.json`, `/tiles/contours/{z}/{x}/{y}.mvt`, `/tiles/contours.pmtiles` | contour lines (layer `contours`: `ele` in metres, `major`), served like the basemap; 404 when the live generation has none |
 | GET | `/tiles/imagery/{z}/{x}/{y}.jpg` | satellite imagery, proxied from the configured open source and cached |
 | GET | `/styles/{name}/{tilesize}/{z}/{x}/{y}[@2x].{png\|jpg\|webp}` | **raster** tiles rendered from a style (`tilesize` 256 or 512; any style listed by `GET /styles`). Also the Mapbox Static Tiles shape `/styles/v1/{user}/{name}/tiles/[{tilesize}/]{z}/{x}/{y}[@2x][.{ext}]`, so swapping is a host change: without an extension it answers **jpg for `satellite`, png otherwise** (as Mapbox does). jpg/webp are encoded at quality 80 (a satellite 512@2x tile is 2–2.5 MB as PNG). Cached on disk per generation, style, size, scale and format. |
 | GET | `/packs/extract.pmtiles?bbox=w,s,e,n&minzoom=&maxzoom=` | offline pack (PMTiles subset of the basemap); `format=mbtiles` also |
@@ -118,6 +120,7 @@ internal/pmtiles      the one PMTiles v3 implementation: reader (leaf cache), wr
 internal/tiles        z/x/y serving, TileJSON, styles, packs, imagery proxy, raster proxy
 internal/routing      Router interface; Valhalla client; Google Routes compatibility
 internal/elevation    Service interface; terrain tile reader; profiles; Google Elevation compatibility
+internal/contours     terrain.pmtiles → contours.pmtiles (marching squares, MVT encoder)
 internal/server       HTTP routes, embedding web/dist
 web/                  admin UI (React + Vite + Tailwind + MapLibre GL JS), built into web/dist
 docker/               Dockerfile, renderer sidecar, style assets, fonts
@@ -227,6 +230,63 @@ reads `/data/current/terrain.pmtiles` and reopens it within 2 s of a `current` s
   ≈ ±0.5 m.
 - `elevation.CoverageIDs(bbox)` / `CoverageFor(bbox)`: static, offline list of the sources
   expected in a bbox, for the catalog.
+
+## Contours
+
+`internal/contours.Build(terrainPath, outPath)` turns the generation's `terrain.pmtiles` into
+`contours.pmtiles`. The terrain stage runs it right after the terrain archive is written
+(`build.RegisterContours`, from `internal/build/contours.go`); a failure fails the stage. There is
+no extra download and no GDAL: it reads only the terrain archive.
+`MAPTHING_CONTOURS_MAXZOOM` changes the max zoom (default 12); `0` turns contours off.
+The dev CLI runs the same code on any terrain archive:
+`mt-terrain contours -in terrain.pmtiles -out contours.pmtiles`.
+
+- **Archive**: MVT, gzip, z10–12, one layer `contours`. A tile holds one multi-line feature per
+  level, with `ele` (integer metres, the terrain's native datum) and `major` (boolean, index line).
+  The z12 tiles are overzoomed past z12, like the terrain source.
+- **Intervals** (metric): z10–11 every **20 m**, major every **100 m**; z12 (and overzoomed) every
+  **10 m**, major every **50 m**. The 0 m level is skipped, because the water layer draws coastlines.
+- **Grid**: each contour tile is contoured on its own grid resampled from the terrain's
+  **max-zoom** tiles, which carry the `mtSr` no-data mask. Lower terrain zooms write no-data
+  as 0 m, which would draw cliffs along coverage edges.
+  - Below the max zoom the grid is 256 px per tile, from a box average of max-zoom pixels.
+  - At z12 it is 512 px (z13 terrain at full resolution), because z12 is overzoomed to z16 and
+    needs the finer line.
+  - Each grid gets one 3×3 binomial smoothing pass.
+  - A one-pixel border from the neighbouring tiles makes lines meet across tile edges, with no
+    clipping.
+  - Cells with a no-data corner are skipped, so lines stop at the edge of coverage.
+- **Lines**:
+  - Marching squares with linear interpolation; saddles are resolved by the cell-centre average.
+  - Levels are offset by 1 cm, so quantised elevations never sit exactly on a level.
+  - Douglas–Peucker simplification at 1.5 of 4 096 tile units. At 3 units the lines look angular
+    at z15 and the archive is 21% smaller.
+  - Closed rings shorter than 8 grid px are dropped (one-pixel bumps in flat ground).
+- **Work and memory**: the archive is processed in z10 blocks: the 8×8 max-zoom tiles of a block
+  plus a one-tile ring, about 26 MB per worker.
+- **Accuracy**: vertices re-sampled from the terrain at max zoom are within the following median
+  |terrain − ele| at z12 (opt-in test `MAPTHING_TEST_TERRAIN=… go test ./internal/contours -run Real`):
+
+  | Area | Median | p90 |
+  |---|---|---|
+  | Delaware | 0.06 m | 0.37 m |
+  | Permian 1° | 0.03 m | 0.25 m |
+  | BC mountains | 0.25 m | 0.72 m |
+
+  z10–11 lines are generalised by their coarser grid, which matters in steep terrain only.
+- **Size** (z10–12, defaults; terrain archive for scale):
+
+  | Area | Contours | Terrain | Time |
+  |---|---|---|---|
+  | Delaware (whole state) | 0.70 MB | 21 MB | 1.3 s |
+  | Permian 1° box (−104…−103, 31…32) | 0.70 MB | 18 MB | 1.2 s |
+  | BC mountains test box | 2.1 MB | 7.6 MB | 2 s |
+  | Nine-region comparison set | 35 MB | 524 MB | 25 s |
+
+  Contours run at about 3–7% of terrain on plains and about 27% in mountains.
+- **Styles**: every theme has `contours_minor` and `contours_major` (lines over the hillshade,
+  under water) and `contours_labels` (`"750 m"` along major lines from z12, under every other
+  label). Themes set colours, widths and opacities; see `assets/styles/src/themes/README.md`.
 
 ## Routing
 
@@ -421,7 +481,8 @@ many regions share it, and the disk guard counts it once. Custom regions in the 
 `Polygon` is lon/lat rings read with the even-odd rule (Geofabrik boundary, or the drawn custom
 polygon). The elevation package plugs in with `build.RegisterTerrain`,
 `build.RegisterTerrainEstimate` and `build.RegisterElevationCheck` from an `init()` in
-`internal/build/terrain*.go`. Valhalla settings: `docker/valhalla/overrides.json` is deep-merged over
+`internal/build/terrain*.go`; contours with `build.RegisterContours` (`internal/build/contours.go`),
+run inside the terrain stage after a successful terrain build. Valhalla settings: `docker/valhalla/overrides.json` is deep-merged over
 `valhalla_build_config` output. Planetiler runs the Protomaps profile with the patches in
 `docker/planetiler/` (see PATCHES.md: `surface`, `surface_raw`, `tracktype`, `access` attributes on
 roads; private and rural service roads at their normal zooms).

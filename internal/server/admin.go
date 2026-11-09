@@ -453,7 +453,7 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 
 type manifestJSON struct {
 	Regions []manifestRegionJSON `json:"regions"`
-	Sizes   map[string]int64     `json:"sizes"` // basemap, terrain, routing, total
+	Sizes   map[string]int64     `json:"sizes"` // basemap, terrain, contours, routing, total
 	Timings map[string]float64   `json:"timings"`
 	Checks  []checkJSON          `json:"checks"`
 	Raw     json.RawMessage      `json:"raw,omitempty"` // the pipeline's manifest as written
@@ -537,7 +537,8 @@ func normaliseManifest(genDir string) manifestJSON {
 	basemap := fileSize(filepath.Join(genDir, "basemap.pmtiles"))
 	terrain := fileSize(filepath.Join(genDir, "terrain.pmtiles"))
 	routing := dirSize(filepath.Join(genDir, "valhalla"))
-	out.Sizes = map[string]int64{"basemap": basemap, "terrain": terrain, "routing": routing, "total": dirSize(genDir)}
+	contours := fileSize(filepath.Join(genDir, "contours.pmtiles"))
+	out.Sizes = map[string]int64{"basemap": basemap, "terrain": terrain, "contours": contours, "routing": routing, "total": dirSize(genDir)}
 	return out
 }
 

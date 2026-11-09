@@ -33,6 +33,15 @@
    "maxzoom": 12,
    "attribution": "Elevation: USGS 3DEP, NRCan, Copernicus DEM © DLR/Airbus"
   },
+  "contours": {
+   "type": "vector",
+   "tiles": [
+    "{{BASE_URL}}/tiles/contours/{z}/{x}/{y}.mvt{{KEY_QS}}"
+   ],
+   "minzoom": 10,
+   "maxzoom": 12,
+   "attribution": "Elevation: USGS 3DEP, NRCan, Copernicus DEM © DLR/Airbus"
+  },
   "imagery": {
    "type": "raster",
    "tiles": [
@@ -438,6 +447,102 @@
     "hillshade-highlight-color": "rgba(255, 255, 255, 0.25)",
     "hillshade-accent-color": "rgba(70, 60, 50, 0.12)",
     "hillshade-illumination-direction": 335
+   }
+  },
+  {
+   "id": "contours_minor",
+   "type": "line",
+   "source": "contours",
+   "source-layer": "contours",
+   "minzoom": 11,
+   "filter": [
+    "==",
+    "major",
+    false
+   ],
+   "layout": {
+    "line-join": "round"
+   },
+   "paint": {
+    "line-color": "#9c7b5a",
+    "line-width": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     11,
+     0.4,
+     14,
+     0.6,
+     17,
+     1
+    ],
+    "line-opacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     11,
+     0,
+     12,
+     0.3,
+     15,
+     0.4
+    ]
+   }
+  },
+  {
+   "id": "contours_major",
+   "type": "line",
+   "source": "contours",
+   "source-layer": "contours",
+   "minzoom": 10,
+   "filter": [
+    "==",
+    "major",
+    true
+   ],
+   "layout": {
+    "line-join": "round"
+   },
+   "paint": {
+    "line-color": "#8a6a4a",
+    "line-width": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     10,
+     0.6,
+     14,
+     1,
+     17,
+     1.6
+    ],
+    "line-opacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     10,
+     0.3,
+     12,
+     0.5,
+     15,
+     0.6
+    ]
    }
   },
   {
@@ -3511,6 +3616,56 @@
      18,
      17
     ]
+   }
+  },
+  {
+   "id": "contours_labels",
+   "type": "symbol",
+   "source": "contours",
+   "source-layer": "contours",
+   "minzoom": 12,
+   "filter": [
+    "==",
+    "major",
+    true
+   ],
+   "layout": {
+    "symbol-placement": "line",
+    "symbol-spacing": 350,
+    "text-field": [
+     "concat",
+     [
+      "to-string",
+      [
+       "get",
+       "ele"
+      ]
+     ],
+     " m"
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12,
+     10,
+     16,
+     12
+    ],
+    "text-max-angle": 25,
+    "text-padding": 4
+   },
+   "paint": {
+    "text-color": "#7a5c3e",
+    "text-halo-color": "rgba(255, 255, 255, 0.85)",
+    "text-halo-width": 1.2
    }
   },
   {

@@ -552,6 +552,35 @@ func TestTiles(t *testing.T) {
 	}
 }
 
+// TestContoursTileset: contours.pmtiles in the live generation is served like the basemap
+// (z/x/y MVT and TileJSON); absent, it is a 404.
+func TestContoursTileset(t *testing.T) {
+	e := newEnv(t, true)
+	c := e.login()
+	_, secret := e.createKey(c, map[string]any{"label": "contours"})
+	q := "?key=" + secret
+	if r, _ := e.do(nil, "GET", "/tiles/contours/2/1/1.mvt"+q, nil, nil); r.StatusCode != 404 {
+		t.Fatalf("missing contours archive: %d", r.StatusCode)
+	}
+	writeFixture(t, filepath.Join(e.dir, "generations", "g1", "contours.pmtiles"))
+	e.tiles.Reload()
+	r, _ := e.do(nil, "GET", "/tiles/contours/2/1/1.mvt"+q, nil, map[string]string{"Accept-Encoding": "gzip"})
+	if r.StatusCode != 200 || r.Header.Get("Content-Type") != "application/vnd.mapbox-vector-tile" {
+		t.Fatalf("contours tile: %d %v", r.StatusCode, r.Header)
+	}
+	_, tj := e.do(nil, "GET", "/tiles/contours.json"+q, nil, nil)
+	var doc map[string]any
+	if err := json.Unmarshal(tj, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if tl := doc["tiles"].([]any)[0].(string); !strings.Contains(tl, "/tiles/contours/{z}/{x}/{y}.mvt?key=") {
+		t.Fatalf("tiles url %q", tl)
+	}
+	if doc["vector_layers"] == nil {
+		t.Fatalf("no vector_layers: %s", tj)
+	}
+}
+
 func TestArchiveRange(t *testing.T) {
 	e := newEnv(t, true)
 	c := e.login()

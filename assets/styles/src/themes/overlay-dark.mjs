@@ -115,6 +115,16 @@ export default {
     road_label_halo: "#141617",
   },
   labels: { ...base.labels, pois: false },
+  // subtle light grey lines on charcoal
+  contours: {
+    ...base.contours,
+    minorColor: "#9aa3a9",
+    majorColor: "#aeb6bb",
+    minorOpacity: [11, 0, 12, 0.18, 15, 0.25],
+    majorOpacity: [10, 0.25, 12, 0.35, 15, 0.45],
+    labelColor: "#9aa3a9",
+    labelHalo: "rgba(20, 22, 23, 0.85)",
+  },
   // on charcoal a shadow has almost nothing to darken: relief has to come from the highlight
   hillshade: {
     ...base.hillshade,

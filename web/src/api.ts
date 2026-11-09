@@ -162,7 +162,7 @@ export interface JobDetail extends Job {
 
 export interface Manifest {
   regions: { id: string; name: string; data_date: string | null }[];
-  sizes: { basemap: number; terrain: number; routing: number; total: number };
+  sizes: { basemap: number; terrain: number; contours?: number; routing: number; total: number };
   timings: Partial<Record<StageName, number>>; // seconds
   checks: { name: string; ok: boolean; detail?: string }[];
 }

@@ -222,6 +222,7 @@ func resetHooks() {
 	RegisterTerrain(nil)
 	RegisterTerrainEstimate(nil)
 	RegisterElevationCheck(nil)
+	RegisterContours(nil)
 }
 
 type testRep struct {
@@ -259,6 +260,11 @@ func TestRunSuccess(t *testing.T) {
 		elevChecked.Store(true)
 		return nil
 	})
+	var contoursFrom string
+	RegisterContours(func(ctx context.Context, r Reporter, terrainPath, out string) error {
+		contoursFrom = filepath.Base(terrainPath)
+		return os.WriteFile(out, testPMTiles(), 0o644)
+	})
 	restarted := false
 	rep := &testRep{}
 	m, err := e.b.Run(context.Background(), rep, Options{
@@ -290,10 +296,13 @@ func TestRunSuccess(t *testing.T) {
 	if len(disk.Checks) < 4 { // basemap, tile, route, elevation
 		t.Errorf("checks %+v", disk.Checks)
 	}
+	if disk.Artifacts["contours.pmtiles"] == 0 || contoursFrom != "terrain.pmtiles" {
+		t.Errorf("contours: artifacts %v, built from %q", disk.Artifacts, contoursFrom)
+	}
 	if disk.Artifacts["terrain.pmtiles"] == 0 || disk.TotalS <= 0 {
 		t.Errorf("manifest artifacts %v total_s %v", disk.Artifacts, disk.TotalS)
 	}
-	for _, f := range []string{"basemap.pmtiles", "terrain.pmtiles", "valhalla/valhalla.json", "valhalla/tiles.tar"} {
+	for _, f := range []string{"basemap.pmtiles", "terrain.pmtiles", "contours.pmtiles", "valhalla/valhalla.json", "valhalla/tiles.tar"} {
 		if _, err := os.Stat(filepath.Join(e.b.DataDir, "current", f)); err != nil {
 			t.Errorf("missing %s", f)
 		}
