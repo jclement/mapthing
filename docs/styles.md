@@ -22,9 +22,11 @@ for the Protomaps v4 tile schema, with field changes:
   it;
 - hillshade from the `terrain` raster-dem source (Terrarium, 256 px, maxzoom 12);
 - labels: English name, else local name; single-font stacks only;
-- `outdoors` only: main roads coloured by rank (motorway orange, trunk yellow, primary pale
-  yellow, secondary and below white) and stepped in width (z14: motorway 6 px, trunk 5,
-  primary 4.5, secondary 3.5, tertiary 2.6), route shields 1.25x the Protomaps size;
+- `outdoors` and `outdoors-dark`: main roads coloured by rank and stepped in width (z14:
+  motorway 6 px, trunk 5, primary 4.5, secondary 3.5, tertiary 2.6; `src/themes/_ranked.mjs`),
+  route shields 1.25x the Protomaps size. Light: motorway orange, trunk yellow, primary pale
+  yellow, secondary and below white. Dark, muted: motorway dim orange, trunk ochre, primary
+  khaki, secondary and below grey, rank also stepping in lightness;
 - `landuse kind=industrial` (which includes oilfield well pads and compressor sites) is a
   grey-tan in `outdoors` and neutral grey in `overlay`/`overlay-dark`, never the Protomaps pale
   blue, which reads as water on a lease.
