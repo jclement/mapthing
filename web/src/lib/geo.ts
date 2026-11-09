@@ -87,3 +87,43 @@ export function estimateDisk(opts: { areaKm2: number; extractBytes: number; best
 export function formatLonLat([lon, lat]: LonLat): string {
   return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
 }
+
+export interface Padding {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/**
+ * Padding for fitting a route so it is not hidden under the route panel. `panel` is the panel's
+ * rect relative to the map container. A narrow panel is the desktop side panel (pad its right
+ * edge on the left); a full-width one is the mobile bottom sheet (pad its top edge at the
+ * bottom). `topInset` clears the floating
+ * toolbar. Padding is capped so at least 20% of the map stays for the route.
+ */
+export function routeFitPadding(
+  map: { width: number; height: number },
+  panel: { left: number; top: number; width: number; height: number } | null,
+  margin = 48,
+  topInset = 0,
+): Padding {
+  const p: Padding = { top: margin + topInset, right: margin, bottom: margin, left: margin };
+  if (panel && panel.width > 0 && panel.height > 0) {
+    if (panel.width < map.width * 0.8) p.left = panel.left + panel.width + margin;
+    else p.bottom = map.height - panel.top + margin;
+  }
+  const capW = map.width * 0.8;
+  const capH = map.height * 0.8;
+  if (p.left + p.right > capW) {
+    const k = capW / (p.left + p.right);
+    p.left = Math.floor(p.left * k);
+    p.right = Math.floor(p.right * k);
+  }
+  if (p.top + p.bottom > capH) {
+    const k = capH / (p.top + p.bottom);
+    p.top = Math.floor(p.top * k);
+    p.bottom = Math.floor(p.bottom * k);
+  }
+  return p;
+}

@@ -20,7 +20,7 @@ describe("add region flow", () => {
     expect(est).toHaveTextContent("USGS 3DEP 1/3″ · 10 m");
 
     await user.click(within(dialog).getByRole("button", { name: "Add and build" }));
-    // lands on Builds with a live job
+    // lands on Builds with a live job (the mock build only advances when finishBuilds() runs)
     expect(await screen.findByRole("heading", { name: "Builds" })).toBeInTheDocument();
     expect(await screen.findByText("Current build")).toBeInTheDocument();
     expect(screen.getByRole("log", { name: "Build log" })).toBeInTheDocument();
@@ -43,6 +43,9 @@ describe("add region flow", () => {
     await waitFor(() => expect(parents).toHaveTextContent(/Clipped from New Mexico .* \+ Texas/));
     expect(parents).toHaveTextContent(/downloads .* instead of United States/);
     await user.click(within(dialog).getByRole("button", { name: "Add only" }));
+    // Closing the dialog is a router navigation (a React transition) and can land after the
+    // region list reloads, so wait for it to go before counting names on the page.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByText(/added but not built yet/)).toBeInTheDocument();
     // in the banner and in the table
     expect(screen.getAllByText("Permian north")).toHaveLength(2);

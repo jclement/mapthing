@@ -5,7 +5,9 @@ import { AppShell } from "../App";
 import { installMock, type MockOptions } from "../mocks/server";
 
 export function renderApp(path = "/", opts: MockOptions = { authed: true }) {
-  installMock({ tickMs: 20, ...opts });
+  // Deterministic backend: no network jitter, and builds advance only when a test calls
+  // finishBuilds(), so nothing races the assertions however loaded the machine is.
+  installMock({ tickMs: 0, latencyMs: 0, ...opts });
   const user = userEvent.setup();
   const utils = render(
     <MemoryRouter initialEntries={[path]}>
