@@ -33,6 +33,8 @@ type BlueGreen struct {
 	active string
 	slot   int
 	gen    string
+	// stopping tracks the previous instance while it shuts down (see Activate).
+	stopping sync.WaitGroup
 }
 
 // ErrUnavailable means the child's binary is not installed (local development).
@@ -46,13 +48,16 @@ func (b *BlueGreen) Active() (name, gen string) {
 }
 
 // Activate makes an instance serving gen the active one. It returns once the new instance
-// is serving (or failed, leaving the previous one in place).
+// is serving (or failed, leaving the previous one in place). The previous instance is told to
+// stop and Activate does not wait for it: a service that is slow to exit would otherwise hold
+// up whatever follows the switch (the rest of a generation swap) for its whole stop timeout.
 func (b *BlueGreen) Activate(ctx context.Context, gen string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if gen == b.gen && b.active != "" {
 		return nil
 	}
+	b.stopping.Wait() // the instance before last must be gone: its port is the one used next
 	slot := 0
 	if b.active != "" {
 		slot = 1 - b.slot
@@ -83,7 +88,11 @@ func (b *BlueGreen) Activate(ctx context.Context, gen string) error {
 	old := b.active
 	b.active, b.slot, b.gen = name, slot, gen
 	if old != "" {
-		b.Sup.Remove(old)
+		b.stopping.Add(1)
+		go func() {
+			defer b.stopping.Done()
+			b.Sup.Remove(old)
+		}()
 	}
 	slog.Info("service switched", "service", b.Name, "to", name, "generation", gen, "previous", old)
 	return nil

@@ -171,7 +171,7 @@ func (s *state) retention(ctx context.Context) error {
 // prune keeps the current generation and the newest other good one, and deletes every other
 // generation (failed or older) and any stale work directory.
 func (b *Builder) prune(keepWork string) ([]string, error) {
-	removed, firstErr := b.pruneGenerations(false)
+	removed, firstErr := b.pruneGenerations(nil)
 	// Work dirs belong to builds; Run holds the lock, so any left now are stale.
 	if ents, err := os.ReadDir(b.workRoot()); err == nil {
 		for _, e := range ents {
@@ -185,26 +185,37 @@ func (b *Builder) prune(keepWork string) ([]string, error) {
 }
 
 // pruneGenerations applies the retention rule: the current generation and the newest other
-// good one stay. goodOnly leaves directories without a finished manifest alone (adoption:
-// such a directory may be a copy still arriving, and is not this process's to delete).
-func (b *Builder) pruneGenerations(goodOnly bool) ([]string, error) {
+// good one stay, the rest go. It returns the generations it deleted.
+//
+// With complete nil (a build), good means a manifest of a finished build, and everything else
+// is deleted: only this process's failed builds can be lying there. With complete set
+// (adoption), good means complete says so, and a directory that is not good is left alone and
+// does not count: it may be a copy still arriving, which must neither be deleted nor push a
+// usable generation out.
+func (b *Builder) pruneGenerations(complete func(Generation) bool) ([]string, error) {
 	cur := b.CurrentGeneration()
 	kept := 0
 	var removed []string
 	var firstErr error
 	for _, g := range b.Generations() { // newest first
+		if g.ID == cur {
+			continue
+		}
 		good := g.Manifest != nil && g.Manifest.OK
-		if g.ID == cur || (good && kept < KeepGenerations-1 && cur != "") {
-			if g.ID != cur {
-				kept++
+		if complete != nil {
+			if good = good && complete(g); !good {
+				continue
+			}
+		}
+		if good && kept < KeepGenerations-1 && cur != "" {
+			kept++
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(b.generationsDir(), g.ID)); err != nil {
+			if firstErr == nil {
+				firstErr = err
 			}
 			continue
-		}
-		if goodOnly && !good {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(b.generationsDir(), g.ID)); err != nil && firstErr == nil {
-			firstErr = err
 		}
 		removed = append(removed, g.ID)
 	}

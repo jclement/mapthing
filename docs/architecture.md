@@ -23,6 +23,11 @@ docker run -v data:/data -e ADMIN_USER -e ADMIN_PASSWORD -p 8080:8080 ghcr.io/jc
 127.0.0.1 and are restarted by the supervisor when they die or when a new generation is
 swapped in.
 
+The build and the serving can also run on different machines: `mapthing-build -out` writes a
+generation to a directory, a server adopts a copy of it, and a server can run without the
+renderer or without a basemap (`MAPTHING_RENDERER`, `MAPTHING_SERVE`). See
+[operations.md](operations.md).
+
 ## Data volume (`/data`, env `MAPTHING_DATA`)
 
 ```
@@ -42,7 +47,11 @@ swapped in.
       basemap.pmtiles         Protomaps v4 schema vector tiles (z0–15)
       terrain.pmtiles         elevation tiles (see Elevation) for profiles + hillshade
       contours.pmtiles        contour lines (MVT, z10–12) built from terrain.pmtiles (see Contours)
-      valhalla/               tiles.tar + valhalla.json (point valhalla_service at this config)
+      terrain.pmtiles.json    terrain build summary, with the fingerprint used to reuse it
+      contours.pmtiles.json   which terrain and setting the contours were built from
+      valhalla/               tiles.tar + valhalla.json (the build's config; the server writes a
+                              per-instance copy pointing at this directory, wherever it is)
+  generations/.<anything>/    not a generation: a copy in flight (never listed, activated or pruned)
   current -> generations/<gen-id>   atomic symlink swap
   imagery-cache/              cached satellite imagery tiles (bounded LRU)
   logs/
@@ -56,6 +65,12 @@ routes and tiles cross region borders cleanly. Builds happen beside the live gen
 points, a sample route per region succeeds, elevation answers inside each region). On failure
 the last good generation stays live and the failure is recorded in history. The last two good
 generations are kept; older ones are deleted.
+
+A generation directory is self-contained and relocatable. One built on another machine and
+copied to `generations/<gen-id>/` (the id in its manifest) becomes live through
+`POST /admin/api/generations/{id}/activate` or `mapthing adopt`, which validate it first; the
+same retention applies, except that a directory that does not validate is left alone, because
+it may be a copy still arriving ([operations.md](operations.md)).
 
 ## HTTP API
 
@@ -83,7 +98,7 @@ UI's own map needs no key. `/healthz` and `/readyz` are open.
 | GET | `/maps/api/elevation/json` | **Google Elevation API compatible** (`locations=` or `path=` + `samples=`; plain or `enc:` polyline). Same response shape. |
 | POST | `/directions/v2:computeRoutes` | **Google Routes API compatible** subset (origin, destination, intermediates as `location.latLng`; `travelMode` DRIVE; `polylineQuality`, `polylineEncoding`, `computeAlternativeRoutes`, `routeModifiers.avoidTolls/avoidHighways/avoidFerries`; returns `routes[].distanceMeters`, `duration`, `staticDuration`, `polyline`, `legs[]`, `viewport`, `routeLabels`; no route → `{}`). Honours `X-Goog-FieldMask` (or `$fields`); missing mask = all fields. `?profile=truck` selects truck costing (Google has no truck mode). |
 | POST | `/ors/v2/directions/{profile}` (also `…/json`, `…/geojson`, and GET `?start=&end=`), `/ors/v2/matrix/{profile}[/json]`, `/ors/v2/snap/{profile}[/json]`, `/ors/v2/isochrones/{profile}[/geojson]` | **OpenRouteService compatible** subset (`driving-car`, `driving-hgv`), `radiuses` honoured (snap up to 10 km), ORS error codes (2010 no routable point, 2009 no route) and response shapes. Key accepted as `Authorization: <key>` too. |
-| GET | `/healthz`, `/readyz` | liveness; readiness = a generation is live and the subprocesses are up |
+| GET | `/healthz`, `/readyz` | liveness; readiness = a generation is live and the subprocesses are up. With `MAPTHING_RENDERER=off` there is no renderer to be up; with `MAPTHING_SERVE` only the served parts count (a routing and elevation backend is ready without a basemap). |
 
 Admin (session cookie):
 
@@ -95,11 +110,12 @@ Admin (session cookie):
 | GET/POST/DELETE | `/admin/api/regions[/{id}]` | installed regions; POST `{id}` or `{name, bbox|polygon}` |
 | POST | `/admin/api/build` | start a build now (refresh downloads optional) |
 | GET | `/admin/api/jobs[/{id}]`, `/admin/api/events` (SSE) | job progress, log tail |
-| GET | `/admin/api/generations` | live and kept generations, manifests |
+| GET | `/admin/api/generations` | live and kept generations, manifests (including ones copied in from another machine) |
+| POST | `/admin/api/generations/{id}/activate` | validate `<data>/generations/{id}` and make it live: routing graph first (blue/green), then the atomic swap, then retention. 200 `{id, status:"live", already_live, previous, removed[]}`; idempotent. Refusals leave the live generation serving: 404 `no_generation`, 409 `busy`, 422 `invalid_generation` (`error.problems[]`) or `routing_failed`. |
 | GET/PUT | `/admin/api/schedule` | refresh schedule (cron expression, default weekly Sunday 03:00 UTC; per-region enable) |
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
 | GET | `/admin/api/stats` | tiles/routes/elevation calls by key and by day, cache hit rates, disk per generation and region, RAM, subprocess state |
-| GET | `/admin/api/system` | versions, disk free, attribution |
+| GET | `/admin/api/system` | versions, disk free, attribution, and the slim-mode settings (`renderer`: `on`/`off`, `serve`: the served parts) |
 
 ## Go layout
 
@@ -349,7 +365,7 @@ takes effect immediately. Nothing is restarted:
   IPC endpoints (its tile paths point into that generation's directory). On a swap the new instance
   starts as a *standby* child (not counted by `/readyz`), and once it answers `/status` and a test
   route inside the generation the routing client switches its base URL (atomically) and the old
-  instance stops. If the new one never gets ready (5 min), it is stopped and the old one keeps
+  instance is told to stop (the swap does not wait for it to exit). If the new one never gets ready (5 min), it is stopped and the old one keeps
   serving. `MAPTHING_VALHALLA_CMD` uses `{config}` for the instance config
   (default `valhalla_service {config} 1`).
 - **The renderer** is not restarted: core calls its `POST /reload` (drop styles and pools); it reads
@@ -394,7 +410,9 @@ every font in the stack answer 404.
 `MAPTHING_RENDERER_HEALTH_URL` (default renderer URL + `/health`), `MAPTHING_RASTER_CACHE_MB`
 (2048), `MAPTHING_IMAGERY_CACHE_MB` (4096), `MAPTHING_PACK_CACHE_MB` (4096),
 `MAPTHING_PACK_MAX_TILES` (2000000), `MAPTHING_INTERNAL_TOKEN`, `MAPTHING_IMAGERY_URL`,
-`MAPTHING_DEBUG`. Caches live in `/data/raster-cache`, `/data/imagery-cache`, `/data/pack-cache`.
+`MAPTHING_DEBUG`, `MAPTHING_RENDERER` (`on`; `off` starts no renderer and raster tiles answer
+404 `renderer_off`), `MAPTHING_SERVE` (`tiles,routing,elevation`; a part left out is not served
+and its files are not required of a generation: [operations.md](operations.md)). Caches live in `/data/raster-cache`, `/data/imagery-cache`, `/data/pack-cache`.
 
 **Errors.** Keyed and admin errors are JSON `{"error":{"code","message"}}`, except under
 `/maps/api/` (Google Elevation shape), `/directions/v2` (Google RPC shape) and `/ors/` (ORS

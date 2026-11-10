@@ -18,7 +18,7 @@ func TestParseServe(t *testing.T) {
 			t.Errorf("ParseServe(%q) = %+v, %v; want %+v", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"raster", "routing,evelation", ",", "none"} {
+	for _, in := range []string{"raster", "routing,elevations", ",", "none"} {
 		if _, err := ParseServe(in); err == nil {
 			t.Errorf("ParseServe(%q) accepted", in)
 		}

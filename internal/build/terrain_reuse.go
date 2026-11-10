@@ -103,31 +103,41 @@ func writeContoursInfo(terrainPath, contoursPath string) {
 	_ = os.WriteFile(contoursPath+".json", b, 0o644)
 }
 
+// terrainNotReusable says why the terrain in dir cannot stand in for the one this build would
+// make, or "" when it can.
+func terrainNotReusable(dir string, regions []catalog.Region) string {
+	fpf := hooks.fingerprintFunc()
+	if fpf == nil {
+		return "this build cannot fingerprint terrain"
+	}
+	src := filepath.Join(dir, "terrain.pmtiles")
+	if st, err := os.Stat(src); err != nil || st.IsDir() {
+		return "no terrain.pmtiles there"
+	}
+	have := readTerrainFingerprint(src)
+	if have == "" {
+		return "its terrain has no recorded fingerprint (built by an older version)"
+	}
+	if have != fpf(regions) {
+		return "its terrain was built for other areas or settings"
+	}
+	r, err := pmtiles.Open(src)
+	if err != nil {
+		return "its terrain archive does not open: " + err.Error()
+	}
+	_ = r.Close()
+	return ""
+}
+
 // reuseTerrain links or copies terrain.pmtiles from a previous generation directory to out
 // when it was built for the same areas and settings. It returns "" when the terrain was
 // reused, otherwise why not (the caller then builds it). An error means the reuse started and
 // failed half way.
 func (s *state) reuseTerrain(dir, out string) (string, error) {
-	fpf := hooks.fingerprintFunc()
-	if fpf == nil {
-		return "this build cannot fingerprint terrain", nil
+	if why := terrainNotReusable(dir, s.opt.Regions); why != "" {
+		return why, nil
 	}
 	src := filepath.Join(dir, "terrain.pmtiles")
-	if _, err := os.Stat(src); err != nil {
-		return "no terrain.pmtiles there", nil
-	}
-	have := readTerrainFingerprint(src)
-	if have == "" {
-		return "its terrain has no recorded fingerprint (built by an older version)", nil
-	}
-	if want := fpf(s.opt.Regions); have != want {
-		return "its terrain was built for other areas or settings", nil
-	}
-	r, err := pmtiles.Open(src)
-	if err != nil {
-		return "its terrain archive does not open: " + err.Error(), nil
-	}
-	_ = r.Close()
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
@@ -138,7 +148,7 @@ func (s *state) reuseTerrain(dir, out string) (string, error) {
 	if _, err := linkOrCopy(src+".json", out+".json"); err != nil {
 		return "", fmt.Errorf("reuse terrain: %w", err)
 	}
-	s.logf("terrain: reused from %s (%s, fingerprint %s)", dir, how, have[:12])
+	s.logf("terrain: reused from %s (%s, fingerprint %.12s)", dir, how, readTerrainFingerprint(out))
 	return "", nil
 }
 

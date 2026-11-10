@@ -88,7 +88,7 @@ func TestValidateGeneration(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		break_ func(dir string)
+		damage func(dir string)
 		id     string
 		want   string
 	}{
@@ -113,7 +113,7 @@ func TestValidateGeneration(t *testing.T) {
 	}
 	for _, c := range cases {
 		dir := fresh()
-		c.break_(dir)
+		c.damage(dir)
 		_, err := Validate(dir, c.id, AllParts())
 		if got := problems(t, err); !strings.Contains(got, c.want) {
 			t.Errorf("%s: problems %q, want %q", c.name, got, c.want)
@@ -270,11 +270,15 @@ func TestAdoptRetention(t *testing.T) {
 		t.Fatalf("after three adoptions: %v %v %v", exists(ids[0]), exists(ids[1]), exists(ids[2]))
 	}
 
-	// A copy in flight (no manifest yet), one staged under a dot name, and the next generation.
+	// Copies in flight that are newer than everything: one with no manifest yet, one whose
+	// manifest has arrived but whose files have not (it says ok, and is not), one staged under a
+	// dot name. None is deleted, and none takes the place of the usable previous generation.
 	arriving := "20261105T000000Z"
 	if err := os.MkdirAll(filepath.Join(b.generationsDir(), arriving, "valhalla"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	half := "20261107T000000Z"
+	_ = os.Remove(filepath.Join(b.addGen(t, half), "terrain.pmtiles"))
 	staged := ".20261106T000000Z.partial"
 	writeGen(t, filepath.Join(b.generationsDir(), staged), "20261106T000000Z")
 	b.addGen(t, ids[3])
@@ -285,9 +289,9 @@ func TestAdoptRetention(t *testing.T) {
 	if len(res.Removed) != 1 || res.Removed[0] != ids[1] {
 		t.Errorf("removed %v, want only %s", res.Removed, ids[1])
 	}
-	if !exists(ids[3]) || !exists(ids[2]) || exists(ids[1]) || !exists(arriving) || !exists(staged) {
-		t.Errorf("live %v previous %v older %v arriving %v staged %v",
-			exists(ids[3]), exists(ids[2]), exists(ids[1]), exists(arriving), exists(staged))
+	if !exists(ids[3]) || !exists(ids[2]) || exists(ids[1]) || !exists(arriving) || !exists(half) || !exists(staged) {
+		t.Errorf("live %v previous %v older %v arriving %v half %v staged %v",
+			exists(ids[3]), exists(ids[2]), exists(ids[1]), exists(arriving), exists(half), exists(staged))
 	}
 	for _, g := range b.Generations() {
 		if strings.HasPrefix(g.ID, ".") {

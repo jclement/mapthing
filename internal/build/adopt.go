@@ -205,9 +205,9 @@ type AdoptResult struct {
 }
 
 // Adopt validates <data>/generations/<id> and makes it the live generation with the same
-// atomic swap a build ends with, then applies the retention rule (the live generation and the
-// newest other good one stay; directories without a finished manifest are left alone, since
-// one may be a copy still arriving). Adopting the live generation again is a no-op that
+// atomic swap a build ends with, then applies the retention rule: the live generation and the
+// newest other complete one stay. A directory that does not validate is left alone and does
+// not count as the one kept, since it may be a copy still arriving. Adopting the live generation again is a no-op that
 // succeeds. A failed validation or Prepare changes nothing. ErrBusy while a build runs.
 func (b *Builder) Adopt(ctx context.Context, id string, opt AdoptOptions) (*AdoptResult, error) {
 	if !ValidGenerationID(id) {
@@ -247,6 +247,9 @@ func (b *Builder) Adopt(ctx context.Context, id string, opt AdoptOptions) (*Adop
 	if opt.Restart != nil {
 		_ = opt.Restart(ctx) // the swap happened; services retry on their own
 	}
-	res.Removed, _ = b.pruneGenerations(true)
+	res.Removed, _ = b.pruneGenerations(func(g Generation) bool {
+		_, err := Validate(filepath.Join(b.generationsDir(), g.ID), g.ID, need)
+		return err == nil
+	})
 	return res, nil
 }
