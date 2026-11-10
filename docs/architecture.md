@@ -52,6 +52,8 @@ renderer or without a basemap (`MAPTHING_RENDERER`, `MAPTHING_SERVE`). See
       valhalla/               tiles.tar + valhalla.json (the build's config; the server writes a
                               per-instance copy pointing at this directory, wherever it is)
   generations/.<anything>/    not a generation: a copy in flight (never listed, activated or pruned)
+  generations/.retention.json which generations this server owns (built here, or activated here);
+                              retention never touches any other directory
   current -> generations/<gen-id>   atomic symlink swap
   imagery-cache/              cached satellite imagery tiles (bounded LRU)
   logs/
@@ -69,8 +71,11 @@ generations are kept; older ones are deleted.
 A generation directory is self-contained and relocatable. One built on another machine and
 copied to `generations/<gen-id>/` (the id in its manifest) becomes live through
 `POST /admin/api/generations/{id}/activate` or `mapthing adopt`, which validate it first; the
-same retention applies, except that a directory that does not validate is left alone, because
-it may be a copy still arriving ([operations.md](operations.md)).
+same retention applies. Retention, after a build or an activation, only considers generations
+this server owns (recorded in `generations/.retention.json`: built here to the end, or made
+live here), so a directory being copied in is never deleted and never takes the rollback
+slot. A generation must be a real directory of regular files: symbolic links are refused
+([operations.md](operations.md)).
 
 ## HTTP API
 
@@ -111,7 +116,7 @@ Admin (session cookie):
 | POST | `/admin/api/build` | start a build now (refresh downloads optional) |
 | GET | `/admin/api/jobs[/{id}]`, `/admin/api/events` (SSE) | job progress, log tail |
 | GET | `/admin/api/generations` | live and kept generations, manifests (including ones copied in from another machine) |
-| POST | `/admin/api/generations/{id}/activate` | validate `<data>/generations/{id}` and make it live: routing graph first (blue/green), then the atomic swap, then retention. 200 `{id, status:"live", already_live, previous, removed[]}`; idempotent. Refusals leave the live generation serving: 404 `no_generation`, 409 `busy`, 422 `invalid_generation` (`error.problems[]`) or `routing_failed`. |
+| POST | `/admin/api/generations/{id}/activate` | validate `<data>/generations/{id}` and make it live: routing graph up as a standby, the atomic swap, then the routing switch (the standby is discarded if the swap fails), then retention. 200 `{id, status:"live", already_live, previous, removed[]}`; idempotent. Refusals leave the live generation serving: 404 `no_generation`, 409 `busy`, 422 `invalid_generation` (`error.problems[]`) or `routing_failed`, 500 if `current` cannot be moved. |
 | GET/PUT | `/admin/api/schedule` | refresh schedule (cron expression, default weekly Sunday 03:00 UTC; per-region enable) |
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
 | GET | `/admin/api/stats` | tiles/routes/elevation calls by key and by day, cache hit rates, disk per generation and region, RAM, subprocess state |

@@ -253,10 +253,49 @@ func TestActivateGenerationBlueGreen(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// The copy is fixed: it goes live, routing first.
+	// The copy is fixed, its graph loads and routes, and then current cannot be moved: the
+	// data directory takes no new entries (a read-only or full volume). The standby must be
+	// thrown away. Before the fix routing had already switched to g2 and g1's graph was being
+	// stopped, while tiles stayed on g1.
 	f.valhalla.ReadyTimeout = 20 * time.Second
 	_ = os.WriteFile(tar, []byte("graph two"), 0o644)
 	_ = os.WriteFile(filepath.Join(gens, "g2", "manifest.json"), m, 0o644)
+	if os.Geteuid() != 0 { // root ignores directory permissions
+		oldBase := func() string { mu.Lock(); defer mu.Unlock(); return base }()
+		if err := os.Chmod(data, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		_, err := f.activateGeneration(ctx, "g2")
+		_ = os.Chmod(data, 0o755)
+		if err == nil || !strings.Contains(err.Error(), "live generation is unchanged") {
+			t.Fatalf("activation with an unwritable data directory: %v", err)
+		}
+		if current(data) != "g1" {
+			t.Fatalf("current %q after a failed swap", current(data))
+		}
+		if now := func() string { mu.Lock(); defer mu.Unlock(); return base }(); now != oldBase {
+			t.Fatalf("routing was switched to %s although the swap failed", now)
+		}
+		if _, gen := f.valhalla.Active(); filepath.Base(gen) != "g1" {
+			t.Fatalf("active routing instance serves %q after a failed swap", gen)
+		}
+		// The old instance was not retired: it still answers after the stop timeout would
+		// have started, and the standby is gone.
+		time.Sleep(300 * time.Millisecond)
+		if g := graph(); !strings.HasSuffix(g, filepath.Join("g1", "valhalla", "tiles.tar")) {
+			t.Fatalf("after a failed swap routing serves %q; g1's graph must still be running", g)
+		}
+		if sts := sup.Statuses(); len(sts) != 1 || sts[0].Standby || sts[0].State != supervisor.StateRunning {
+			t.Fatalf("routing instances after a failed swap: %+v", sts)
+		}
+		mu.Lock()
+		if strings.Join(swaps, ",") != "g1" {
+			t.Errorf("swap hooks fired on a failed swap: %v", swaps)
+		}
+		mu.Unlock()
+	}
+
+	// With the volume writable again it goes live: current first, then routing.
 	res, err = f.activateGeneration(ctx, "g2")
 	if err != nil || res.Previous == nil || *res.Previous != "g1" {
 		t.Fatalf("activate g2: %+v %v", res, err)
@@ -298,6 +337,7 @@ func TestActivateGenerationSlimBackend(t *testing.T) {
 		t.Fatalf("a refused generation went live")
 	}
 	f.cfg.Serve = config.Serve{Routing: true, Elevation: true}
+	f.builder.Need = needParts(f.cfg.Serve) // as wirePipeline sets it
 	if res, err := f.activateGeneration(t.Context(), "g1"); err != nil || res.ID != "g1" {
 		t.Fatalf("slim backend: %+v %v", res, err)
 	}
@@ -365,6 +405,68 @@ func TestAdoptCommand(t *testing.T) {
 	}
 	if _, err = run(); err == nil {
 		t.Errorf("no argument accepted")
+	}
+}
+
+// A generation whose valhalla.json is valid JSON but not a config object used to panic here
+// (assignment to a nil map), in the server's watcher goroutine when adopted from the shell.
+func TestValhallaInstanceConfigRefusesNonObjects(t *testing.T) {
+	data := t.TempDir()
+	gen := filepath.Join(data, "generations", "g1")
+	writeGeneration(t, gen, "g1", "tar")
+	for _, body := range []string{`null`, `3`, `"x"`, `[]`, `[{"mjolnir":{}}]`, `{}`, `{"mjolnir":null}`, `{"mjolnir":{},"httpd":null}`, `{"mjolnir":{},"httpd":{"service":[]}}`, `{`} {
+		if err := os.WriteFile(filepath.Join(gen, "valhalla", "valhalla.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p, err := valhallaInstanceConfig(data, gen, 18002)
+		if err == nil || p != "" || !strings.Contains(err.Error(), "no usable routing config") {
+			t.Errorf("%s: path %q err %v", body, p, err)
+		}
+		// And adoption refuses it before it gets that far.
+		f := &features{cfg: config.Config{DataDir: data}, builder: build.New(data), watcher: &tiles.Watcher{DataDir: data}}
+		ae := activateErr(t, func() error { _, err := f.activateGeneration(t.Context(), "g1"); return err }())
+		if ae.Code != "invalid_generation" || !strings.Contains(strings.Join(ae.Problems, ";"), "valhalla/valhalla.json is not a routing config") {
+			t.Errorf("%s: activation answered %+v", body, ae)
+		}
+	}
+	if current(data) != "" {
+		t.Errorf("a generation with a bad routing config went live")
+	}
+}
+
+// The command moves the directory it is given, not a link to it, and refuses a link sitting
+// under generations/.
+func TestAdoptCommandSymlinks(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("MAPTHING_SERVE", "")
+	run := func(arg string) (string, error) {
+		var out bytes.Buffer
+		err := adopt([]string{"-data", data, arg}, &out)
+		return out.String(), err
+	}
+	realDir := filepath.Join(t.TempDir(), "real")
+	writeGeneration(t, realDir, "20261101T000000Z", "tar")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(link); err != nil || current(data) != "20261101T000000Z" {
+		t.Fatalf("adopt through a link: %q %v", out, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(data, "generations", "20261101T000000Z")); err != nil || !fi.IsDir() {
+		t.Fatalf("generations/<id> is not a real directory: %v", err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "20261102T000000Z")
+	writeGeneration(t, outside, "20261102T000000Z", "tar")
+	if err := os.Symlink(outside, filepath.Join(data, "generations", "20261102T000000Z")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("20261102T000000Z"); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("adopt a linked generation by id: %v", err)
+	}
+	if current(data) != "20261101T000000Z" {
+		t.Fatalf("current %q", current(data))
 	}
 }
 

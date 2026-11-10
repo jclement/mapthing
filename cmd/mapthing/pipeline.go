@@ -31,6 +31,8 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 		}
 	}()
 	b := build.New(f.cfg.DataDir)
+	b.Need = needParts(f.cfg.Serve) // what a generation must carry here (adoption, retention)
+	b.EnsureRetentionRecord()       // an upgraded data directory: what is already there is this server's
 	f.builder = b
 
 	f.runner.Register(scheduler.BuildJob, func(ctx context.Context, j *jobs.Job) error {

@@ -89,10 +89,13 @@ func (s *state) swap(ctx context.Context) error {
 			s.m.Generation, s.genDir, s.m.Generation)
 		return nil
 	}
-	if err := atomicSymlink(filepath.Join("generations", filepath.Base(s.genDir)), s.b.currentLink()); err != nil {
+	if err := s.b.swapCurrent(filepath.Base(s.genDir)); err != nil {
 		return err
 	}
 	s.logf("current -> generations/%s", filepath.Base(s.genDir))
+	if err := s.b.own(s.m.Generation); err != nil {
+		s.logf("retention record not updated: %v", err)
+	}
 	if s.opt.Restart != nil {
 		if err := s.opt.Restart(ctx); err != nil {
 			// The swap happened; a failed restart is the supervisor's problem to retry.
@@ -115,6 +118,15 @@ func atomicSymlink(target, link string) error {
 	return nil
 }
 
+// swapCurrent points current at generations/<id> in one rename.
+func (b *Builder) swapCurrent(id string) error {
+	link := atomicSymlink
+	if b.symlink != nil {
+		link = b.symlink
+	}
+	return link(filepath.Join("generations", id), b.currentLink())
+}
+
 // CurrentGeneration returns the id current points at, or "".
 func (b *Builder) CurrentGeneration() string {
 	t, err := os.Readlink(b.currentLink())
@@ -132,13 +144,16 @@ type Generation struct {
 	Manifest *Manifest `json:"manifest,omitempty"`
 }
 
-// Generations lists generation directories, newest first.
+// Generations lists generation directories, newest first: every real, non-dot directory,
+// owned by this data directory or copied in.
 func (b *Builder) Generations() []Generation {
 	ents, _ := os.ReadDir(b.generationsDir())
 	cur := b.CurrentGeneration()
 	var out []Generation
 	for _, e := range ents {
 		// Dot-prefixed directories are copies in flight (docs/operations.md): not generations.
+		// Neither is a symbolic link (IsDir is false for one): a generation is a real
+		// directory, so two names can never be the same generation.
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
@@ -168,10 +183,9 @@ func (s *state) retention(ctx context.Context) error {
 	return err
 }
 
-// prune keeps the current generation and the newest other good one, and deletes every other
-// generation (failed or older) and any stale work directory.
+// prune applies retention (retention.go) and deletes any stale work directory.
 func (b *Builder) prune(keepWork string) ([]string, error) {
-	removed, firstErr := b.pruneGenerations(nil)
+	removed, firstErr := b.pruneGenerations(b.building)
 	// Work dirs belong to builds; Run holds the lock, so any left now are stale.
 	if ents, err := os.ReadDir(b.workRoot()); err == nil {
 		for _, e := range ents {
@@ -180,44 +194,6 @@ func (b *Builder) prune(keepWork string) ([]string, error) {
 			}
 			_ = os.RemoveAll(filepath.Join(b.workRoot(), e.Name()))
 		}
-	}
-	return removed, firstErr
-}
-
-// pruneGenerations applies the retention rule: the current generation and the newest other
-// good one stay, the rest go. It returns the generations it deleted.
-//
-// With complete nil (a build), good means a manifest of a finished build, and everything else
-// is deleted: only this process's failed builds can be lying there. With complete set
-// (adoption), good means complete says so, and a directory that is not good is left alone and
-// does not count: it may be a copy still arriving, which must neither be deleted nor push a
-// usable generation out.
-func (b *Builder) pruneGenerations(complete func(Generation) bool) ([]string, error) {
-	cur := b.CurrentGeneration()
-	kept := 0
-	var removed []string
-	var firstErr error
-	for _, g := range b.Generations() { // newest first
-		if g.ID == cur {
-			continue
-		}
-		good := g.Manifest != nil && g.Manifest.OK
-		if complete != nil {
-			if good = good && complete(g); !good {
-				continue
-			}
-		}
-		if good && kept < KeepGenerations-1 && cur != "" {
-			kept++
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(b.generationsDir(), g.ID)); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		removed = append(removed, g.ID)
 	}
 	return removed, firstErr
 }

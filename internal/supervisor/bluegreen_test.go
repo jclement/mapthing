@@ -227,3 +227,79 @@ func TestBlueGreenUnavailableBinary(t *testing.T) {
 		t.Fatalf("unavailable child should stay visible: %+v", sts)
 	}
 }
+
+// Prepare brings the new instance up without touching the service; Abort leaves everything
+// as it was, and a later activation still works.
+func TestBlueGreenPrepareAbortAndCommit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sup := New("")
+	sup.Start(ctx)
+	var base atomic.Value
+	bg := newBG(t, sup, map[string]fakeCfg{"g1": {}, "g2": {}, "g3": {}}, &base)
+	if err := bg.Activate(ctx, "g1"); err != nil {
+		t.Fatal(err)
+	}
+	first := base.Load().(string)
+
+	st, err := bg.Prepare(ctx, "g2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ready, but not serving: clients and the old instance are untouched.
+	if base.Load().(string) != first {
+		t.Fatal("Prepare switched clients")
+	}
+	if g, err := get(first, "/gen"); err != nil || g != "g1" {
+		t.Fatalf("old instance during a prepared swap: %q %v", g, err)
+	}
+	if _, gen := bg.Active(); gen != "g1" {
+		t.Fatalf("active generation %q before commit", gen)
+	}
+	standby := ""
+	for _, s := range sup.Statuses() {
+		if s.Standby {
+			standby = s.Name
+		}
+	}
+	if standby == "" {
+		t.Fatalf("no standby instance: %+v", sup.Statuses())
+	}
+	st.Abort()
+	st.Abort()  // harmless
+	st.Commit() // too late: must not switch
+	if base.Load().(string) != first {
+		t.Fatal("clients switched after Abort")
+	}
+	if g, err := get(first, "/gen"); err != nil || g != "g1" {
+		t.Fatalf("old instance after Abort: %q %v", g, err)
+	}
+	if sts := sup.Statuses(); len(sts) != 1 || sts[0].Standby {
+		t.Fatalf("statuses after Abort: %+v", sts)
+	}
+	if _, gen := bg.Active(); gen != "g1" {
+		t.Fatalf("active generation %q after Abort", gen)
+	}
+
+	// The same generation can be prepared again and committed.
+	st, err = bg.Prepare(ctx, "g2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Commit()
+	if g, err := get(base.Load().(string), "/gen"); err != nil || g != "g2" {
+		t.Fatalf("after commit: %q %v", g, err)
+	}
+	// Preparing what is already active is a no-op that still has to be released.
+	st, err = bg.Prepare(ctx, "g2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Commit()
+	if err := bg.Activate(ctx, "g3"); err != nil {
+		t.Fatal(err)
+	}
+	if g, err := get(base.Load().(string), "/gen"); err != nil || g != "g3" {
+		t.Fatalf("after g3: %q %v", g, err)
+	}
+}

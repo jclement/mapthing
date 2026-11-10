@@ -83,11 +83,75 @@ func artifactPart(name string, p Parts) bool {
 	}
 }
 
+// plainFile looks at genDir/rel without following symbolic links. A generation is
+// self-contained: every file is a regular file inside the directory, and no part of its path
+// is a link (which could point at another generation, a copy in flight, or anywhere else, and
+// would then be served, counted and deleted under the wrong name).
+func plainFile(genDir, rel string) (size int64, exists bool, problem string) {
+	p := genDir
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel))), "/")
+	for i, part := range parts {
+		p = filepath.Join(p, part)
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return 0, false, ""
+		}
+		at := strings.Join(parts[:i+1], "/")
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return 0, true, at + " is a symbolic link; a generation must hold its own files"
+		}
+		last := i == len(parts)-1
+		if !last && !fi.IsDir() {
+			return 0, true, at + " is not a directory"
+		}
+		if last {
+			if !fi.Mode().IsRegular() {
+				return 0, true, at + " is not a regular file"
+			}
+			return fi.Size(), true, ""
+		}
+	}
+	return 0, false, ""
+}
+
+// ReadValhallaConfig reads a generation's valhalla.json as the JSON object the routing
+// service is configured from. Anything else that happens to be valid JSON (null, a number, an
+// array) is an error, as is a config without the graph section.
+func ReadValhallaConfig(genDir string) (map[string]any, error) {
+	data, err := os.ReadFile(ValhallaConfig(genDir))
+	if err != nil {
+		return nil, err
+	}
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, fmt.Errorf("not valid JSON: %w", err)
+	}
+	cfg, ok := v.(map[string]any)
+	if !ok || cfg == nil {
+		return nil, errors.New("not a JSON object")
+	}
+	if mj, ok := cfg["mjolnir"].(map[string]any); !ok || mj == nil {
+		return nil, errors.New(`has no "mjolnir" object (the graph settings)`)
+	}
+	if h, present := cfg["httpd"]; present {
+		hm, ok := h.(map[string]any)
+		if !ok || hm == nil {
+			return nil, errors.New(`"httpd" is not an object`)
+		}
+		if svc, present := hm["service"]; present {
+			if sm, ok := svc.(map[string]any); !ok || sm == nil {
+				return nil, errors.New(`"httpd.service" is not an object`)
+			}
+		}
+	}
+	return cfg, nil
+}
+
 // Validate checks that genDir holds a finished generation with everything need asks for:
 // a manifest of a build that succeeded, every artifact the manifest lists (for a served part)
-// present at its recorded size, archives that open, and a routing graph with its config. id,
-// when given, must be the generation the manifest names. It returns an *InvalidError listing
-// every problem found.
+// present at its recorded size as a regular file with no symbolic link in its path, archives
+// that open, and a routing graph with a usable config. id, when given, must be the generation
+// the manifest names. It returns an *InvalidError listing every problem found.
 func Validate(genDir, id string, need Parts) (*Manifest, error) {
 	name := id
 	if name == "" {
@@ -96,26 +160,38 @@ func Validate(genDir, id string, need Parts) (*Manifest, error) {
 	bad := func(problems ...string) (*Manifest, error) {
 		return nil, &InvalidError{ID: name, Problems: problems}
 	}
-	m, err := ReadManifest(genDir)
-	if os.IsNotExist(err) {
+	if _, ok, problem := plainFile(genDir, "manifest.json"); problem != "" {
+		return bad(problem)
+	} else if !ok {
 		return bad("manifest.json is missing (the copy is not finished, or this is not a generation)")
 	}
+	m, err := ReadManifest(genDir)
 	if err != nil {
 		return bad("manifest.json does not read: " + err.Error())
 	}
 	var problems []string
+	seen := map[string]bool{}
+	// size reports a file of the generation, recording once anything wrong with its path.
+	size := func(rel string) (int64, bool) {
+		n, ok, problem := plainFile(genDir, rel)
+		if problem != "" {
+			if !seen[problem] {
+				seen[problem] = true
+				problems = append(problems, problem)
+			}
+			return 0, false
+		}
+		return n, ok
+	}
+	wrongPath := func(rel string) bool {
+		_, _, problem := plainFile(genDir, rel)
+		return problem != ""
+	}
 	if !m.OK {
 		problems = append(problems, "the manifest is of a build that did not finish (ok is false)")
 	}
 	if id != "" && m.Generation != id {
 		problems = append(problems, fmt.Sprintf("the directory is named %s but its manifest is generation %q; name the directory after the manifest's generation", id, m.Generation))
-	}
-	size := func(rel string) (int64, bool) {
-		st, err := os.Stat(filepath.Join(genDir, filepath.FromSlash(rel)))
-		if err != nil || st.IsDir() {
-			return 0, false
-		}
-		return st.Size(), true
 	}
 	names := make([]string, 0, len(m.Artifacts))
 	for n := range m.Artifacts {
@@ -129,6 +205,7 @@ func Validate(genDir, id string, need Parts) (*Manifest, error) {
 		}
 		got, ok := size(n)
 		switch {
+		case wrongPath(n):
 		case !ok && artifactPart(n, need):
 			problems = append(problems, n+" is missing")
 		case ok && got != m.Artifacts[n]:
@@ -150,7 +227,7 @@ func Validate(genDir, id string, need Parts) (*Manifest, error) {
 		_ = r.Close()
 	}
 	if need.Tiles {
-		if _, ok := size("basemap.pmtiles"); !ok {
+		if _, ok := size("basemap.pmtiles"); !ok && !wrongPath("basemap.pmtiles") {
 			if _, listed := m.Artifacts["basemap.pmtiles"]; !listed {
 				problems = append(problems, "basemap.pmtiles is missing")
 			}
@@ -163,18 +240,18 @@ func Validate(genDir, id string, need Parts) (*Manifest, error) {
 	}
 	if need.Routing {
 		if n, ok := size("valhalla/tiles.tar"); !ok {
-			if _, listed := m.Artifacts["valhalla/tiles.tar"]; !listed {
+			if _, listed := m.Artifacts["valhalla/tiles.tar"]; !listed && !wrongPath("valhalla/tiles.tar") {
 				problems = append(problems, "valhalla/tiles.tar is missing")
 			}
 		} else if n == 0 {
 			problems = append(problems, "valhalla/tiles.tar is empty")
 		}
-		b, err := os.ReadFile(ValhallaConfig(genDir))
-		switch {
-		case err != nil:
-			problems = append(problems, "valhalla/valhalla.json is missing")
-		case !json.Valid(b):
-			problems = append(problems, "valhalla/valhalla.json is not valid JSON")
+		if _, ok := size("valhalla/valhalla.json"); !ok {
+			if !wrongPath("valhalla/valhalla.json") {
+				problems = append(problems, "valhalla/valhalla.json is missing")
+			}
+		} else if _, err := ReadValhallaConfig(genDir); err != nil {
+			problems = append(problems, "valhalla/valhalla.json is not a routing config: "+err.Error())
 		}
 	}
 	if len(problems) > 0 {
@@ -183,16 +260,22 @@ func Validate(genDir, id string, need Parts) (*Manifest, error) {
 	return m, nil
 }
 
-// AdoptOptions controls Adopt.
+// AdoptOptions controls Adopt. What a generation must carry is Builder.Need.
 type AdoptOptions struct {
-	// Need is what this server serves; the zero value means everything.
-	Need Parts
 	// Prepare runs after validation and before the swap, with the generation's directory. A
-	// server starts its standby routing instance on the new graph here; an error leaves the
-	// live generation untouched.
-	Prepare func(ctx context.Context, genDir string) error
+	// server brings its routing instance for the new graph up as a standby here, without
+	// switching to it; an error leaves the live generation untouched. The Prepared it returns
+	// (nil for nothing to do) is committed once current has moved, or aborted if that fails.
+	Prepare func(ctx context.Context, genDir string) (Prepared, error)
 	// Restart is called after the swap (as after a build) so services follow at once.
 	Restart func(ctx context.Context) error
+}
+
+// Prepared is a service made ready for a generation that is not live yet. Commit makes it
+// serve (and retires what served before); Abort discards it, leaving the service as it was.
+type Prepared interface {
+	Commit()
+	Abort()
 }
 
 // AdoptResult describes an adoption.
@@ -205,10 +288,12 @@ type AdoptResult struct {
 }
 
 // Adopt validates <data>/generations/<id> and makes it the live generation with the same
-// atomic swap a build ends with, then applies the retention rule: the live generation and the
-// newest other complete one stay. A directory that does not validate is left alone and does
-// not count as the one kept, since it may be a copy still arriving. Adopting the live generation again is a no-op that
-// succeeds. A failed validation or Prepare changes nothing. ErrBusy while a build runs.
+// atomic swap a build ends with, then applies the retention rule (retention.go): the live
+// generation and the newest other complete one this data directory owns stay. Adopting is what
+// makes a copied directory owned; other copies, arriving or waiting, are not touched.
+// Adopting the live generation again is a no-op that succeeds. A failure at any step (the
+// validation, Prepare, or moving current) leaves the live generation serving as before, with
+// whatever Prepare started discarded. ErrBusy while a build runs.
 func (b *Builder) Adopt(ctx context.Context, id string, opt AdoptOptions) (*AdoptResult, error) {
 	if !ValidGenerationID(id) {
 		return nil, fmt.Errorf("%w: %q is not a generation id", ErrNoGeneration, id)
@@ -218,38 +303,49 @@ func (b *Builder) Adopt(ctx context.Context, id string, opt AdoptOptions) (*Adop
 	}
 	defer b.mu.Unlock()
 	genDir := filepath.Join(b.generationsDir(), id)
-	if fi, err := os.Stat(genDir); err != nil || !fi.IsDir() {
+	fi, err := os.Lstat(genDir)
+	if err != nil {
 		return nil, fmt.Errorf("%w: there is no directory %s", ErrNoGeneration, genDir)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return nil, &InvalidError{ID: id, Problems: []string{
+			"generations/" + id + " is a symbolic link; a generation must be a real directory under generations/ (copy or move it there)"}}
+	}
+	if !fi.IsDir() {
+		return nil, fmt.Errorf("%w: %s is not a directory", ErrNoGeneration, genDir)
 	}
 	cur := b.CurrentGeneration()
 	if cur == id {
 		m, _ := ReadManifest(genDir)
+		_ = b.own(id)
 		return &AdoptResult{ID: id, AlreadyLive: true, Manifest: m}, nil
 	}
-	need := opt.Need
-	if need == (Parts{}) {
-		need = AllParts()
-	}
-	m, err := Validate(genDir, id, need)
+	m, err := Validate(genDir, id, b.need())
 	if err != nil {
 		return nil, err
 	}
-	res := &AdoptResult{ID: id, Manifest: m}
-	res.Previous = cur
+	res := &AdoptResult{ID: id, Manifest: m, Previous: cur}
+	var prepared Prepared
 	if opt.Prepare != nil {
-		if err := opt.Prepare(ctx, genDir); err != nil {
+		if prepared, err = opt.Prepare(ctx, genDir); err != nil {
 			return nil, &PrepareError{Err: err}
 		}
 	}
-	if err := atomicSymlink(filepath.Join("generations", id), b.currentLink()); err != nil {
-		return nil, err
+	// The one step that changes what is live. Until it succeeds nothing has been switched:
+	// the old routing instance is still the one serving, and the standby is thrown away.
+	if err := b.swapCurrent(id); err != nil {
+		if prepared != nil {
+			prepared.Abort()
+		}
+		return nil, fmt.Errorf("could not make generation %s live (the live generation is unchanged): %w", id, err)
+	}
+	if prepared != nil {
+		prepared.Commit()
 	}
 	if opt.Restart != nil {
 		_ = opt.Restart(ctx) // the swap happened; services retry on their own
 	}
-	res.Removed, _ = b.pruneGenerations(func(g Generation) bool {
-		_, err := Validate(filepath.Join(b.generationsDir(), g.ID), g.ID, need)
-		return err == nil
-	})
+	_ = b.own(id)
+	res.Removed, _ = b.pruneGenerations("")
 	return res, nil
 }

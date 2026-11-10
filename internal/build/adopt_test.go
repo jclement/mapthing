@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,12 @@ func (b *Builder) addGen(t *testing.T, id string) string {
 	writeGen(t, dir, id)
 	return dir
 }
+
+// fakePrepared records what an adoption did with the service it prepared.
+type fakePrepared struct{ log *[]string }
+
+func (p fakePrepared) Commit() { *p.log = append(*p.log, "commit") }
+func (p fakePrepared) Abort()  { *p.log = append(*p.log, "abort") }
 
 func problems(t *testing.T, err error) string {
 	t.Helper()
@@ -156,10 +163,10 @@ func TestAdoptSwapsAndIsIdempotent(t *testing.T) {
 	b.addGen(t, g2)
 	var order []string
 	opt := AdoptOptions{
-		Prepare: func(_ context.Context, genDir string) error {
+		Prepare: func(_ context.Context, genDir string) (Prepared, error) {
 			// The routing graph is tried before anything is swapped.
 			order = append(order, "prepare:"+filepath.Base(genDir)+":live="+b.CurrentGeneration())
-			return nil
+			return fakePrepared{&order}, nil
 		},
 		Restart: func(context.Context) error {
 			order = append(order, "restart:live="+b.CurrentGeneration())
@@ -170,7 +177,8 @@ func TestAdoptSwapsAndIsIdempotent(t *testing.T) {
 	if err != nil || res.AlreadyLive || res.Previous != g1 || b.CurrentGeneration() != g2 {
 		t.Fatalf("adopt g2: %+v %v, current %q", res, err, b.CurrentGeneration())
 	}
-	if got := strings.Join(order, " "); got != "prepare:"+g2+":live="+g1+" restart:live="+g2 {
+	// Routing is committed only once current has moved, and never aborted on the way.
+	if got := strings.Join(order, " "); got != "prepare:"+g2+":live="+g1+" commit restart:live="+g2 {
 		t.Errorf("order %q", got)
 	}
 	if target, _ := os.Readlink(b.currentLink()); target != filepath.Join("generations", g2) {
@@ -229,12 +237,36 @@ func TestAdoptRefusalsLeaveLiveGeneration(t *testing.T) {
 
 	// Complete, but the routing graph will not load.
 	_ = os.WriteFile(filepath.Join(dir, "valhalla", "tiles.tar"), []byte("tar"), 0o644)
-	opt.Prepare = func(context.Context, string) error { return errors.New("valhalla: new instance not ready") }
+	opt.Prepare = func(context.Context, string) (Prepared, error) {
+		return nil, errors.New("valhalla: new instance not ready")
+	}
 	var prep *PrepareError
 	if _, err := b.Adopt(ctx, next, opt); !errors.As(err, &prep) {
 		t.Errorf("prepare failure: %v", err)
 	}
 	stillLive("routing graph that does not load")
+
+	// The graph loads and is ready, and then current cannot be moved (a full or read-only
+	// volume). The standby must be discarded, never committed: routing stays on the old graph
+	// with everything else.
+	var did []string
+	opt.Prepare = func(context.Context, string) (Prepared, error) {
+		did = append(did, "prepare")
+		return fakePrepared{&did}, nil
+	}
+	b.symlink = func(string, string) error { return errors.New("no space left on device") }
+	_, err = b.Adopt(ctx, next, opt)
+	if err == nil || !strings.Contains(err.Error(), "no space left on device") || !strings.Contains(err.Error(), "live generation is unchanged") {
+		t.Errorf("swap failure: %v", err)
+	}
+	if got := strings.Join(did, " "); got != "prepare abort" {
+		t.Errorf("after a failed swap the prepared service saw %q, want prepare then abort", got)
+	}
+	stillLive("current that cannot be moved")
+	if rec := b.loadRetention(); len(rec.Generations) != 1 || rec.Generations[0] != live {
+		t.Errorf("a generation that never went live is recorded as owned: %v", rec.Generations)
+	}
+	b.symlink = nil
 
 	// A build is running.
 	opt.Prepare = nil
@@ -254,6 +286,10 @@ func TestAdoptRefusalsLeaveLiveGeneration(t *testing.T) {
 func TestAdoptRetention(t *testing.T) {
 	b := newAdoptBuilder(t)
 	ctx := context.Background()
+	// A copy that was already waiting, complete, when this data directory saw its first
+	// adoption. Older than everything: owned by accident, it would be the first one deleted.
+	early := "20260901T000000Z"
+	b.addGen(t, early)
 	ids := []string{"20261101T000000Z", "20261102T000000Z", "20261103T000000Z", "20261104T000000Z"}
 	for _, id := range ids[:3] {
 		b.addGen(t, id)
@@ -270,9 +306,10 @@ func TestAdoptRetention(t *testing.T) {
 		t.Fatalf("after three adoptions: %v %v %v", exists(ids[0]), exists(ids[1]), exists(ids[2]))
 	}
 
-	// Copies in flight that are newer than everything: one with no manifest yet, one whose
-	// manifest has arrived but whose files have not (it says ok, and is not), one staged under a
-	// dot name. None is deleted, and none takes the place of the usable previous generation.
+	// Copies from another machine, in every state, all newer than what is live: one with no
+	// manifest yet, one whose manifest has arrived but whose files have not (it says ok, and is
+	// not), one staged under a dot name, and one that is complete and waiting to be activated.
+	// None is deleted, and none takes the place of the usable previous generation.
 	arriving := "20261105T000000Z"
 	if err := os.MkdirAll(filepath.Join(b.generationsDir(), arriving, "valhalla"), 0o755); err != nil {
 		t.Fatal(err)
@@ -281,6 +318,12 @@ func TestAdoptRetention(t *testing.T) {
 	_ = os.Remove(filepath.Join(b.addGen(t, half), "terrain.pmtiles"))
 	staged := ".20261106T000000Z.partial"
 	writeGen(t, filepath.Join(b.generationsDir(), staged), "20261106T000000Z")
+	waiting := "20261108T000000Z"
+	b.addGen(t, waiting)
+	// ...and a complete one older than everything, which retention would otherwise delete.
+	oldCopy := "20261001T000000Z"
+	b.addGen(t, oldCopy)
+
 	b.addGen(t, ids[3])
 	res, err := b.Adopt(ctx, ids[3], AdoptOptions{})
 	if err != nil {
@@ -289,9 +332,11 @@ func TestAdoptRetention(t *testing.T) {
 	if len(res.Removed) != 1 || res.Removed[0] != ids[1] {
 		t.Errorf("removed %v, want only %s", res.Removed, ids[1])
 	}
-	if !exists(ids[3]) || !exists(ids[2]) || exists(ids[1]) || !exists(arriving) || !exists(half) || !exists(staged) {
-		t.Errorf("live %v previous %v older %v arriving %v half %v staged %v",
-			exists(ids[3]), exists(ids[2]), exists(ids[1]), exists(arriving), exists(half), exists(staged))
+	for name, want := range map[string]bool{ids[3]: true, ids[2]: true, ids[1]: false,
+		arriving: true, half: true, staged: true, waiting: true, oldCopy: true} {
+		if exists(name) != want {
+			t.Errorf("%s exists=%v, want %v", name, exists(name), want)
+		}
 	}
 	for _, g := range b.Generations() {
 		if strings.HasPrefix(g.ID, ".") {
@@ -303,6 +348,300 @@ func TestAdoptRetention(t *testing.T) {
 	res, err = b.Adopt(ctx, ids[2], AdoptOptions{})
 	if err != nil || b.CurrentGeneration() != ids[2] || !exists(ids[2]) || !exists(ids[3]) || len(res.Removed) != 0 {
 		t.Errorf("roll back: %+v %v", res, err)
+	}
+
+	// Activating the waiting copy is the handoff: from then on it is retained like any other,
+	// and the oldest owned generation makes room for it.
+	res, err = b.Adopt(ctx, waiting, AdoptOptions{})
+	if err != nil || len(res.Removed) != 1 || res.Removed[0] != ids[2] {
+		t.Errorf("adopt the waiting copy: %+v %v", res, err)
+	}
+	if !exists(early) {
+		t.Errorf("a copy waiting since before the first adoption was deleted")
+	}
+	if !exists(waiting) || !exists(ids[3]) || exists(ids[2]) || !exists(oldCopy) || !exists(half) || !exists(arriving) {
+		t.Errorf("after the handoff: waiting %v previous %v older %v", exists(waiting), exists(ids[3]), exists(ids[2]))
+	}
+}
+
+// The brief allows a generation to be copied straight into generations/<id> while the server
+// runs. A build that finishes during the copy must not delete it, whatever has arrived so
+// far, and must not let it push out the generation kept for rollback.
+func TestBuildRetentionLeavesIncomingCopies(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	opt := Options{Regions: []catalog.Region{e.region}}
+	run := func() string {
+		t.Helper()
+		rep := &testRep{}
+		m, err := e.b.Run(ctx, rep, opt)
+		if err != nil {
+			t.Fatalf("build: %v\n%s", err, strings.Join(rep.logs, "\n"))
+		}
+		return m.Generation
+	}
+	exists := func(name string) bool {
+		_, err := os.Stat(filepath.Join(e.b.generationsDir(), name))
+		return err == nil
+	}
+	first, second := run(), run()
+
+	// rsync at work while the next build runs. Build ids here are 20261108T03…; the copies are
+	// older and newer than all of them.
+	copies := map[string]func(dir, id string){
+		"no manifest yet": func(dir, _ string) {
+			if err := os.MkdirAll(filepath.Join(dir, "valhalla"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.WriteFile(filepath.Join(dir, "basemap.pmtiles"), []byte("half"), 0o644)
+		},
+		"manifest first, files later": func(dir, id string) {
+			writeGen(t, dir, id)
+			_ = os.Remove(filepath.Join(dir, "valhalla", "tiles.tar"))
+		},
+		"complete, not activated": func(dir, id string) { writeGen(t, dir, id) },
+	}
+	var incoming []string
+	n := 0
+	for what, make := range copies {
+		for _, day := range []string{"202610", "202701"} {
+			n++
+			id := fmt.Sprintf("%s%02dT000000Z", day, n)
+			make(filepath.Join(e.b.generationsDir(), id), id)
+			incoming = append(incoming, id+" ("+what+")")
+		}
+	}
+	third := run()
+	for _, c := range incoming {
+		if id, _, _ := strings.Cut(c, " "); !exists(id) {
+			t.Errorf("a build deleted the incoming copy %s", c)
+		}
+	}
+	// The build's own generations follow the usual rule, undisturbed by the copies.
+	if exists(first) || !exists(second) || !exists(third) || e.b.CurrentGeneration() != third {
+		t.Errorf("own generations: first %v second %v third %v, current %q", exists(first), exists(second), exists(third), e.b.CurrentGeneration())
+	}
+
+	// A build that was killed leaves its directory behind; the next build knows it is its own.
+	killed := "20261108T020000Z"
+	if err := os.MkdirAll(filepath.Join(e.b.generationsDir(), killed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(e.b.generationsDir(), killed, "basemap.pmtiles"), []byte("half"), 0o644)
+	if err := e.b.updateRetention(func(r *retentionRecord) { r.Building = append(r.Building, killed) }); err != nil {
+		t.Fatal(err)
+	}
+	fourth := run()
+	if exists(killed) {
+		t.Errorf("the leftover of a killed build was not cleaned up")
+	}
+	if exists(second) || !exists(third) || !exists(fourth) {
+		t.Errorf("after the fourth build: second %v third %v fourth %v", exists(second), exists(third), exists(fourth))
+	}
+	for _, c := range incoming {
+		if id, _, _ := strings.Cut(c, " "); !exists(id) {
+			t.Errorf("a later build deleted the incoming copy %s", c)
+		}
+	}
+	if rec := e.b.loadRetention(); len(rec.Building) != 0 || strings.Join(rec.Generations, ",") != third+","+fourth {
+		t.Errorf("retention record after builds: %+v", rec)
+	}
+}
+
+// A data directory from before the retention record: its complete generations are the
+// server's own, so the first build after an upgrade still prunes them and nothing leaks.
+func TestRetentionRecordSeededOnUpgrade(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	opt := Options{Regions: []catalog.Region{e.region}}
+	var gens []string
+	for range 2 {
+		m, err := e.b.Run(ctx, &testRep{}, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gens = append(gens, m.Generation)
+	}
+	if err := os.Remove(e.b.retentionPath()); err != nil {
+		t.Fatal(err)
+	}
+	m, err := e.b.Run(ctx, &testRep{}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := e.b.Generations()
+	if len(left) != 2 || left[0].ID != m.Generation || left[1].ID != gens[1] {
+		t.Fatalf("after the first build with a new record: %+v", left)
+	}
+	// A record that does not read owns nothing, and so deletes nothing.
+	if err := os.WriteFile(e.b.retentionPath(), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if removed, _ := e.b.pruneGenerations(""); len(removed) != 0 || len(e.b.Generations()) != 2 {
+		t.Errorf("a corrupt record led to deletions: %v", removed)
+	}
+}
+
+// A generation is a real directory holding its own files. Links are refused at adoption, so a
+// name can never resolve outside generations/, into a copy still being staged, or onto
+// another generation that retention sees under a different name.
+func TestAdoptRefusesSymlinks(t *testing.T) {
+	b := newAdoptBuilder(t)
+	ctx := context.Background()
+	const live = "20261101T000000Z"
+	b.addGen(t, live)
+	if _, err := b.Adopt(ctx, live, AdoptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	link := func(target, name string) {
+		t.Helper()
+		if err := os.Symlink(target, filepath.Join(b.generationsDir(), name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := func(id, want string) {
+		t.Helper()
+		_, err := b.Adopt(ctx, id, AdoptOptions{})
+		if got := problems(t, err); !strings.Contains(got, want) {
+			t.Errorf("adopt %s: %q, want %q", id, got, want)
+		}
+		if b.CurrentGeneration() != live {
+			t.Fatalf("adopt %s changed the live generation to %q", id, b.CurrentGeneration())
+		}
+	}
+
+	// The directory entry is a link: to outside the data directory...
+	const outsideID = "20261102T000000Z"
+	outside := filepath.Join(t.TempDir(), outsideID)
+	writeGen(t, outside, outsideID)
+	link(outside, outsideID)
+	refused(outsideID, "is a symbolic link")
+	// ...into a copy staged under a dot name...
+	const stagedID = "20261103T000000Z"
+	writeGen(t, filepath.Join(b.generationsDir(), "."+stagedID+".partial"), stagedID)
+	link("."+stagedID+".partial", stagedID)
+	refused(stagedID, "is a symbolic link")
+	// ...and an alias: A is a link to the real directory B, whose manifest says it is A.
+	const aliasA, realB = "20261105T000000Z", "20261104T000000Z"
+	writeGen(t, filepath.Join(b.generationsDir(), realB), aliasA)
+	link(realB, aliasA)
+	refused(aliasA, "is a symbolic link")
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("the link target outside the data directory was touched: %v", err)
+	}
+
+	// Links inside a real directory: an artifact, a directory on an artifact's path, the
+	// routing config, the manifest. Each would make the generation depend on something else.
+	elsewhere := t.TempDir()
+	writeGen(t, elsewhere, "x")
+	cases := map[string]struct {
+		rel  string
+		want string
+	}{
+		"20261111T000000Z": {"basemap.pmtiles", "basemap.pmtiles is a symbolic link"},
+		"20261112T000000Z": {"terrain.pmtiles", "terrain.pmtiles is a symbolic link"},
+		"20261113T000000Z": {"valhalla", "valhalla is a symbolic link"},
+		"20261114T000000Z": {"valhalla/valhalla.json", "valhalla/valhalla.json is a symbolic link"},
+		"20261115T000000Z": {"valhalla/tiles.tar", "valhalla/tiles.tar is a symbolic link"},
+		"20261116T000000Z": {"manifest.json", "manifest.json is a symbolic link"},
+	}
+	for id, c := range cases {
+		dir := b.addGen(t, id)
+		p := filepath.Join(dir, filepath.FromSlash(c.rel))
+		target := filepath.Join(elsewhere, filepath.FromSlash(c.rel))
+		if c.rel == "manifest.json" {
+			target = filepath.Join(dir, "manifest.real.json")
+			if err := os.Rename(p, target); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.RemoveAll(p); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, p); err != nil {
+			t.Fatal(err)
+		}
+		refused(id, c.want)
+	}
+}
+
+// Even when a data directory already holds an alias (made by hand, or by an older version),
+// retention must not delete the directory the live generation resolves to.
+func TestRetentionProtectsTheResolvedLiveTarget(t *testing.T) {
+	b := newAdoptBuilder(t)
+	const aliasA, realB = "20261103T000000Z", "20261101T000000Z"
+	writeGen(t, filepath.Join(b.generationsDir(), realB), aliasA)
+	if err := os.Symlink(realB, filepath.Join(b.generationsDir(), aliasA)); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicSymlink(filepath.Join("generations", aliasA), b.currentLink()); err != nil {
+		t.Fatal(err)
+	}
+	// B is owned, complete, not named by current, and older than two other owned generations:
+	// by name alone it is the one to delete.
+	newer := []string{"20261104T000000Z", "20261105T000000Z"}
+	for _, id := range newer {
+		b.addGen(t, id)
+	}
+	if err := b.saveRetention(&retentionRecord{Generations: append([]string{realB}, newer...)}); err != nil {
+		t.Fatal(err)
+	}
+	// Make B validate under its own name, as a candidate would.
+	m, _ := ReadManifest(filepath.Join(b.generationsDir(), realB))
+	m.Generation = realB
+	_ = writeManifest(filepath.Join(b.generationsDir(), realB), m)
+
+	removed, err := b.pruneGenerations("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(b.generationsDir(), realB, "basemap.pmtiles")); err != nil {
+		t.Fatalf("retention deleted the directory the live generation resolves to (removed %v)", removed)
+	}
+	if len(removed) != 1 || removed[0] != newer[0] {
+		t.Errorf("removed %v, want only %s", removed, newer[0])
+	}
+}
+
+// valhalla.json must be the object the routing service is configured from. null, numbers and
+// arrays are valid JSON too, and used to get through.
+func TestValidateRoutingConfig(t *testing.T) {
+	const id = "20261101T000000Z"
+	for body, ok := range map[string]bool{
+		`{"mjolnir":{"tile_extract":"/x/tiles.tar"}}`:                          true,
+		`{"mjolnir":{},"httpd":{"service":{"listen":"tcp://127.0.0.1:8002"}}}`: true,
+		`null`:                                 false,
+		`3`:                                    false,
+		`"valhalla"`:                           false,
+		`[]`:                                   false,
+		`[{"mjolnir":{}}]`:                     false,
+		`{}`:                                   false,
+		`{"mjolnir":null}`:                     false,
+		`{"mjolnir":"tiles"}`:                  false,
+		`{"mjolnir":{},"httpd":null}`:          false,
+		`{"mjolnir":{},"httpd":[1]}`:           false,
+		`{"mjolnir":{},"httpd":{"service":7}}`: false,
+		`{"mjolnir":`:                          false,
+	} {
+		dir := filepath.Join(t.TempDir(), id)
+		writeGen(t, dir, id)
+		if err := os.WriteFile(filepath.Join(dir, "valhalla", "valhalla.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Validate(dir, id, AllParts())
+		if ok && err != nil {
+			t.Errorf("%s: refused: %v", body, err)
+		}
+		if !ok {
+			if err == nil {
+				t.Errorf("%s: accepted as a routing config", body)
+			} else if got := problems(t, err); !strings.Contains(got, "valhalla/valhalla.json is not a routing config") {
+				t.Errorf("%s: problems %q", body, got)
+			}
+			// A server that serves no routing does not care.
+			if _, err := Validate(dir, id, Parts{Tiles: true, Elevation: true}); err != nil {
+				t.Errorf("%s: refused by a server without routing: %v", body, err)
+			}
+		}
 	}
 }
 

@@ -102,15 +102,19 @@ curl -b cookies -H "Origin: https://maps.example.com" -X POST \
 
 `POST /admin/api/generations/{id}/activate` (admin session) does, in this order:
 
-1. **Validates the directory.** The manifest must be of a build that finished, the directory
-   must be named after the manifest's generation, every file the manifest lists must be there
-   at its recorded size, the archives must open, and the routing graph must have its config.
+1. **Validates the directory.** It must be a real directory (not a symbolic link) named after
+   the generation in its manifest. The manifest must be of a build that finished. Every file
+   the manifest lists must be there at its recorded size, as a regular file with no symbolic
+   link anywhere in its path. The archives must open, and `valhalla/valhalla.json` must be a
+   routing config (a JSON object with its graph section).
 2. **Starts the routing graph** as the blue/green standby and waits for it to answer a status
-   request and a test route, then switches routing to it.
+   request and a test route. Routing is not switched yet.
 3. **Moves `current`** to the generation (one atomic rename). Tiles and elevation reopen at
-   once.
-4. **Applies retention**, as after a build: the live generation and the newest other complete
-   one stay; older ones are deleted.
+   once. If this fails (a full or read-only volume), the standby is stopped and nothing has
+   changed: tiles, elevation and routing are all still the old generation.
+4. **Switches routing** to the standby and retires the old instance.
+5. **Applies retention**: the live generation and the newest other complete one stay; older
+   ones are deleted. Only generations this server owns are considered (below).
 
 It answers `200 {"id", "status": "live", "already_live", "previous", "removed": […]}`.
 
@@ -122,6 +126,7 @@ A refusal changes nothing, and the live generation keeps serving:
 | 409 | `busy` | a build or another activation is running |
 | 422 | `invalid_generation` | step 1 failed; `error.problems` lists every problem, e.g. `valhalla/tiles.tar is missing` or `terrain.pmtiles is 1048576 bytes, the manifest says 511705088 (partial copy?)` |
 | 422 | `routing_failed` | step 2 failed: the graph did not load or route within 5 minutes |
+| 500 | `internal` | step 3 failed: `current` could not be moved; the message says why |
 
 It is **idempotent**: activating the live generation again answers 200 with
 `"already_live": true` and does nothing. A script can retry it safely.
@@ -132,16 +137,33 @@ previous one.
 `GET /admin/api/generations` lists a copied generation as `kept` as soon as its directory is
 there, and as `live` once activated.
 
+### What retention may delete
+
+`generations/` is shared between the server and whoever copies generations in, so the server
+keeps a record (`generations/.retention.json`) of the generations it **owns**: the ones a
+build on this server finished, and the ones an activation made live. Retention, after a build
+and after an activation alike, only ever looks at those.
+
+- A directory the server does not own is never deleted and never counts as the generation
+  kept for rollback. That holds whatever state it is in: no manifest yet, a manifest but not
+  all files, or complete and waiting to be activated.
+- **Activating a generation is the handoff.** From then on it is retained like one built here.
+- The live generation is never deleted.
+- A copy you decide not to activate is yours to delete.
+- The first start after upgrading from a version without the record takes every complete
+  generation already in `generations/` as owned.
+
 ### Copying safely
 
-- **Copy under a dot name, then rename**, as in the example. Directories whose name starts with
-  a dot are not generations: they are not listed, cannot be activated and are never pruned. The
-  rename makes the generation appear whole.
-- If you copy straight into `generations/<id>/` instead, activation still refuses an unfinished
-  copy (missing files, or sizes that do not match the manifest), and retention leaves a
-  directory that does not validate alone and does not count it as the generation to keep. But
-  a server that also runs its own builds deletes unfinished generation directories at the end
-  of a build, so use the dot name there.
+- **Copying straight into `generations/<id>/` while the server runs is safe**, including while
+  it builds: an unfinished copy is refused by activation (missing files, or sizes that do not
+  match the manifest) and ignored by retention.
+- Copying under a dot name and renaming, as in the example, additionally keeps a half-arrived
+  generation out of `GET /admin/api/generations`. Directories whose name starts with a dot are
+  not generations: they are not listed and cannot be activated.
+- **No symbolic links.** A generation is a real directory under `generations/` holding its own
+  regular files. A link in place of the directory or of any file in it is refused with
+  `invalid_generation`. Use `rsync -a --copy-links` (or `-L`) if the source has links.
 - A generation is relocatable. The `valhalla.json` inside it names the paths of the machine
   that built it; the server points each routing instance at the graph where the generation is
   now.
@@ -160,9 +182,10 @@ live. The running server notices within two seconds and follows: tiles at once, 
 blue/green. It reads `MAPTHING_DATA` and `MAPTHING_SERVE` from the environment, so run it
 inside the container. Two differences from the API:
 
-- It cannot try the routing graph before the swap. If the graph does not load, tiles and
-  elevation are already on the new generation while routing stays on the old graph, and the
-  server logs `routing service not switched`. Prefer the API when the copy is unproven.
+- It cannot try the routing graph before the swap (the files and the routing config are
+  validated the same way). If the graph then does not load, tiles and elevation are already on
+  the new generation while routing stays on the old graph, and the server logs
+  `routing service not switched`. Prefer the API when the copy is unproven.
 - It does not know whether a build is running in the server process. Do not run it during one.
 
 ## 3. Run as a slim backend

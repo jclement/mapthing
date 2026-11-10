@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jclement/mapthing/internal/build"
 	"github.com/jclement/mapthing/internal/routing"
 	"github.com/jclement/mapthing/internal/supervisor"
 	"github.com/jclement/mapthing/internal/tiles"
@@ -44,14 +45,11 @@ func valhallaPorts(raw string) [2]int {
 // valhallaInstanceConfig writes <data>/run/valhalla-<port>.json: the generation's valhalla.json
 // with its own listen port and IPC endpoints, so two instances can run side by side.
 func valhallaInstanceConfig(dataDir, genDir string, port int) (string, error) {
-	src := filepath.Join(genDir, "valhalla", "valhalla.json")
-	b, err := os.ReadFile(src)
+	// A config that is not a JSON object (null is valid JSON) is refused here as well as at
+	// adoption: this also runs for a generation that became live some other way.
+	cfg, err := build.ReadValhallaConfig(genDir)
 	if err != nil {
-		return "", fmt.Errorf("no routing graph in this generation: %w", err)
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return "", fmt.Errorf("%s: %w", src, err)
+		return "", fmt.Errorf("no usable routing config in this generation (%s): %w", build.ValhallaConfig(genDir), err)
 	}
 	httpd, _ := cfg["httpd"].(map[string]any)
 	if httpd == nil {

@@ -25,25 +25,29 @@ func needParts(s config.Serve) build.Parts {
 }
 
 // activateGeneration is server.Deps.ActivateGeneration. The order is what keeps a bad
-// generation from ever being served: validate the files, bring the routing graph up as a
-// standby and switch routing to it (blue/green; a graph that will not load stops here with the
-// old one still serving), and only then move the current symlink, which reopens the tiles.
+// generation from ever being served, in whole or in part: validate the files; bring the
+// routing graph up as a standby without switching to it (a graph that will not load stops
+// here); move the current symlink; and only when that has succeeded switch routing to the
+// standby and retire the old instance. If the symlink cannot be moved the standby is
+// discarded, and tiles, elevation and routing are all still the old generation.
 func (f *features) activateGeneration(ctx context.Context, id string) (server.Activation, error) {
 	res, err := f.builder.Adopt(ctx, id, build.AdoptOptions{
-		Need: needParts(f.cfg.Serve),
-		Prepare: func(ctx context.Context, genDir string) error {
+		Prepare: func(ctx context.Context, genDir string) (build.Prepared, error) {
 			if f.valhalla == nil {
-				return nil
+				return nil, nil
 			}
 			dir, err := filepath.EvalSymlinks(genDir) // as tiles.CurrentGeneration will name it
 			if err != nil {
-				return err
+				return nil, err
 			}
-			err = f.valhalla.Activate(ctx, dir)
+			standby, err := f.valhalla.Prepare(ctx, dir)
 			if errors.Is(err, supervisor.ErrUnavailable) {
-				return nil // no routing binary on this machine (development)
+				return nil, nil // no routing binary on this machine (development)
 			}
-			return err
+			if err != nil {
+				return nil, err
+			}
+			return standby, nil
 		},
 		Restart: func(ctx context.Context) error {
 			f.watcher.Check(ctx)
@@ -100,6 +104,10 @@ func adopt(args []string, out io.Writer) error {
 	arg := fl.Arg(0)
 	id := arg
 	if fi, err := os.Stat(arg); err == nil && fi.IsDir() {
+		// The directory itself is moved, not a link to it.
+		if arg, err = filepath.EvalSymlinks(arg); err != nil {
+			return err
+		}
 		m, err := build.Validate(arg, "", need)
 		if err != nil {
 			return err
@@ -132,7 +140,9 @@ func adopt(args []string, out io.Writer) error {
 			}
 		}
 	}
-	res, err := build.New(*data).Adopt(context.Background(), id, build.AdoptOptions{Need: need})
+	b := build.New(*data)
+	b.Need = need
+	res, err := b.Adopt(context.Background(), id, build.AdoptOptions{})
 	if err != nil {
 		return err
 	}

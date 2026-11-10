@@ -84,7 +84,15 @@ type Builder struct {
 	// Now is the clock (tests).
 	Now func() time.Time
 
+	// Need is which parts of a generation this server serves (the zero value means all): what
+	// a generation must carry to count as complete for retention and adoption.
+	Need Parts
+
 	mu sync.Mutex
+	// building is the generation id of the build running now (under mu).
+	building string
+	// symlink replaces the current swap (tests inject a failure).
+	symlink func(target, link string) error
 
 	hostMu      sync.Mutex
 	failedHosts map[string]time.Time // source hosts that exhausted their retry budget
@@ -136,6 +144,17 @@ func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest
 		m.Regions = append(m.Regions, ManifestRegion{ID: r.ID, Name: r.Name, BBox: r.BBox})
 	}
 	st := &state{b: b, rep: rep, opt: opt, genDir: genDir, workDir: workDir, m: m, tail: newRing(60)}
+	if opt.OutDir == "" {
+		// So that if this process is killed, a later build knows the leftover directory is its
+		// own and may delete it (retention.go).
+		b.EnsureRetentionRecord()
+		b.building = genID
+		_ = b.updateRetention(func(r *retentionRecord) { r.Building = append(r.Building, genID) })
+		defer func() {
+			b.building = ""
+			_ = b.updateRetention(func(r *retentionRecord) { r.Building = without(r.Building, genID) })
+		}()
+	}
 
 	err := st.run(ctx)
 	stoppedEarly := errors.Is(err, errStoppedEarly)

@@ -29,6 +29,10 @@ type BlueGreen struct {
 	// PollEvery is the readiness poll interval (default 500 ms).
 	PollEvery time.Duration
 
+	// op serialises changes: it is held from Prepare until the Standby is committed or
+	// aborted, so a second activation waits for the first to settle.
+	op sync.Mutex
+	// mu guards the fields below (read by Active at any time).
 	mu     sync.Mutex
 	active string
 	slot   int
@@ -52,50 +56,107 @@ func (b *BlueGreen) Active() (name, gen string) {
 // stop and Activate does not wait for it: a service that is slow to exit would otherwise hold
 // up whatever follows the switch (the rest of a generation swap) for its whole stop timeout.
 func (b *BlueGreen) Activate(ctx context.Context, gen string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if gen == b.gen && b.active != "" {
-		return nil
+	st, err := b.Prepare(ctx, gen)
+	if err != nil {
+		return err
+	}
+	st.Commit()
+	return nil
+}
+
+// Standby is a new instance that is running and ready but not yet serving: clients still
+// reach the previous instance, which is untouched. Exactly one of Commit and Abort must be
+// called; until then other activations of the same service wait.
+type Standby struct {
+	b    *BlueGreen
+	once sync.Once
+	// "" when the generation asked for was already the active one (nothing to switch).
+	name string
+	slot int
+	gen  string
+	base string
+}
+
+// Prepare starts an instance for gen beside the active one and waits until it is ready,
+// without switching clients to it or stopping anything. It lets a caller make the switch the
+// last step of a larger change: prepare, do the part that can fail, then Commit, or Abort and
+// be exactly where it started.
+func (b *BlueGreen) Prepare(ctx context.Context, gen string) (*Standby, error) {
+	b.op.Lock()
+	active, activeGen := b.Active()
+	if gen == activeGen && active != "" {
+		return &Standby{b: b}, nil // holds op until Commit or Abort, like any other
 	}
 	b.stopping.Wait() // the instance before last must be gone: its port is the one used next
+	b.mu.Lock()
 	slot := 0
 	if b.active != "" {
 		slot = 1 - b.slot
 	}
+	b.mu.Unlock()
 	port := b.Ports[slot]
 	name := b.Name + "@" + strconv.Itoa(port)
 	b.Sup.Remove(name) // a leftover from an earlier failed attempt
 	c, err := b.Child(gen, port)
 	if err != nil {
-		return fmt.Errorf("%s: %w", b.Name, err)
+		b.op.Unlock()
+		return nil, fmt.Errorf("%s: %w", b.Name, err)
 	}
 	c.Name = name
-	c.Standby = b.active != ""
+	c.Standby = active != ""
 	b.Sup.Add(c)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	if err := b.waitReady(ctx, c, base); err != nil {
-		if errors.Is(err, ErrUnavailable) && b.active == "" {
-			return err // keep the child so its state shows as unavailable
+		defer b.op.Unlock()
+		if errors.Is(err, ErrUnavailable) && active == "" {
+			return nil, err // keep the child so its state shows as unavailable
 		}
 		b.Sup.Remove(name)
-		return fmt.Errorf("%s: new instance for %s not ready, keeping the old one: %w", b.Name, gen, err)
+		return nil, fmt.Errorf("%s: new instance for %s not ready, keeping the old one: %w", b.Name, gen, err)
 	}
-	if b.Switch != nil {
-		b.Switch(base)
-	}
-	b.Sup.markHealthy(name)
-	b.Sup.SetStandby(name, false)
-	old := b.active
-	b.active, b.slot, b.gen = name, slot, gen
-	if old != "" {
-		b.stopping.Add(1)
-		go func() {
-			defer b.stopping.Done()
-			b.Sup.Remove(old)
-		}()
-	}
-	slog.Info("service switched", "service", b.Name, "to", name, "generation", gen, "previous", old)
-	return nil
+	return &Standby{b: b, name: name, slot: slot, gen: gen, base: base}, nil
+}
+
+// Commit points clients at the standby and retires the previous instance.
+func (s *Standby) Commit() {
+	s.once.Do(func() {
+		b := s.b
+		defer b.op.Unlock()
+		if s.name == "" {
+			return
+		}
+		if b.Switch != nil {
+			b.Switch(s.base)
+		}
+		b.Sup.markHealthy(s.name)
+		b.Sup.SetStandby(s.name, false)
+		b.mu.Lock()
+		old := b.active
+		b.active, b.slot, b.gen = s.name, s.slot, s.gen
+		b.mu.Unlock()
+		if old != "" {
+			b.stopping.Add(1)
+			go func() {
+				defer b.stopping.Done()
+				b.Sup.Remove(old)
+			}()
+		}
+		slog.Info("service switched", "service", b.Name, "to", s.name, "generation", s.gen, "previous", old)
+	})
+}
+
+// Abort stops the standby. Clients were never switched and the previous instance never
+// stopped, so the service is exactly as it was before Prepare.
+func (s *Standby) Abort() {
+	s.once.Do(func() {
+		b := s.b
+		defer b.op.Unlock()
+		if s.name == "" {
+			return
+		}
+		b.Sup.Remove(s.name)
+		slog.Info("standby discarded", "service", b.Name, "instance", s.name, "generation", s.gen)
+	})
 }
 
 func (b *BlueGreen) waitReady(ctx context.Context, c Child, base string) error {
