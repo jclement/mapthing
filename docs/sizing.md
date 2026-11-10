@@ -272,13 +272,46 @@ Peak memory, by component (measured on the builds above unless noted):
 | Planetiler | 4.0–4.6 GB anonymous memory with a 4 GB heap (GCC, Alberta); cgroup peak 7–14 GB including page cache | The pipeline sets the heap to 60% of *available* memory (1–32 GB). Rule of thumb from the Planetiler docs: ≥0.5× the PBF in free RAM; ~1.5× the PBF in heap to keep everything in RAM. US: 6 GB minimum (mmap mode), ~18 GB heap for RAM mode. Canada: 3.5 GB minimum, ~10 GB for RAM mode. |
 | Valhalla build | 0.8 GB (Alberta) and 4.2 GB (GCC) anonymous, in its graph-enhancing phase with 10 threads | Two points are not enough to fit a growth law. **Assumption, not measured:** budget 8–16 GB for a US or Canada graph. A Texas build (727 MB PBF) would settle it. |
 | Terrain build | 0.6–3.2 GB (4 workers) | Does not grow with the region: it works chunk by chunk. |
-| Server while serving | not measured here | `valhalla_service`, the renderer (MapLibre Native, 2 maps per style) and the Go server run next to the build. |
+| Server while serving | idle only: 247 MiB with the renderer, 99 MiB without (below) | `valhalla_service`, the renderer (MapLibre Native, 2 maps per style) and the Go server run next to the build. Under load: not measured. |
 
 The build stages run one after another, so the peak is the largest stage, not the sum.
 
 Process RSS overstates the requirement: Valhalla's RSS reached 7.8 GB on the GCC build, mostly
 memory-mapped files the kernel can drop. The figures above are the cgroup's anonymous memory,
 which cannot be reclaimed.
+
+### A slim backend
+
+A server that only adopts generations built elsewhere ([operations.md](operations.md)) never
+runs the stages above, so it is sized by what it serves. Idle memory, measured 2026-11-09 on
+the development host (x86-64, 47 GB) in one container from the same image, with no traffic,
+90 seconds after start. The generation is eight custom areas in Alberta, British Columbia,
+Texas, New Mexico and Louisiana: 256 MB basemap, 511 MB terrain, 243 MB routing graph.
+
+| Mode | Processes | Sum of process RSS | cgroup memory (`docker stats`) |
+|---|---|---|---|
+| default | mapthing 28, valhalla_service 69, renderer (Node) 84, Xvfb 62, wrappers 5 | 247 MiB | 98 MiB |
+| `MAPTHING_RENDERER=off` | mapthing 29, valhalla_service 69, tini 1.5 | 99 MiB | 60 MiB |
+| `MAPTHING_SERVE=routing,elevation`, after one route and one elevation request | mapthing 28, valhalla_service 92, tini 1.5 | 122 MiB | 81 MiB |
+
+How to read it:
+
+- Turning the renderer off removes about 150 MiB at idle. Under raster load the renderer holds
+  a pool of maps per style and grows well beyond that; that was not measured here, so the idle
+  figure is the floor of the saving, not the saving.
+- The two columns differ because process RSS counts memory-mapped file pages (the routing
+  graph, shared libraries) that the cgroup figure counts only partly and the kernel can drop.
+  Budget from the RSS column when the machine has no other use for its page cache.
+- `valhalla_service` was 69 MiB before its first request and 92 MiB after one 148 km route. Its
+  resident size follows the graph and how much of it requests have touched, up to the size of
+  `valhalla/tiles.tar` plus working memory. **Not measured:** a country-sized graph, or any
+  sustained load. The Go server stayed under 30 MiB in all three.
+- During an activation two `valhalla_service` instances run side by side (blue/green) until
+  the old one exits, so allow for twice the routing figure for that moment.
+
+Disk on such a backend is two generations of what it serves (the live one and the one kept for
+rollback) plus the incoming copy: with `MAPTHING_SERVE=routing,elevation`, the terrain and
+routing rows of the tables above, without the basemap.
 
 ### Disk
 
@@ -322,7 +355,9 @@ That is ~7 min for the US and ~4 min for Canada (extrapolated), so the net savin
 Planetiler nor Valhalla can update their output in place: both rebuild from the full PBF, so
 diffs save the download step and nothing else. Terrain does not change with OSM at all. It only
 needs rebuilding when a DEM source changes, which 3DEP ETags can detect. Skipping it on an
-OSM-only refresh is the biggest available saving (4–9 h for the large countries).
+OSM-only refresh is the biggest available saving (4–9 h for the large countries). `mapthing-build
+-reuse-terrain DIR` does exactly that when the areas and terrain settings are unchanged
+([operations.md](operations.md#reusing-terrain)); the server's own scheduled build does not yet.
 
 ## Offline packs (phones)
 

@@ -22,8 +22,13 @@ type ContoursFunc func(ctx context.Context, r Reporter, terrainPath, outPath str
 // ElevationCheckFunc verifies terrainPath answers at each lon/lat point.
 type ElevationCheckFunc func(ctx context.Context, terrainPath string, pts [][2]float64) error
 
+// TerrainFingerprintFunc identifies the terrain archive a build of regions would produce, so a
+// previous generation's terrain can be reused when nothing that decides it changed.
+type TerrainFingerprintFunc func(regions []catalog.Region) string
+
 type hookSet struct {
 	mu       sync.RWMutex
+	fp       TerrainFingerprintFunc
 	terrainF TerrainFunc
 	estimate TerrainEstimateFunc
 	check    ElevationCheckFunc
@@ -34,6 +39,19 @@ var hooks hookSet
 
 // RegisterTerrain installs the terrain builder.
 func RegisterTerrain(f TerrainFunc) { hooks.mu.Lock(); hooks.terrainF = f; hooks.mu.Unlock() }
+
+// RegisterTerrainFingerprint installs the fingerprint used by Options.ReuseTerrain.
+func RegisterTerrainFingerprint(f TerrainFingerprintFunc) {
+	hooks.mu.Lock()
+	hooks.fp = f
+	hooks.mu.Unlock()
+}
+
+func (h *hookSet) fingerprintFunc() TerrainFingerprintFunc {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.fp
+}
 
 // RegisterTerrainEstimate installs the terrain disk estimate used by the guard.
 func RegisterTerrainEstimate(f TerrainEstimateFunc) {

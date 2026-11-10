@@ -1,6 +1,7 @@
 // Command mapthing is a self-hosted map service: tiles, routing and elevation.
 //
 //	mapthing [serve]     run the server (default)
+//	mapthing adopt DIR   make a generation built elsewhere live (docs/operations.md)
 //	mapthing healthcheck exit 0 if the local server answers /healthz (Docker HEALTHCHECK)
 //	mapthing version     print the version
 package main
@@ -45,12 +46,17 @@ func main() {
 			fmt.Fprintln(os.Stderr, "mapthing:", err)
 			os.Exit(1)
 		}
+	case "adopt":
+		if err := adopt(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "mapthing adopt:", err)
+			os.Exit(1)
+		}
 	case "healthcheck":
 		os.Exit(healthcheck())
 	case "version", "--version", "-v":
 		fmt.Println(server.Version)
 	default:
-		fmt.Fprintf(os.Stderr, "usage: mapthing [serve|healthcheck|version]\n")
+		fmt.Fprintf(os.Stderr, "usage: mapthing [serve|adopt <dir-or-id>|healthcheck|version]\n")
 		os.Exit(2)
 	}
 }
@@ -124,21 +130,27 @@ func serve() error {
 	}
 	sup := supervisor.New(filepath.Join(cfg.DataDir, "logs"))
 	// valhalla is started per generation, blue/green, by features (cmd/mapthing/valhalla.go).
-	sup.Add(supervisor.Child{
-		Name:      "renderer",
-		Command:   cfg.RendererCmd,
-		HealthURL: getenv("MAPTHING_RENDERER_HEALTH_URL", cfg.RendererURL+"/healthz"),
-		Env: []string{
-			"MAPTHING_INTERNAL_TOKEN=" + cfg.InternalToken,
-			"MAPTHING_URL=http://127.0.0.1:" + port,
-		},
-	})
+	// MAPTHING_RENDERER=off: no renderer child at all, so no Xvfb or MapLibre Native in memory,
+	// and readiness has no renderer to wait for.
+	if !cfg.RendererOff {
+		sup.Add(supervisor.Child{
+			Name:      "renderer",
+			Command:   cfg.RendererCmd,
+			HealthURL: getenv("MAPTHING_RENDERER_HEALTH_URL", cfg.RendererURL+"/healthz"),
+			Env: []string{
+				"MAPTHING_INTERNAL_TOKEN=" + cfg.InternalToken,
+				"MAPTHING_URL=http://127.0.0.1:" + port,
+			},
+		})
+	}
 
 	ts, err := tiles.New(tiles.Options{
 		DataDir:           cfg.DataDir,
 		Assets:            assets.FS(),
 		PublicURL:         cfg.PublicURL,
 		RendererURL:       cfg.RendererURL,
+		RendererOff:       cfg.RendererOff,
+		BasemapOptional:   !cfg.Serve.Tiles,
 		Stats:             ss,
 		RasterCacheBytes:  cfg.RasterCacheMB << 20,
 		ImageryCacheBytes: cfg.ImageryCacheMB << 20,
@@ -164,6 +176,7 @@ func serve() error {
 	deps := server.Deps{
 		DataDir: cfg.DataDir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner,
 		Scheduler: sched, Supervisor: sup, Tiles: ts, Assets: assets.FS(), UI: web.Dist(),
+		Info: map[string]any{"serve": cfg.Serve.List(), "renderer": map[bool]string{false: "on", true: "off"}[cfg.RendererOff]},
 	}
 	f = &features{cfg: cfg, store: st, runner: runner, sup: sup, watcher: watcher, tiles: ts}
 	if err := f.wire(ctx, &deps); err != nil {
@@ -190,7 +203,8 @@ func serve() error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		slog.Info("mapthing listening", "addr", cfg.Listen, "data", cfg.DataDir, "version", server.Version, "generation", ts.Generation())
+		slog.Info("mapthing listening", "addr", cfg.Listen, "data", cfg.DataDir, "version", server.Version, "generation", ts.Generation(),
+			"serve", cfg.Serve.List(), "renderer", !cfg.RendererOff)
 		errc <- srv.ListenAndServe()
 	}()
 	select {

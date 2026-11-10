@@ -64,6 +64,15 @@ type Options struct {
 	// StopAfter ends the build cleanly after the named stage (development: e.g. "merge" to check
 	// downloads and clips without building tiles). Nothing is swapped in.
 	StopAfter string
+	// OutDir writes the generation to this directory instead of <data>/generations/<id>. The
+	// directory must be absent or empty. The generation is verified and its manifest written,
+	// but it is not made live and nothing is pruned: copy it to a server and adopt it there
+	// (Builder.Adopt, docs/operations.md).
+	OutDir string
+	// ReuseTerrain is a previous generation's directory. When its terrain was built for the
+	// same areas with the same settings, terrain.pmtiles (and contours.pmtiles) are hard-linked
+	// or copied from it instead of being rebuilt.
+	ReuseTerrain string
 }
 
 // Builder runs builds against one data directory. Safe for concurrent use; builds serialise.
@@ -75,7 +84,15 @@ type Builder struct {
 	// Now is the clock (tests).
 	Now func() time.Time
 
+	// Need is which parts of a generation this server serves (the zero value means all): what
+	// a generation must carry to count as complete for retention and adoption.
+	Need Parts
+
 	mu sync.Mutex
+	// building is the generation id of the build running now (under mu).
+	building string
+	// symlink replaces the current swap (tests inject a failure).
+	symlink func(target, link string) error
 
 	hostMu      sync.Mutex
 	failedHosts map[string]time.Time // source hosts that exhausted their retry budget
@@ -115,12 +132,29 @@ func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest
 	start := b.now().UTC()
 	genID := start.Format("20060102T150405Z")
 	genDir := filepath.Join(b.generationsDir(), genID)
+	if opt.OutDir != "" {
+		var err error
+		if genDir, err = prepareOutDir(opt.OutDir); err != nil {
+			return nil, &StageError{Stage: StageGuard, Err: err}
+		}
+	}
 	workDir := filepath.Join(b.workRoot(), genID)
 	m := &Manifest{Generation: genID, CreatedAt: start, Artifacts: map[string]int64{}, Image: imageInfo(b.Tools)}
 	for _, r := range opt.Regions {
 		m.Regions = append(m.Regions, ManifestRegion{ID: r.ID, Name: r.Name, BBox: r.BBox})
 	}
 	st := &state{b: b, rep: rep, opt: opt, genDir: genDir, workDir: workDir, m: m, tail: newRing(60)}
+	if opt.OutDir == "" {
+		// So that if this process is killed, a later build knows the leftover directory is its
+		// own and may delete it (retention.go).
+		b.EnsureRetentionRecord()
+		b.building = genID
+		_ = b.updateRetention(func(r *retentionRecord) { r.Building = append(r.Building, genID) })
+		defer func() {
+			b.building = ""
+			_ = b.updateRetention(func(r *retentionRecord) { r.Building = without(r.Building, genID) })
+		}()
+	}
 
 	err := st.run(ctx)
 	stoppedEarly := errors.Is(err, errStoppedEarly)
@@ -237,33 +271,72 @@ func (s *state) merge(ctx context.Context) error {
 	return nil
 }
 
+// prepareOutDir returns the absolute path of an Options.OutDir, refusing one that already
+// holds files: a build never writes into, or cleans up, somebody else's directory.
+func prepareOutDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	ents, err := os.ReadDir(abs)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("output directory: %w", err)
+	}
+	if len(ents) > 0 {
+		return "", fmt.Errorf("output directory %s is not empty; give a new or empty directory", abs)
+	}
+	return abs, nil
+}
+
 func (s *state) terrainStage(ctx context.Context) error {
 	f := hooks.terrain()
 	if f == nil {
 		s.logf("no terrain builder registered; skipping")
 		return errSkipped
 	}
-	wd := filepath.Join(s.workDir, "terrain")
-	if err := os.MkdirAll(wd, 0o755); err != nil {
-		return err
-	}
 	out := filepath.Join(s.genDir, "terrain.pmtiles")
-	if err := f(ctx, &stageReporter{s}, s.opt.Regions, wd, out); err != nil {
-		return err
+	cout := filepath.Join(s.genDir, "contours.pmtiles")
+	record := func() {
+		for _, p := range []string{out, cout} {
+			if st, err := os.Stat(p); err == nil {
+				s.m.Artifacts[filepath.Base(p)] = st.Size()
+			}
+		}
 	}
-	if st, err := os.Stat(out); err == nil {
-		s.m.Artifacts["terrain.pmtiles"] = st.Size()
+	reused := false
+	if dir := s.opt.ReuseTerrain; dir != "" {
+		why, err := s.reuseTerrain(dir, out)
+		if err != nil {
+			return err
+		}
+		if reused = why == ""; !reused {
+			s.logf("terrain: not reusing %s: %s; building it", dir, why)
+		}
+	}
+	if !reused {
+		wd := filepath.Join(s.workDir, "terrain")
+		if err := os.MkdirAll(wd, 0o755); err != nil {
+			return err
+		}
+		if err := f(ctx, &stageReporter{s}, s.opt.Regions, wd, out); err != nil {
+			return err
+		}
 	}
 	s.terrain = true
-	if cf := hooks.contoursFunc(); cf != nil {
-		cout := filepath.Join(s.genDir, "contours.pmtiles")
-		if err := cf(ctx, &stageReporter{s}, out, cout); err != nil {
-			return fmt.Errorf("contours: %w", err)
-		}
-		if st, err := os.Stat(cout); err == nil {
-			s.m.Artifacts["contours.pmtiles"] = st.Size()
-		}
+	cf := hooks.contoursFunc()
+	if cf == nil {
+		record()
+		return nil
 	}
+	if reused && s.reuseContours(s.opt.ReuseTerrain, out, cout) {
+		record()
+		return nil
+	}
+	if err := cf(ctx, &stageReporter{s}, out, cout); err != nil {
+		return fmt.Errorf("contours: %w", err)
+	}
+	writeContoursInfo(out, cout)
+	record()
 	return nil
 }
 

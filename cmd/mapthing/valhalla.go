@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jclement/mapthing/internal/build"
 	"github.com/jclement/mapthing/internal/routing"
 	"github.com/jclement/mapthing/internal/supervisor"
 	"github.com/jclement/mapthing/internal/tiles"
@@ -44,14 +45,11 @@ func valhallaPorts(raw string) [2]int {
 // valhallaInstanceConfig writes <data>/run/valhalla-<port>.json: the generation's valhalla.json
 // with its own listen port and IPC endpoints, so two instances can run side by side.
 func valhallaInstanceConfig(dataDir, genDir string, port int) (string, error) {
-	src := filepath.Join(genDir, "valhalla", "valhalla.json")
-	b, err := os.ReadFile(src)
+	// A config that is not a JSON object (null is valid JSON) is refused here as well as at
+	// adoption: this also runs for a generation that became live some other way.
+	cfg, err := build.ReadValhallaConfig(genDir)
 	if err != nil {
-		return "", fmt.Errorf("no routing graph in this generation: %w", err)
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return "", fmt.Errorf("%s: %w", src, err)
+		return "", fmt.Errorf("no usable routing config in this generation (%s): %w", build.ValhallaConfig(genDir), err)
 	}
 	httpd, _ := cfg["httpd"].(map[string]any)
 	if httpd == nil {
@@ -67,6 +65,14 @@ func valhallaInstanceConfig(dataDir, genDir string, port int) (string, error) {
 	if err := os.MkdirAll(run, 0o755); err != nil {
 		return "", err
 	}
+	// The build wrote its own absolute paths. The graph is wherever this generation is now: a
+	// generation built elsewhere and copied in has a different path than the one it was built at.
+	mj, _ := cfg["mjolnir"].(map[string]any)
+	if mj == nil {
+		mj = map[string]any{}
+		cfg["mjolnir"] = mj
+	}
+	mj["tile_extract"] = filepath.Join(genDir, "valhalla", "tiles.tar")
 	svc["listen"] = "tcp://127.0.0.1:" + strconv.Itoa(port)
 	svc["loopback"] = "ipc://" + filepath.Join(run, "valhalla-"+strconv.Itoa(port)+"-loopback")
 	svc["interrupt"] = "ipc://" + filepath.Join(run, "valhalla-"+strconv.Itoa(port)+"-interrupt")
@@ -138,13 +144,14 @@ func (f *features) newValhalla(router *routing.Client) *supervisor.BlueGreen {
 			if err != nil {
 				return supervisor.Child{}, err
 			}
+			f.valhallaGen.Store(genDir)
 			return supervisor.Child{
 				Command:   commandWith(f.cfg.ValhallaCmd, conf),
 				HealthURL: "http://127.0.0.1:" + strconv.Itoa(port) + "/status",
 			}, nil
 		},
 		Ready: func(ctx context.Context, base string) error {
-			_, genDir, _ := tiles.CurrentGeneration(f.cfg.DataDir)
+			genDir, _ := f.valhallaGen.Load().(string)
 			return testRoute(ctx, genDir, base)
 		},
 		Switch: router.SetBaseURL,
@@ -174,7 +181,9 @@ func (f *features) start(ctx context.Context) {
 func (f *features) swap(ctx context.Context, newID string) {
 	_ = newID
 	f.activateValhalla(ctx)
-	f.reloadRenderer(ctx)
+	if !f.cfg.RendererOff {
+		f.reloadRenderer(ctx)
+	}
 }
 
 func (f *features) reloadRenderer(ctx context.Context) {

@@ -55,6 +55,13 @@ type Deps struct {
 	EstimateCustom func(ctx context.Context, bbox []float64, ring [][2]float64) (CustomEstimate, error)
 	// ElevationSources lists DEM sources of the live generation (elevation). Optional.
 	ElevationSources func() any
+	// ActivateGeneration validates the generation directory <data>/generations/<id> (one a
+	// build left, or one copied in from another machine) and makes it live. It returns an
+	// *ActivateError for a refusal. nil → 503 on the activate endpoint.
+	ActivateGeneration func(ctx context.Context, id string) (Activation, error)
+	// Info is extra, static configuration shown by /admin/api/system (e.g. which parts this
+	// server serves and whether the renderer is off). Optional.
+	Info map[string]any
 	// ReadyChecks are extra readiness probes (e.g. routing.Router.Ready). name → probe.
 	ReadyChecks map[string]func(ctx context.Context) bool
 }
@@ -108,6 +115,7 @@ func (s *Server) routes() {
 	m.Handle("GET /admin/api/events", a.RequireAdmin(s.d.Jobs.Hub().Handler(s.eventSnapshot)))
 	m.Handle("POST /admin/api/build", admin(s.startBuild))
 	m.Handle("GET /admin/api/generations", admin(s.generations))
+	m.Handle("POST /admin/api/generations/{id}/activate", admin(s.activateGeneration))
 
 	m.Handle("GET /admin/api/schedule", admin(s.getSchedule))
 	m.Handle("PUT /admin/api/schedule", admin(s.putSchedule))

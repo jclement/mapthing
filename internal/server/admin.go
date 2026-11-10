@@ -558,6 +558,9 @@ func (s *Server) generations(w http.ResponseWriter, r *http.Request) {
 		if !e.IsDir() && e.Type()&os.ModeSymlink == 0 {
 			continue
 		}
+		if strings.HasPrefix(e.Name(), ".") {
+			continue // a copy in flight (docs/operations.md), not a generation yet
+		}
 		dir := filepath.Join(s.d.DataDir, "generations", e.Name())
 		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 			continue
@@ -575,6 +578,56 @@ func (s *Server) generations(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	writeJSON(w, http.StatusOK, map[string]any{"generations": out})
+}
+
+// Activation is the result of making a generation live.
+type Activation struct {
+	ID          string   `json:"id"`
+	Status      string   `json:"status"` // live
+	AlreadyLive bool     `json:"already_live"`
+	Previous    *string  `json:"previous"` // the generation that was live before, if any
+	Removed     []string `json:"removed"`  // generations retention deleted
+}
+
+// ActivateError is a refused activation: the HTTP status, an error code and what is wrong.
+type ActivateError struct {
+	Status   int
+	Code     string
+	Message  string
+	Problems []string
+}
+
+func (e *ActivateError) Error() string { return e.Message }
+
+// activateGeneration: POST /admin/api/generations/{id}/activate → 200 Activation. The
+// generation directory must already be under <data>/generations/<id> (built here, or copied
+// in). 404 no_generation, 409 busy (a build is running), 422 invalid_generation (with
+// problems[]) or routing_failed; a refusal leaves the live generation serving. Activating the
+// live generation is a no-op that answers 200 with already_live.
+func (s *Server) activateGeneration(w http.ResponseWriter, r *http.Request) {
+	if s.d.ActivateGeneration == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "this server cannot activate generations")
+		return
+	}
+	res, err := s.d.ActivateGeneration(r.Context(), r.PathValue("id"))
+	var ae *ActivateError
+	if errors.As(err, &ae) {
+		e := map[string]any{"code": ae.Code, "message": ae.Message}
+		if len(ae.Problems) > 0 {
+			e["problems"] = ae.Problems
+		}
+		writeJSON(w, ae.Status, map[string]any{"error": e})
+		return
+	}
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if res.Removed == nil {
+		res.Removed = []string{}
+	}
+	res.Status = "live"
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
