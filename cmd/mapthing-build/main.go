@@ -1,8 +1,15 @@
-// Command mapthing-build runs one generation build without the server. It is a development and
-// smoke-test tool; the server runs the same build as a job.
+// Command mapthing-build runs one generation build without the server: for development and
+// smoke tests, and to build on one machine what another serves (docs/operations.md). The server
+// runs the same build as a job.
 //
 //	mapthing-build -data /data -region north-america/us/delaware [-region ...] [-refresh]
 //	mapthing-build -data /data -custom de-md=-75.82,38.62,-75.70,38.70   (clipped from every extract it crosses)
+//	mapthing-build -data /data -regions-file regions.json -out /builds/next [-reuse-terrain /builds/last]
+//
+// -regions-file takes the JSON the admin API's GET /admin/api/regions returns. With -out the
+// generation is written to that directory, verified, and not made live: copy it to a server's
+// <data>/generations/<id>/ and activate it there. -data still holds downloads, caches and
+// scratch.
 package main
 
 import (
@@ -41,12 +48,15 @@ func main() {
 	refresh := flag.Bool("refresh", false, "re-check downloads for newer extracts")
 	keep := flag.Bool("keep-work", false, "keep the work directory")
 	stopAfter := flag.String("stop-after", "", "end after this stage (e.g. merge); nothing is swapped in")
+	regionsFile := flag.String("regions-file", "", "JSON file of regions, as GET /admin/api/regions returns them (catalog ids and custom areas)")
+	outDir := flag.String("out", "", "write the generation to this new or empty directory instead of <data>/generations/<id>; it is not made live")
+	reuseTerrain := flag.String("reuse-terrain", "", "a previous generation directory: reuse its terrain (and contours) when built for the same areas and settings")
 	var regions, customs regionFlags
 	flag.Var(&regions, "region", "Geofabrik region id (repeatable), e.g. north-america/us/delaware")
 	flag.Var(&customs, "custom", "custom box name=w,s,e,n (repeatable), clipped from the extracts covering it")
 	flag.Parse()
-	if len(regions) == 0 && len(customs) == 0 {
-		fmt.Fprintln(os.Stderr, "mapthing-build: at least one -region or -custom is required")
+	if len(regions) == 0 && len(customs) == 0 && *regionsFile == "" {
+		fmt.Fprintln(os.Stderr, "mapthing-build: at least one -region, -custom or -regions-file is required")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -57,6 +67,14 @@ func main() {
 		fail(err)
 	}
 	var rs []catalog.Region
+	skip := map[string]bool{}
+	if *regionsFile != "" {
+		var err error
+		if rs, skip, err = regionsFromFile(ctx, cat, *regionsFile); err != nil {
+			fail(err)
+		}
+		fmt.Printf("%s: %d region(s)\n", *regionsFile, len(rs))
+	}
 	for _, id := range regions {
 		r, err := cat.Region(id)
 		if err != nil {
@@ -89,7 +107,8 @@ func main() {
 		rs = append(rs, r)
 	}
 	b := build.New(*data)
-	m, err := b.Run(ctx, stdoutRep{time.Now()}, build.Options{Regions: rs, Refresh: *refresh, KeepWork: *keep, StopAfter: *stopAfter})
+	m, err := b.Run(ctx, stdoutRep{time.Now()}, build.Options{Regions: rs, Refresh: *refresh, SkipRefresh: skip,
+		KeepWork: *keep, StopAfter: *stopAfter, OutDir: *outDir, ReuseTerrain: *reuseTerrain})
 	if m != nil {
 		out, _ := json.MarshalIndent(m, "", "  ")
 		fmt.Println(string(out))
@@ -100,6 +119,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "--- last log lines (%s) ---\n%s\n", se.Stage, strings.Join(se.LogTail, "\n"))
 		}
 		fail(err)
+	}
+	if *outDir != "" && m != nil && m.OK {
+		fmt.Printf("\ngeneration %s is in %s\nto serve it: copy the directory to <data>/generations/%s on the server, then\n"+
+			"  POST /admin/api/generations/%s/activate   (or: mapthing adopt %s)\n", m.Generation, *outDir, m.Generation, m.Generation, m.Generation)
 	}
 }
 

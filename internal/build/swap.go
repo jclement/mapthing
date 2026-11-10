@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jclement/mapthing/internal/catalog"
@@ -83,6 +84,11 @@ func (s *state) swap(ctx context.Context) error {
 	if err := writeManifest(s.genDir, s.m); err != nil {
 		return err
 	}
+	if s.opt.OutDir != "" {
+		s.logf("generation %s written to %s; not made live here (copy it to <data>/generations/%s on a server and activate it)",
+			s.m.Generation, s.genDir, s.m.Generation)
+		return nil
+	}
 	if err := atomicSymlink(filepath.Join("generations", filepath.Base(s.genDir)), s.b.currentLink()); err != nil {
 		return err
 	}
@@ -132,7 +138,8 @@ func (b *Builder) Generations() []Generation {
 	cur := b.CurrentGeneration()
 	var out []Generation
 	for _, e := range ents {
-		if !e.IsDir() {
+		// Dot-prefixed directories are copies in flight (docs/operations.md): not generations.
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		dir := filepath.Join(b.generationsDir(), e.Name())
@@ -147,6 +154,9 @@ func (b *Builder) Generations() []Generation {
 const KeepGenerations = 2
 
 func (s *state) retention(ctx context.Context) error {
+	if s.opt.OutDir != "" {
+		return errSkipped // nothing was made live, so nothing is superseded
+	}
 	keep := ""
 	if s.opt.KeepWork {
 		keep = filepath.Base(s.workDir)
@@ -161,6 +171,23 @@ func (s *state) retention(ctx context.Context) error {
 // prune keeps the current generation and the newest other good one, and deletes every other
 // generation (failed or older) and any stale work directory.
 func (b *Builder) prune(keepWork string) ([]string, error) {
+	removed, firstErr := b.pruneGenerations(false)
+	// Work dirs belong to builds; Run holds the lock, so any left now are stale.
+	if ents, err := os.ReadDir(b.workRoot()); err == nil {
+		for _, e := range ents {
+			if e.Name() == keepWork {
+				continue
+			}
+			_ = os.RemoveAll(filepath.Join(b.workRoot(), e.Name()))
+		}
+	}
+	return removed, firstErr
+}
+
+// pruneGenerations applies the retention rule: the current generation and the newest other
+// good one stay. goodOnly leaves directories without a finished manifest alone (adoption:
+// such a directory may be a copy still arriving, and is not this process's to delete).
+func (b *Builder) pruneGenerations(goodOnly bool) ([]string, error) {
 	cur := b.CurrentGeneration()
 	kept := 0
 	var removed []string
@@ -173,19 +200,13 @@ func (b *Builder) prune(keepWork string) ([]string, error) {
 			}
 			continue
 		}
+		if goodOnly && !good {
+			continue
+		}
 		if err := os.RemoveAll(filepath.Join(b.generationsDir(), g.ID)); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		removed = append(removed, g.ID)
-	}
-	// Work dirs belong to builds; Run holds the lock, so any left now are stale.
-	if ents, err := os.ReadDir(b.workRoot()); err == nil {
-		for _, e := range ents {
-			if e.Name() == keepWork {
-				continue
-			}
-			_ = os.RemoveAll(filepath.Join(b.workRoot(), e.Name()))
-		}
 	}
 	return removed, firstErr
 }

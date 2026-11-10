@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"sync/atomic"
 
+	"github.com/jclement/mapthing/internal/build"
 	"github.com/jclement/mapthing/internal/catalog"
 	"github.com/jclement/mapthing/internal/config"
 	"github.com/jclement/mapthing/internal/elevation"
@@ -25,6 +27,10 @@ type features struct {
 	tiles   *tiles.Server
 
 	valhalla *supervisor.BlueGreen
+	// valhallaGen is the generation directory of the instance being started, for its test
+	// route (during an adoption that is not yet the live generation).
+	valhallaGen atomic.Value
+	builder     *build.Builder
 }
 
 func (f *features) wire(ctx context.Context, d *server.Deps) error {
@@ -37,14 +43,19 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 	// Pipeline: build job, catalog, region validation (cmd/mapthing/pipeline.go).
 	f.wirePipeline(ctx, d, restart, func(b catalog.BBox) []string { return elevation.CoverageIDs(b) })
 
-	// Routing (wired with the pipeline so the smoke test can route).
+	d.ActivateGeneration = f.activateGeneration // adopt.go
+
+	// Routing (wired with the pipeline so the smoke test can route). A server that does not
+	// serve routing (MAPTHING_SERVE) starts no Valhalla and mounts no routing API.
 	router := routing.New(f.cfg.ValhallaURL)
-	f.valhalla = f.newValhalla(router) // blue/green across generation swaps (valhalla.go)
-	d.Mounts = append(d.Mounts, routing.NewHandlers(router))
-	if d.ReadyChecks == nil {
-		d.ReadyChecks = map[string]func(context.Context) bool{}
+	if f.cfg.Serve.Routing {
+		f.valhalla = f.newValhalla(router) // blue/green across generation swaps (valhalla.go)
+		d.Mounts = append(d.Mounts, routing.NewHandlers(router))
+		if d.ReadyChecks == nil {
+			d.ReadyChecks = map[string]func(context.Context) bool{}
+		}
+		d.ReadyChecks["routing"] = router.Ready
 	}
-	d.ReadyChecks["routing"] = router.Ready
 
 	// (Original pipeline merge notes, now implemented in pipeline.go:)
 	//
@@ -72,9 +83,13 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 	//	d.Mounts = append(d.Mounts, routing.NewHandlers(router))
 	//	d.ReadyChecks = map[string]func(context.Context) bool{"routing": router.Ready}
 	// Elevation: reads <data>/current/terrain.pmtiles and follows generation swaps.
-	terrain := elevation.NewTerrainForData(f.cfg.DataDir)
-	terrain.SetStructureFinder(router) // bridges=deck profiles map-match through Valhalla
-	d.Mounts = append(d.Mounts, elevation.NewHandler(terrain))
-	d.ElevationSources = func() any { return terrain.Sources() }
+	if f.cfg.Serve.Elevation {
+		terrain := elevation.NewTerrainForData(f.cfg.DataDir)
+		if f.cfg.Serve.Routing {
+			terrain.SetStructureFinder(router) // bridges=deck profiles map-match through Valhalla
+		}
+		d.Mounts = append(d.Mounts, elevation.NewHandler(terrain))
+		d.ElevationSources = func() any { return terrain.Sources() }
+	}
 	return nil
 }

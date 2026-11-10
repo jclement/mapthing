@@ -32,6 +32,10 @@ var errUpstream = errors.New("upstream unavailable")
 // Tiles come from the renderer (GET {renderer}/render/{name}/{size}/{z}/{x}/{y}[@2x].{ext}) and
 // are cached on disk per generation.
 func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
+	if s.opt.RendererOff {
+		jsonError(w, r, http.StatusNotFound, "renderer_off", "raster tiles are turned off on this server (MAPTHING_RENDERER=off); vector tiles and styles are not affected")
+		return
+	}
 	name := r.PathValue("name")
 	size := r.PathValue("size")
 	if size == "" {

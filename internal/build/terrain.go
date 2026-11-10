@@ -42,6 +42,7 @@ import (
 func init() {
 	RegisterTerrain(BuildTerrain)
 	RegisterTerrainEstimate(EstimateTerrainBytes)
+	RegisterTerrainFingerprint(TerrainFingerprint)
 	RegisterElevationCheck(CheckTerrain)
 }
 
@@ -90,6 +91,9 @@ type TerrainResult struct {
 	Reused      int                    `json:"pieces_reused"`
 	DurationSec float64                `json:"duration_s"`
 	BuiltAt     string                 `json:"built_at"`
+	// Fingerprint identifies the areas and settings this archive was built for
+	// (terrain_reuse.go); a later build with the same fingerprint may reuse the archive.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // BuildTerrain is the TerrainFunc registered with the pipeline.
@@ -279,6 +283,7 @@ func buildTerrain(ctx context.Context, r Reporter, areas []area, workDir, outPat
 			return nil, err
 		}
 	}
+	fingerprint := terrainFingerprint(areas, o)
 	g := newGDALRunner(absPath(workDir), absPath(o.cacheDir))
 	if err := g.available(ctx); err != nil {
 		return nil, err
@@ -395,7 +400,8 @@ feed:
 	ok = true
 	fi, _ := os.Stat(outPath)
 	res := &TerrainResult{Regions: ids, MinZoom: b.minZoom, MaxZoom: z, TileSize: elevation.TileSize, Tiles: int(tiles), Sources: meta.Sources,
-		Fetched: b.fetch.fetched, Reused: b.fetch.reused, DurationSec: math.Round(time.Since(start).Seconds()), BuiltAt: meta.BuiltAt}
+		Fetched: b.fetch.fetched, Reused: b.fetch.reused, DurationSec: math.Round(time.Since(start).Seconds()), BuiltAt: meta.BuiltAt,
+		Fingerprint: fingerprint}
 	if fi != nil {
 		res.Bytes = fi.Size()
 	}

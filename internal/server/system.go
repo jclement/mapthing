@@ -512,6 +512,9 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 		"data_dir": s.d.DataDir,
 		"process":  s.process(),
 	}
+	for k, v := range s.d.Info {
+		resp[k] = v
+	}
 	if s.d.ElevationSources != nil {
 		resp["elevation_sources"] = s.d.ElevationSources()
 	}

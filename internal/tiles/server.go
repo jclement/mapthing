@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -33,7 +34,12 @@ type Options struct {
 	Assets      fs.FS  // contains styles/, fonts/, sprites/
 	PublicURL   string // optional; else derived from each request
 	RendererURL string // e.g. http://127.0.0.1:8081
-	Stats       *stats.Stats
+	// RendererOff: there is no renderer (a slim backend); raster tiles answer 404 renderer_off.
+	RendererOff bool
+	// BasemapOptional: this server does not serve tiles, so a live generation without
+	// basemap.pmtiles is complete (Ready) and its absence is not worth a warning.
+	BasemapOptional bool
+	Stats           *stats.Stats
 
 	RasterCacheBytes  int64
 	ImageryCacheBytes int64
@@ -98,10 +104,14 @@ func (s *Server) Generation() string {
 	return s.gen
 }
 
-// Ready reports whether a basemap is being served.
+// Ready reports whether a basemap is being served (or, when this server does not serve tiles,
+// whether a generation is live).
 func (s *Server) Ready() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.opt.BasemapOptional {
+		return s.gen != ""
+	}
 	return s.sets["basemap"] != nil
 }
 
@@ -114,6 +124,9 @@ func (s *Server) Reload() {
 		for name, file := range tilesets {
 			r, err := pmtiles.Open(filepath.Join(dir, file))
 			if err != nil {
+				if _, serr := os.Stat(filepath.Join(dir, file)); os.IsNotExist(serr) && s.opt.BasemapOptional && name == "basemap" {
+					continue // a backend that serves no tiles carries no basemap
+				}
 				slog.Warn("tileset unavailable", "tileset", name, "generation", gen, "err", err)
 				continue
 			}

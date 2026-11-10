@@ -224,6 +224,7 @@ func (e *env) setPBF(b []byte) {
 
 func resetHooks() {
 	RegisterTerrain(nil)
+	RegisterTerrainFingerprint(nil)
 	RegisterTerrainEstimate(nil)
 	RegisterElevationCheck(nil)
 	RegisterContours(nil)
