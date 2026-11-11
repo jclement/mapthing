@@ -10,7 +10,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import {
   api,
   type BBox,
@@ -20,7 +20,6 @@ import {
   type ElevationSource,
   type NewRegion,
   type Region,
-  type Schedule,
 } from "../api";
 import {
   Badge,
@@ -37,11 +36,11 @@ import {
   PageHeader,
   Segmented,
   Spinner,
-  Switch,
 } from "../components/ui";
 import { useEvents } from "../lib/events";
 import * as fmt from "../lib/format";
 import { bboxAreaKm2, bboxContains, estimateDisk } from "../lib/geo";
+import { nextRefresh, policySummary } from "../lib/refresh";
 import { useApi } from "../lib/useApi";
 
 // Wait for typing to settle before asking the server to plan a custom box. No debounce under
@@ -54,7 +53,6 @@ export function RegionsPage() {
   const { generationTick, active } = useEvents();
   const regions = useApi(() => api.regions(), [generationTick, active?.status]);
   const catalog = useApi(() => api.catalog(), []);
-  const schedule = useApi(() => api.schedule(), []);
   const system = useApi(() => api.system(), [generationTick]);
   const [params, setParams] = useSearchParams();
   const adding = params.has("add");
@@ -75,23 +73,6 @@ export function RegionsPage() {
       setError((e as Error).message);
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function toggleRefresh(id: string, enabled: boolean) {
-    if (!schedule.data) return;
-    const next: Schedule = {
-      ...schedule.data,
-      regions: schedule.data.regions.some((r) => r.id === id)
-        ? schedule.data.regions.map((r) => (r.id === id ? { ...r, enabled } : r))
-        : [...schedule.data.regions, { id, enabled }],
-    };
-    schedule.setData(() => next);
-    try {
-      await api.saveSchedule(next);
-    } catch (e) {
-      setError((e as Error).message);
-      schedule.reload();
     }
   }
 
@@ -181,8 +162,6 @@ export function RegionsPage() {
           <RegionTable
             regions={list}
             sources={catalog.data?.elevation_sources ?? []}
-            schedule={schedule.data}
-            onToggle={toggleRefresh}
             onRemove={setRemoving}
           />
         )}
@@ -206,7 +185,6 @@ export function RegionsPage() {
         onAdded={async (build) => {
           setParams({});
           regions.reload();
-          schedule.reload();
           if (build && !active) await buildNow();
         }}
       />
@@ -229,14 +207,10 @@ export function RegionsPage() {
 function RegionTable({
   regions,
   sources,
-  schedule,
-  onToggle,
   onRemove,
 }: {
   regions: Region[];
   sources: ElevationSource[];
-  schedule: Schedule | undefined;
-  onToggle: (id: string, v: boolean) => void;
   onRemove: (r: Region) => void;
 }) {
   const srcName = (id: string) => sources.find((s) => s.id === id);
@@ -257,7 +231,6 @@ function RegionTable({
         <tbody>
           {regions.map((r) => {
             const age = fmt.ageDays(r.data_date);
-            const enabled = schedule?.regions.find((x) => x.id === r.id)?.enabled ?? true;
             return (
               <tr key={r.id} className="border-b border-line last:border-0 hover:bg-sunken/60">
                 <td className="px-4 py-2.5">
@@ -318,12 +291,16 @@ function RegionTable({
                   </div>
                 </td>
                 <td className="px-3 py-2.5">
-                  <Switch
-                    checked={enabled}
-                    disabled={!schedule}
-                    onChange={(v) => onToggle(r.id, v)}
-                    label={`Refresh ${r.name} on schedule`}
-                  />
+                  <Link
+                    to="/schedule"
+                    className="text-[13px] hover:text-accent-strong hover:underline"
+                    title="Change when this region is refreshed"
+                  >
+                    {policySummary(r.refresh_policy)}
+                  </Link>
+                  {r.refresh_policy?.effective.cron && (
+                    <div className="text-xs text-faint">next {nextRefresh(r.refresh_policy)}</div>
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-right">
                   <Button

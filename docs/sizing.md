@@ -389,7 +389,10 @@ architecture keeps the last two good generations; keeping only one would save on
 
 ### Scheduled refresh
 
-The pipeline rebuilds everything on each refresh; nothing is incremental. The DEM cache survives
+Each region has its own refresh setting, and a scheduled refresh first asks the sources whether
+anything is newer and builds nothing when nothing is (architecture.md, Refresh schedule). When
+it does build, the pipeline rebuilds the basemap and the routing graph over all regions;
+nothing there is incremental. The DEM cache survives
 between builds, so a refresh's terrain stage reads no DEM over the network. Rebuilding the
 Permian 1° box on a warm cache took 39 s against 72 s cold (measured, one box: 0.55×). The rest
 of the terrain time is GDAL warping and PNG encoding.

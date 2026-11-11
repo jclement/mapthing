@@ -207,7 +207,7 @@ func serve() error {
 	}
 	deps.Settings = func() []config.Setting { return config.Describe(config.Environ(), sink.Redact) }
 	deps.Versions = imageVersions(cfg)
-	f = &features{cfg: cfg, store: st, runner: runner, sup: sup, watcher: watcher, tiles: ts}
+	f = &features{cfg: cfg, store: st, runner: runner, sched: sched, sup: sup, watcher: watcher, tiles: ts}
 	if err := f.wire(ctx, &deps); err != nil {
 		return err
 	}

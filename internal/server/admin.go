@@ -818,8 +818,15 @@ func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
 	if st.Enabled {
 		upcoming, _ = scheduler.NextRuns(st.Cron, time.Now(), 5)
 	}
+	def, err := s.d.Store.Schedule(r.Context())
+	if err != nil {
+		storeError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cron": st.Cron, "enabled": st.Enabled, "refresh_downloads": s.d.Scheduler.RefreshDownloads(r.Context()),
+		// defaults for regions that follow this schedule
+		"window": def.Window, "only_changed": def.OnlyChanged,
 		"regions": rs,
 		// extras (read-only)
 		"next_run": st.NextRun, "last_run": st.LastRun, "default_cron": st.Default, "upcoming": upcoming,
@@ -834,6 +841,8 @@ func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
 		Cron             *string          `json:"cron"`
 		Enabled          *bool            `json:"enabled"`
 		RefreshDownloads *bool            `json:"refresh_downloads"`
+		Window           *string          `json:"window"`
+		OnlyChanged      *bool            `json:"only_changed"`
 		Regions          []scheduleRegion `json:"regions"`
 	}
 	if !readJSON(w, r, &b) {
@@ -851,7 +860,38 @@ func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "bad_cron", err.Error())
 		return
 	}
+	if b.Window != nil || b.OnlyChanged != nil {
+		def, err := s.d.Store.Schedule(r.Context())
+		if err != nil {
+			storeError(w, r, err)
+			return
+		}
+		window, only := def.Window, def.OnlyChanged
+		if b.Window != nil {
+			window = *b.Window
+		}
+		if b.OnlyChanged != nil {
+			only = *b.OnlyChanged
+		}
+		if err := s.d.Scheduler.SetDefaults(r.Context(), window, only); err != nil {
+			writeError(w, r, http.StatusBadRequest, "bad_window", err.Error())
+			return
+		}
+	}
+	// The older per-region switch: off is mode never, on puts a never region back on the default.
+	regions, err := s.d.Store.Regions(r.Context())
+	if err != nil {
+		storeError(w, r, err)
+		return
+	}
+	current := map[string]bool{}
+	for _, rg := range regions {
+		current[rg.ID] = rg.Refresh
+	}
 	for _, rg := range b.Regions {
+		if was, ok := current[rg.ID]; !ok || was == rg.Enabled {
+			continue // unchanged: leave the region's own mode alone
+		}
 		if err := s.d.Store.SetRegionRefresh(r.Context(), rg.ID, rg.Enabled); err != nil && !errors.Is(err, store.ErrNotFound) {
 			storeError(w, r, err)
 			return
@@ -900,8 +940,44 @@ type regionJSON struct {
 	DownloadedAt     *time.Time      `json:"downloaded_at"`
 	ElevationSources []string        `json:"elevation_sources"`
 	Parents          []CatalogParent `json:"parents,omitempty"` // custom regions: extracts clipped from
-	Refresh          bool            `json:"refresh"`
+	Refresh          bool            `json:"refresh"`           // false exactly when the mode is never
 	AddedAt          time.Time       `json:"added_at"`
+	RefreshPolicy    refreshJSON     `json:"refresh_policy"`
+	RefreshCost      refreshCostJSON `json:"refresh_cost"`
+}
+
+// refreshJSON is a region's refresh setting, what it resolves to, and where it stands.
+type refreshJSON struct {
+	// The region's own setting.
+	Mode        string `json:"mode"` // default | never | daily | weekly | monthly | cron
+	Cron        string `json:"cron,omitempty"`
+	Window      string `json:"window,omitempty"` // "HH:MM-HH:MM" UTC; "" = the default's
+	OnlyChanged bool   `json:"only_changed"`
+	// What applies once the default schedule is taken into account.
+	Effective struct {
+		Cron        *string `json:"cron"` // null: never refreshed
+		Window      string  `json:"window"`
+		OnlyChanged bool    `json:"only_changed"`
+		Inherited   bool    `json:"inherited"` // from the default schedule
+	} `json:"effective"`
+	// NextDue: the next schedule time. NextBuild: when a refresh can start (inside the window).
+	NextDue   *time.Time `json:"next_due"`
+	NextBuild *time.Time `json:"next_build"`
+	Due       bool       `json:"due"`     // the schedule time has passed
+	Waiting   bool       `json:"waiting"` // due, but outside the build window
+	// The last look at the source.
+	LastCheckedAt *time.Time `json:"last_checked_at"`
+	LastCheck     string     `json:"last_check,omitempty"` // changed | unchanged | error
+	LastDetail    string     `json:"last_check_detail,omitempty"`
+}
+
+// refreshCostJSON is what refreshing this region costs: its own download, and a build, which
+// is over all regions together whichever of them is due.
+type refreshCostJSON struct {
+	DownloadBytes int64 `json:"download_bytes"`
+	// BuildSeconds is how long the last build's basemap, routing and other stages took
+	// without the terrain, which a refresh reuses; null before the first build.
+	BuildSeconds *float64 `json:"build_seconds"`
 }
 
 // regionMeta is the JSON core keeps in regions.meta (from the catalog at add time).
@@ -923,13 +999,32 @@ type regionContext struct {
 	live       map[string]manifestRegionJSON
 	lastFailed bool // the latest finished build failed
 	downloads  map[string]int64
+	schedule   *store.Schedule
+	now        time.Time
+	// buildSeconds: the live generation's build time without its terrain stage; nil if unknown.
+	buildSeconds *float64
 }
 
 func (s *Server) regionContext(ctx context.Context) regionContext {
-	rc := regionContext{live: map[string]manifestRegionJSON{}, downloads: s.diskCtl.get().Downloads}
+	rc := regionContext{live: map[string]manifestRegionJSON{}, downloads: s.diskCtl.get().Downloads, now: time.Now().UTC()}
+	if sc, err := s.d.Store.Schedule(ctx); err == nil {
+		rc.schedule = sc
+	} else {
+		rc.schedule = &store.Schedule{Cron: scheduler.DefaultCron}
+	}
 	if _, dir, ok := tiles.CurrentGeneration(s.d.DataDir); ok {
-		for _, r := range normaliseManifest(dir).Regions {
+		m := normaliseManifest(dir)
+		for _, r := range m.Regions {
 			rc.live[r.ID] = r
+		}
+		var secs float64
+		for stage, d := range m.Timings {
+			if stage != "terrain" && stage != "download" {
+				secs += d
+			}
+		}
+		if secs > 0 {
+			rc.buildSeconds = &secs
 		}
 	}
 	var status string
@@ -992,7 +1087,24 @@ func (s *Server) regionView(rg *store.Region, rc regionContext) regionJSON {
 	if len(v.BBox) != 4 {
 		v.BBox = bboxOf(v.Polygon)
 	}
+	v.RefreshPolicy = refreshView(rg, rc.schedule, rc.now)
+	v.RefreshCost = refreshCostJSON{DownloadBytes: v.ExtractBytes, BuildSeconds: rc.buildSeconds}
 	return v
+}
+
+func refreshView(rg *store.Region, def *store.Schedule, now time.Time) refreshJSON {
+	st := scheduler.StatusFor(rg, def, now)
+	out := refreshJSON{Mode: st.Policy.Mode, Cron: rg.RefreshCron, Window: rg.RefreshWindow, OnlyChanged: rg.RefreshOnlyChanged,
+		NextDue: st.NextDue, NextBuild: st.NextBuild, Due: st.Due, Waiting: st.Waiting,
+		LastCheckedAt: rg.CheckedAt, LastCheck: rg.CheckResult, LastDetail: rg.CheckDetail}
+	if st.Policy.Cron != "" {
+		c := st.Policy.Cron
+		out.Effective.Cron = &c
+	}
+	out.Effective.Window = st.Policy.Window.String()
+	out.Effective.OnlyChanged = st.Policy.OnlyChanged
+	out.Effective.Inherited = st.Policy.Inherited
+	return out
 }
 
 // polygonRing accepts a stored polygon as [[lon,lat],…] or a GeoJSON Polygon and returns the
@@ -1161,20 +1273,68 @@ func (s *Server) addRegion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.regionView(saved, s.regionContext(r.Context())))
 }
 
+// patchRegion: PATCH /admin/api/regions/{id} {refresh_policy:{mode,cron,window,only_changed}}
+// (or the older {refresh: bool}) → region. 400 bad_refresh for a mode, cron or window that
+// does not parse.
 func (s *Server) patchRegion(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Refresh *bool `json:"refresh"`
+		Refresh       *bool `json:"refresh"`
+		RefreshPolicy *struct {
+			Mode        string `json:"mode"`
+			Cron        string `json:"cron"`
+			Window      string `json:"window"`
+			OnlyChanged *bool  `json:"only_changed"`
+		} `json:"refresh_policy"`
 	}
 	if !readJSON(w, r, &b) {
 		return
 	}
-	if b.Refresh != nil {
+	if p := b.RefreshPolicy; p != nil {
+		mode := strings.ToLower(strings.TrimSpace(p.Mode))
+		if !scheduler.ValidMode(mode) {
+			writeError(w, r, http.StatusBadRequest, "bad_refresh", "mode must be default, never, daily, weekly, monthly or cron")
+			return
+		}
+		expr := ""
+		if mode == scheduler.ModeCron {
+			expr = strings.TrimSpace(p.Cron)
+			if _, err := scheduler.Parse(expr); err != nil || expr == "" {
+				writeError(w, r, http.StatusBadRequest, "bad_refresh", "mode cron needs a 5-field cron expression (UTC), for example 0 2 * * 1-5")
+				return
+			}
+		}
+		win, err := scheduler.ParseWindow(p.Window)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "bad_refresh", err.Error())
+			return
+		}
+		only := true
+		if p.OnlyChanged != nil {
+			only = *p.OnlyChanged
+		}
+		if err := s.d.Store.SetRegionRefreshPolicy(r.Context(), r.PathValue("id"), mode, expr, win.String(), only); err != nil {
+			storeError(w, r, err)
+			return
+		}
+	} else if b.Refresh != nil {
 		if err := s.d.Store.SetRegionRefresh(r.Context(), r.PathValue("id"), *b.Refresh); err != nil {
 			storeError(w, r, err)
 			return
 		}
 	}
 	s.getRegion(w, r)
+}
+
+// checkRegions: POST /admin/api/regions/check → {regions:[…]}: look at every refreshed region's
+// source now and record whether it has something newer. Builds nothing.
+func (s *Server) checkRegions(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	if err := s.d.Scheduler.CheckAll(ctx); err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", err.Error())
+		return
+	}
+	s.listRegions(w, r)
 }
 
 // deleteRegion: DELETE /admin/api/regions/{id} → 204. The region leaves the map at the next build.
