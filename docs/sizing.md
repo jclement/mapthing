@@ -272,13 +272,68 @@ Peak memory, by component (measured on the builds above unless noted):
 | Planetiler | 4.0–4.6 GB anonymous memory with a 4 GB heap (GCC, Alberta); cgroup peak 7–14 GB including page cache | The pipeline sets the heap to 60% of *available* memory (1–32 GB). Rule of thumb from the Planetiler docs: ≥0.5× the PBF in free RAM; ~1.5× the PBF in heap to keep everything in RAM. US: 6 GB minimum (mmap mode), ~18 GB heap for RAM mode. Canada: 3.5 GB minimum, ~10 GB for RAM mode. |
 | Valhalla build | 0.8 GB (Alberta) and 4.2 GB (GCC) anonymous, in its graph-enhancing phase with 10 threads | Two points are not enough to fit a growth law. **Assumption, not measured:** budget 8–16 GB for a US or Canada graph. A Texas build (727 MB PBF) would settle it. |
 | Terrain build | 0.6–3.2 GB (4 workers) | Does not grow with the region: it works chunk by chunk. |
-| Server while serving | idle only: 247 MiB with the renderer, 99 MiB without (below) | `valhalla_service`, the renderer (MapLibre Native, 2 maps per style) and the Go server run next to the build. Under load: not measured. |
+| Server while serving | 0.6 GB idle, 1.3 GB under load, that cannot be reclaimed ([Serving](#serving)) | `valhalla_service`, the renderer (MapLibre Native, 2 maps per style) and the Go server run next to the build. |
 
 The build stages run one after another, so the peak is the largest stage, not the sum.
 
 Process RSS overstates the requirement: Valhalla's RSS reached 7.8 GB on the GCC build, mostly
 memory-mapped files the kernel can drop. The figures above are the cgroup's anonymous memory,
 which cannot be reclaimed.
+
+### Serving
+
+Serving is small; the build is what sizes the machine. Measured 2026-11-09 on the reference
+machine, on a live server after its build, with a load generator outside the container. The
+generation is eight custom areas in Alberta, British Columbia, Texas, New Mexico and Louisiana
+(256 MB basemap, 511 MB terrain, 243 MB routing graph).
+
+Serving does not keep the map in memory. Tiles, the routing graph and elevation are read from
+files on disk; the kernel caches the hot parts and can drop them under pressure. What the
+processes must hold is small and does not grow with the area covered, apart from the routing
+service's working set.
+
+**Memory while serving** (process RSS):
+
+| Process | Idle | Under load | Note |
+|---|---|---|---|
+| Go server (tiles, elevation, API) | 125 MB | 205–227 MB | reads PMTiles and terrain from disk |
+| Routing (Valhalla) | 178 MB | 237–253 MB | the graph is memory-mapped; mostly droppable cache |
+| Raster renderer | 526 MB | 717 MB; 1.07 GB with all 6 styles at 1x and 2x | 2 renderers per style and pixel ratio; `RENDERER_POOL=1` roughly halves the growth |
+| Virtual display (Xvfb) | 62 MB | 62 MB | for the renderer |
+| **Total that cannot be reclaimed** | **0.6 GB** | **1.3 GB** | the container's anonymous memory after every test below |
+
+A 4 GB server holds this with room for the page cache; 2 GB works without raster tiles
+(`MAPTHING_RENDERER=off`). A generation swap briefly runs two routing processes (blue/green),
+about +250 MB at this size.
+
+**Cost of one request:**
+
+| Request | Median | p95 | CPU per request | Throughput (cores used) |
+|---|---|---|---|---|
+| Vector tile | 2 ms | 3 ms | 0.5 ms | 2,150/s (1.1) |
+| Route, ≤ 100 km, car or truck | 32 ms | 47 ms | 15 ms | 122/s (1.8) |
+| Elevation profile, 30 m spacing, ≤ 100 km | 35 ms | 67 ms | 36 ms | 108/s (3.9) |
+| Raster tile, cold render, 512 @2x | 100 ms | 142 ms | 124 ms | 49/s (6.1) |
+| Mixed, container capped at 2 vCPU | 1–14 ms | 96–117 ms | n/a | 264–434/s, no errors |
+
+Four concurrent clients, 45 s per test, random points across one basin. The mix is 85% vector
+tiles and 5% each of cold raster renders, routes and profiles, which overweights raster: a
+raster tile is rendered once and then served from the disk cache.
+
+**What that means for a machine.** Take 5,000 users a month: about 50 M vector tiles (~50 per
+map load), 1.5 M raster tiles, 100 k routes and 100 k profiles. The CPU adds up to about 0.3
+cores averaged over working hours, most of it first-time raster renders; 500 users is a tenth
+of that. **2 vCPU and 4 GB serve this comfortably; 4 vCPU covers the peaks at 5,000 users.**
+Routes longer than a basin (state-scale) cost more per request and were not load-tested.
+
+The admin Overview shows the live equivalents on your own server: request rate and p50/p95 by
+kind over the last hour and day, and memory and CPU per process.
+
+**Builds on the same machine.** A build writes a whole new generation beside the live one and
+swaps it in at once, with no failed requests during the swap, so building overnight on the
+serving machine works. The machine must then be sized for the build (the tables above), not for
+serving. The alternative is to build on a larger machine that exists only for the build and
+serve on a small one ([operations.md](operations.md)).
 
 ### A slim backend
 
@@ -297,8 +352,8 @@ Texas, New Mexico and Louisiana: 256 MB basemap, 511 MB terrain, 243 MB routing 
 How to read it:
 
 - Turning the renderer off removes about 150 MiB at idle. Under raster load the renderer holds
-  a pool of maps per style and grows well beyond that; that was not measured here, so the idle
-  figure is the floor of the saving, not the saving.
+  a pool of maps per style and grows to 0.7–1.1 GB ([Serving](#serving)), so the idle figure
+  is the floor of the saving, not the saving.
 - The two columns differ because process RSS counts memory-mapped file pages (the routing
   graph, shared libraries) that the cgroup figure counts only partly and the kernel can drop.
   Budget from the RSS column when the machine has no other use for its page cache.
@@ -357,7 +412,10 @@ diffs save the download step and nothing else. Terrain does not change with OSM 
 needs rebuilding when a DEM source changes, which 3DEP ETags can detect. Skipping it on an
 OSM-only refresh is the biggest available saving (4–9 h for the large countries). `mapthing-build
 -reuse-terrain DIR` does exactly that when the areas and terrain settings are unchanged
-([operations.md](operations.md#reusing-terrain)); the server's own scheduled build does not yet.
+([operations.md](operations.md#reusing-terrain)), and the server's own builds, scheduled or
+started by hand, do the same with the live generation's terrain: a refresh is then the download,
+the basemap and the routing graph (the "Full rebuild" row less its terrain line). Start a build
+with "Rebuild terrain" to pick up newer elevation data.
 
 ## Offline packs (phones)
 
@@ -403,4 +461,5 @@ is not a reasonable phone download; a state or province at z14 is.
 - **Canada's land tile count** for terrain is a rough estimate (±30%).
 - **HRDEM coverage share** across Canada: the full-resolution Canada figure assumes MRDEM (z12)
   everywhere. LiDAR areas built at z13 would add to it.
-- **The server's own memory while serving**, and render latency under load.
+- **Serving a country-sized generation**, and routes longer than a basin under load. The
+  serving figures are from a generation of eight basins (1 GB).
