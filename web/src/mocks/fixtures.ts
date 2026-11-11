@@ -4,6 +4,7 @@ import type {
   CatalogEntry,
   ElevationSource,
   Generation,
+  LimitsConfig,
   LogEntry,
   Region,
   Setting,
@@ -357,6 +358,42 @@ function daily(base: number, wobble: number, seed: number) {
   );
 }
 
+export function limitsConfig(): LimitsConfig {
+  const weights = {
+    tile: 1,
+    raster: 10,
+    route: 10,
+    matrix: 20,
+    isochrone: 20,
+    snap: 2,
+    valhalla: 10,
+    elevation: 5,
+    pack: 50,
+  };
+  const global = {
+    raster: { rps: 100, burst: 200 },
+    route: { rps: 60, burst: 120 },
+    matrix: { rps: 10, burst: 20 },
+    isochrone: { rps: 10, burst: 20 },
+    valhalla: { rps: 60, burst: 120 },
+    elevation: { rps: 100, burst: 200 },
+    pack: { rps: 2, burst: 4 },
+  };
+  return {
+    weights: { ...weights },
+    global: structuredClone(global),
+    kinds: Object.keys(weights),
+    defaults: { weights, global },
+  };
+}
+
+const noRefusals = {
+  limited_today: 0,
+  limited_daily: new Array(14).fill(0),
+  limited_scopes: {},
+  recent_limited: [],
+};
+
 export function apiKeys(): ApiKey[] {
   return [
     {
@@ -365,8 +402,34 @@ export function apiKeys(): ApiKey[] {
       prefix: "mt_7Hq2",
       created_at: iso(41 * day),
       last_used_at: iso(4 * 60000),
-      limits: { rpm: 600, rpd: null, origins: [] },
-      usage: { today: 18240, total: 1_204_331, daily: daily(21000, 5000, 1) },
+      limits: {
+        rpm: 1200,
+        rpd: 250000,
+        rps: 20,
+        burst: 200,
+        daily_quota: 250000,
+        monthly_quota: 5000000,
+        ip_rps: 5,
+        ip_burst: 50,
+        origins: [],
+      },
+      usage: {
+        today: 18240,
+        total: 1_204_331,
+        daily: daily(21000, 5000, 1),
+        units_today: 212400,
+        units_month: 2_310_000,
+        rate_remaining: 164,
+        limited_today: 37,
+        limited_daily: [0, 0, 4, 0, 0, 0, 12, 0, 0, 0, 0, 3, 0, 37],
+        limited_scopes: { ip: 31, rate: 6 },
+        recent_limited: [
+          { t: iso(42 * 60000), kind: "raster", scope: "rate" },
+          { t: iso(9 * 60000), kind: "tile", scope: "ip", ip: "203.0.113.9" },
+          { t: iso(8 * 60000), kind: "tile", scope: "ip", ip: "203.0.113.9" },
+          { t: iso(3 * 60000), kind: "route", scope: "ip", ip: "203.0.113.9" },
+        ],
+      },
     },
     {
       id: "k_02",
@@ -374,8 +437,24 @@ export function apiKeys(): ApiKey[] {
       prefix: "mt_c9Lk",
       created_at: iso(33 * day),
       last_used_at: iso(26 * 60000),
-      limits: { rpm: null, rpd: 200000, origins: ["https://planner.example.com"] },
-      usage: { today: 9412, total: 512_998, daily: daily(11000, 3000, 2) },
+      limits: {
+        rpm: null,
+        rpd: 20000,
+        daily_quota: 20000,
+        origins: ["https://planner.example.com"],
+      },
+      usage: {
+        today: 9412,
+        total: 512_998,
+        daily: daily(11000, 3000, 2),
+        units_today: 20000,
+        units_month: 431_000,
+        rate_remaining: null,
+        limited_today: 214,
+        limited_daily: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 214],
+        limited_scopes: { daily: 214 },
+        recent_limited: [{ t: iso(26 * 60000), kind: "tile", scope: "daily" }],
+      },
     },
     {
       id: "k_03",
@@ -383,8 +462,16 @@ export function apiKeys(): ApiKey[] {
       prefix: "mt_Zp04",
       created_at: iso(12 * day),
       last_used_at: iso(19 * 3600000),
-      limits: { rpm: 120, rpd: 50000, origins: [] },
-      usage: { today: 0, total: 48_210, daily: daily(3000, 2500, 3) },
+      limits: { rpm: 120, rpd: null, rps: 2, burst: 120, origins: [] },
+      usage: {
+        today: 0,
+        total: 48_210,
+        daily: daily(3000, 2500, 3),
+        units_today: 0,
+        units_month: 310_400,
+        rate_remaining: 120,
+        ...noRefusals,
+      },
     },
     {
       id: "k_04",
@@ -393,7 +480,15 @@ export function apiKeys(): ApiKey[] {
       created_at: iso(90 * day),
       last_used_at: null,
       limits: { rpm: null, rpd: null, origins: [] },
-      usage: { today: 0, total: 0, daily: new Array(14).fill(0) },
+      usage: {
+        today: 0,
+        total: 0,
+        daily: new Array(14).fill(0),
+        units_today: 0,
+        units_month: 0,
+        rate_remaining: null,
+        ...noRefusals,
+      },
     },
   ];
 }

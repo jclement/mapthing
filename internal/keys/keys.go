@@ -11,7 +11,6 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"errors"
-	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -48,11 +47,15 @@ func LooksLikeKey(s string) bool {
 
 // Errors returned by Authenticate and Allow.
 var (
-	ErrInvalid   = errors.New("invalid API key")
-	ErrRevoked   = errors.New("API key revoked")
-	ErrOrigin    = errors.New("origin not allowed for this API key")
-	ErrRateLimit = errors.New("rate limit exceeded")
-	ErrDayLimit  = errors.New("daily request limit exceeded")
+	ErrInvalid    = errors.New("invalid API key")
+	ErrRevoked    = errors.New("API key revoked")
+	ErrOrigin     = errors.New("origin not allowed for this API key")
+	ErrRateLimit  = errors.New("rate limit exceeded")
+	ErrDayLimit   = errors.New("daily quota exceeded")
+	ErrMonthLimit = errors.New("monthly quota exceeded")
+	ErrBusy       = errors.New("server limit for this kind of request reached")
+	// ErrUnavailable: a quota could not be checked because its stored use could not be read.
+	ErrUnavailable = errors.New("quota use could not be read")
 )
 
 type cached struct {
@@ -60,30 +63,37 @@ type cached struct {
 	at  time.Time
 }
 
-type bucket struct {
-	tokens float64
-	last   time.Time
-}
-
-type daily struct {
-	day   string
-	count int64
-}
-
 // Service looks keys up (with a short cache) and enforces limits in memory.
 type Service struct {
 	st  *store.Store
 	now func() time.Time
 
-	mu      sync.Mutex
-	cache   map[string]cached // by hash
-	buckets map[int64]*bucket
-	days    map[int64]*daily
+	mu    sync.Mutex
+	cache map[string]cached // by hash
+	cfg   Config
+	// Rate limiting state (limiter.go).
+	buckets   map[int64]*bucket          // per key
+	ipBuckets map[ipKey]*bucket          // per key and client
+	global    map[string]*bucket         // per kind
+	periods   map[store.QuotaKey]*period // per key and UTC day or month: units used
+	gone      map[int64]bool             // revoked keys whose last units are still to be written
+	// dbMu orders reads and writes of stored quota use (seed, Flush, UsageOf). Taken before mu.
+	dbMu      sync.Mutex
+	lastWarn  time.Time                                                            // of the "could not read quota use" log line: at most one in ten seconds
+	readQuota func(ctx context.Context, keyID int64, period string) (int64, error) // st.QuotaUsed; tests fail it
+	limited   map[store.LimitedKey]int64
+	refusals  map[int64][]Refusal
 }
 
-// NewService returns a key service.
+// NewService returns a key service with the stored (or default) weights and global limits.
 func NewService(st *store.Store) *Service {
-	return &Service{st: st, now: time.Now, cache: map[string]cached{}, buckets: map[int64]*bucket{}, days: map[int64]*daily{}}
+	s := &Service{st: st, now: time.Now, cache: map[string]cached{}, buckets: map[int64]*bucket{},
+		ipBuckets: map[ipKey]*bucket{}, global: map[string]*bucket{}, periods: map[store.QuotaKey]*period{},
+		gone: map[int64]bool{}, readQuota: st.QuotaUsed, limited: map[store.LimitedKey]int64{}, refusals: map[int64][]Refusal{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s.loadConfig(ctx)
+	return s
 }
 
 const cacheTTL = 30 * time.Second
@@ -117,6 +127,12 @@ func (s *Service) Revoke(ctx context.Context, id int64) error {
 		return err
 	}
 	s.forget(id)
+	// A revoked key is never charged again: drop what the limiter holds for it. Its unwritten
+	// units go with the next flush, which then drops its periods too.
+	s.mu.Lock()
+	delete(s.refusals, id)
+	s.gone[id] = true
+	s.mu.Unlock()
 	return nil
 }
 
@@ -129,15 +145,15 @@ func (s *Service) forget(id int64) {
 		}
 	}
 	delete(s.buckets, id)
+	for k := range s.ipBuckets {
+		if k.key == id {
+			delete(s.ipBuckets, k)
+		}
+	}
 }
 
 func normaliseLimits(l store.Limits) store.Limits {
-	if l.RPM < 0 {
-		l.RPM = 0
-	}
-	if l.RPD < 0 {
-		l.RPD = 0
-	}
+	l = l.Normalise()
 	out := []string{}
 	for _, o := range l.AllowedOrigins {
 		o = strings.TrimRight(strings.TrimSpace(strings.ToLower(o)), "/")
@@ -215,51 +231,9 @@ func CheckOrigin(k *store.APIKey, origin, referer string) error {
 	return ErrOrigin
 }
 
-// Allow charges one request against the key's per-minute bucket and daily counter. On
-// refusal it returns the error and how long to wait.
+// Allow charges one tile-weight request against the key with no client address: the older
+// entry point, kept for callers that only want yes or no. New code calls Charge.
 func (s *Service) Allow(ctx context.Context, k *store.APIKey) (time.Duration, error) {
-	now := s.now()
-	day := now.UTC().Format("2006-01-02")
-	var seed bool
-	s.mu.Lock()
-	d := s.days[k.ID]
-	if d == nil || d.day != day {
-		seed = k.Limits.RPD > 0
-		d = &daily{day: day}
-		s.days[k.ID] = d
-	}
-	s.mu.Unlock()
-	if seed {
-		// First request of the day since start: include what is already in the database.
-		if n, err := s.st.KeyDayTotal(ctx, k.ID, day); err == nil {
-			s.mu.Lock()
-			d.count += n
-			s.mu.Unlock()
-		}
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if k.Limits.RPD > 0 && d.count >= int64(k.Limits.RPD) {
-		midnight := now.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
-		return midnight.Sub(now), ErrDayLimit
-	}
-	if k.Limits.RPM > 0 {
-		capacity := float64(k.Limits.RPM)
-		rate := capacity / 60 // tokens per second
-		b := s.buckets[k.ID]
-		if b == nil {
-			b = &bucket{tokens: capacity, last: now}
-			s.buckets[k.ID] = b
-		}
-		b.tokens = math.Min(capacity, b.tokens+now.Sub(b.last).Seconds()*rate)
-		b.last = now
-		if b.tokens < 1 {
-			wait := time.Duration((1 - b.tokens) / rate * float64(time.Second))
-			return wait, ErrRateLimit
-		}
-		b.tokens--
-	}
-	d.count++
-	return 0, nil
+	d := s.Charge(ctx, k, "tile", "")
+	return d.RetryAfter, d.Err()
 }
