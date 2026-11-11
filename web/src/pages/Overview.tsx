@@ -651,7 +651,17 @@ function BuildsCard({ o }: { o: Overview }) {
           <div className="text-[11px] font-medium tracking-wide text-faint uppercase">
             Next scheduled
           </div>
-          {b.schedule_enabled && b.next_run ? (
+          {o.regions_installed === 0 ? (
+            <>
+              <div className="mt-0.5 text-sm font-medium">Nothing to build yet</div>
+              <div className="text-xs text-muted">
+                <Link to="/regions?add=1" className="text-accent-strong hover:underline">
+                  Add a region
+                </Link>{" "}
+                first.
+              </div>
+            </>
+          ) : b.schedule_enabled && b.next_run ? (
             <>
               <div className="mt-0.5 text-sm font-medium">{fmt.relTime(b.next_run)}</div>
               <div className="text-xs text-muted">{fmt.dateTime(b.next_run)}</div>

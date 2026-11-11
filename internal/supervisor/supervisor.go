@@ -348,6 +348,9 @@ func (s *Supervisor) wait(ctx context.Context, p *proc, d time.Duration) bool {
 	return true
 }
 
+// waitDelay is how long a child's output is still read after it exited (see runOnce).
+var waitDelay = 3 * time.Second
+
 // runOnce starts the child and blocks until it exits. restarted is true when it was stopped
 // because a restart was requested.
 func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarted bool, err error) {
@@ -358,6 +361,10 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
+	// A child that exits while something it started still holds its output open (a helper it
+	// left behind) must still be seen to have exited: without this Wait would block on that
+	// output for as long as the helper lives, and the child would never be restarted.
+	cmd.WaitDelay = waitDelay
 
 	done := make(chan struct{})
 	go func() {
@@ -409,6 +416,8 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 	for {
 		select {
 		case werr := <-exited:
+			// Whatever the child left behind in its process group goes with it.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			return finish(werr)
 		case <-ctx.Done():
 			stop(cmd, exited)

@@ -3,8 +3,11 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -125,4 +128,41 @@ func TestRestartAndBackoff(t *testing.T) {
 	}
 	cancel()
 	waitState(t, s, "sleeper", StateStopped)
+}
+
+// A child that dies but leaves a helper holding its output open (the renderer's start script
+// did, when its X server failed to start) is still seen to have exited, restarted, and the
+// helper is not left running.
+func TestChildThatLeavesAHelperBehindIsRestarted(t *testing.T) {
+	old := waitDelay
+	waitDelay = 200 * time.Millisecond
+	defer func() { waitDelay = old }()
+	s := New()
+	marker := t.TempDir() + "/helper.pid"
+	// The helper inherits stdout and outlives the script by a long way.
+	s.Add(Child{Name: "leaky", Command: []string{"sh", "-c", "sleep 300 & echo $! > " + marker + "; echo failing; exit 1"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.Start(ctx)
+	st := waitState(t, s, "leaky", StateBackoff)
+	if st.Restarts < 1 {
+		t.Fatalf("restarts %d: the exit was not noticed", st.Restarts)
+	}
+	b, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	alive := true
+	for range 80 {
+		if err := syscall.Kill(pid, 0); err != nil {
+			alive = false
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if alive {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Errorf("the helper (pid %d) was left running", pid)
+	}
 }
