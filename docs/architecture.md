@@ -445,9 +445,14 @@ asks for routes. Requests made from the admin UI (a session, no key) are never l
 | `elevation` | point and profile elevation | 5 | 100, 200 |
 | `raster` | rendered PNG tiles | 10 | 100, 200 |
 | `route` | routes, native and Google-compatible | 10 | 60, 120 |
-| `valhalla` | the Valhalla pass-through | 10 | 60, 120 |
+| `valhalla` | pass-through actions with no kind of their own (map matching, expansion, centroid, status) | 10 | 60, 120 |
 | `matrix`, `isochrone` | | 20 | 10, 20 |
 | `pack` | offline pack downloads | 50 | 2, 4 |
+
+The Valhalla pass-through (`/api/v1/valhalla/{action}`) is charged as the operation it runs,
+so an alias never gets past an endpoint's cost or server limit: `route` as `route`,
+`sources_to_targets` and `optimized_route` as `matrix`, `isochrone` as `isochrone`, `locate`
+as `snap`, `height` as `elevation`.
 
 The weights follow the measured CPU cost of each request (`docs/sizing.md`), coarsely. Both
 columns are editable on the Keys page and through `GET`/`PUT /admin/api/limits`
@@ -465,12 +470,18 @@ A key can have any of these, each optional:
   one abuser of a key that ships in a browser cannot use it all up. An IPv6 client is its /64.
   The address is the connection's, or the proxy's report of it with `MAPTHING_TRUSTED_PROXY=on`
   (without that, behind a proxy every client looks like the proxy: leave this limit off).
-  At most 20,000 client buckets are kept; idle ones are dropped first.
+  At most 20,000 client buckets are kept: when the table is full, those idle for ten minutes
+  go, and if that is not enough the least recently used, down to 18,000.
 - **Daily and monthly quota** (`daily_quota`, `monthly_quota`): units per UTC day and per UTC
   month. A request that would take the quota past its end is refused whole.
 
 Keys made by an earlier version keep their meaning: `rpm` becomes `rps = rpm/60` with a burst
-of `rpm`, and `rpd` becomes `daily_quota`. The API still accepts and returns both.
+of `rpm`, and `rpd` becomes `daily_quota`. The API still accepts and returns both. On the
+upgrade, the requests each key had already made in the current UTC day and month are carried
+over as used units, one per request (migration 0005, once), so a key that had used up its day
+is still out afterwards. From then on its requests cost their weights, so a key limited to
+"50,000 requests a day" that fetches raster tiles reaches the limit sooner than before: raise
+its quota, or lower the raster cost, if that is not what you want.
 
 The **server limits** are per kind, in requests per second across all keys: a safety net for
 the expensive kinds, near what the reference machine served. A request they refuse costs the
@@ -482,18 +493,32 @@ key nothing, and a request the key's own limit refuses does not count against th
 | Header | |
 |---|---|
 | `Retry-After` | whole seconds until the request can succeed (never 0): the bucket's refill, or the time to midnight UTC or the 1st |
-| `X-RateLimit-Limit` | size of the limit closest to running out, in units |
+| `X-RateLimit-Limit` | size of the limit that refused, in units (`global`: in requests) |
 | `X-RateLimit-Remaining` | what is left of it |
 | `X-RateLimit-Reset` | seconds until it is whole again |
 | `X-RateLimit-Scope` | which limit refused: `rate`, `ip`, `daily`, `monthly`, `global` |
 
-The three `X-RateLimit-*` figures are on every answer to a key that has limits, refused or
-not; a key without limits gets none. All of them are exposed to browsers on other origins.
+On a refusal the three figures always describe the limit that refused, whichever it is
+(this client's bucket for `ip`, the server's for `global`, also for a key with no limits of
+its own). On an allowed answer they describe the limit closest to running out for this
+client, among the key's rate, the client's rate and the quotas; a key without limits gets
+none. All of them are exposed to browsers on other origins.
+
+A quota is only enforced against use that could be read. If the stored use of a key with a
+quota cannot be read (the database does not answer), its requests are answered `503`
+`unavailable` with `Retry-After: 1` until it can; nothing is charged, nothing is counted as a
+refusal, and the read is tried again by the next request. Keys without a quota are not
+affected.
 
 **What survives a restart.** Quota use and refusal counts are written to SQLite
 (`key_quota`, `key_limited`) every 10 seconds and at shutdown, and read back the first time a
-key is seen, so a restart forgets nothing and a crash at most 10 seconds of use. Rate buckets
-are memory only and start full. Rows older than 400 days are pruned.
+key with a quota is seen, so a restart forgets nothing and a crash at most 10 seconds of use.
+At shutdown the server lets requests finish for 15 seconds, cuts off those still running,
+and then writes once more with its own time allowance, so units charged while it drained are
+kept even when a long download used the whole grace period. Rate buckets are memory only and
+start full. Use is counted per key and per period (a UTC day or month), so requests on both
+sides of midnight each land in their own; periods that are over, and everything held for a
+revoked key, are dropped from memory once written. Rows older than 400 days are pruned.
 
 The Keys page shows, per key, units used against each quota, the burst in use, requests
 served and refused over 14 days, today's refusals by limit, and the most recent refusals with

@@ -140,6 +140,20 @@ func TestPerClientLimitBehindAProxy(t *testing.T) {
 	if r := get("203.0.113.9"); r.StatusCode != 429 || r.Header.Get("X-RateLimit-Scope") != "ip" {
 		t.Fatalf("the abuser's third request: %d %v", r.StatusCode, r.Header)
 	}
+	// A key whose only limit is per client: the refusal still says what the client ran into.
+	_, only := e.createKey(c, map[string]any{"label": "per client only", "ip_rps": 1, "ip_burst": 2})
+	one := func() *http.Response {
+		r, _ := e.do(nil, "GET", "/tiles/basemap/0/0/0.mvt?key="+only, nil, map[string]string{"CF-Connecting-IP": "203.0.113.50"})
+		return r
+	}
+	if r := one(); r.StatusCode != 200 || r.Header.Get("X-RateLimit-Limit") != "2" || r.Header.Get("X-RateLimit-Remaining") != "1" {
+		t.Errorf("per-client only, allowed: %d %v", r.StatusCode, r.Header)
+	}
+	one()
+	if r := one(); r.StatusCode != 429 || r.Header.Get("X-RateLimit-Scope") != "ip" || r.Header.Get("X-RateLimit-Limit") != "2" ||
+		r.Header.Get("X-RateLimit-Remaining") != "0" || r.Header.Get("X-RateLimit-Reset") == "" || r.Header.Get("Retry-After") == "" {
+		t.Errorf("per-client only, refused: %d %v", r.StatusCode, r.Header)
+	}
 	for _, ip := range []string{"198.51.100.7", "198.51.100.8", "2001:db8::1"} {
 		if r := get(ip); r.StatusCode != 200 {
 			t.Errorf("another client (%s): %d", ip, r.StatusCode)
@@ -262,5 +276,34 @@ func TestLimitsConfigAPI(t *testing.T) {
 	r, b = e.do(nil, "GET", "/tiles/basemap/0/0/0.mvt?key="+free, nil, nil)
 	if r.StatusCode != 429 || r.Header.Get("X-RateLimit-Scope") != "global" || r.Header.Get("Retry-After") == "" || !strings.Contains(string(b), "server is at its limit") {
 		t.Errorf("server limit: %d %v %s", r.StatusCode, r.Header, b)
+	}
+	// The key has no limits of its own; the figures are the server limit's (in requests).
+	if r.Header.Get("X-RateLimit-Limit") != "2" || r.Header.Get("X-RateLimit-Remaining") != "0" || r.Header.Get("X-RateLimit-Reset") == "" {
+		t.Errorf("server limit figures: %v", r.Header)
+	}
+}
+
+// A key's quota that cannot be read is answered 503, not served from a fresh quota.
+func TestUnreadableQuotaIs503(t *testing.T) {
+	e := newEnv(t, true)
+	c := e.login()
+	_, secret := e.createKey(c, map[string]any{"label": "q", "daily_quota": 5})
+	_, free := e.createKey(c, map[string]any{"label": "free"})
+	// The quota table is gone: reads fail.
+	if _, err := e.st.DB.Exec(`ALTER TABLE key_quota RENAME TO key_quota_away`); err != nil {
+		t.Fatal(err)
+	}
+	r, b := e.do(nil, "GET", "/tiles/basemap/0/0/0.mvt?key="+secret, nil, nil)
+	if r.StatusCode != 503 || r.Header.Get("Retry-After") != "1" || !strings.Contains(string(b), `"unavailable"`) || r.Header.Get("X-RateLimit-Scope") != "" {
+		t.Fatalf("quota unreadable: %d %v %s", r.StatusCode, r.Header, b)
+	}
+	if r, _ := e.do(nil, "GET", "/tiles/basemap/0/0/0.mvt?key="+free, nil, nil); r.StatusCode != 200 {
+		t.Errorf("a key without a quota: %d", r.StatusCode)
+	}
+	if _, err := e.st.DB.Exec(`ALTER TABLE key_quota_away RENAME TO key_quota`); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := e.do(nil, "GET", "/tiles/basemap/0/0/0.mvt?key="+secret, nil, nil); r.StatusCode != 200 {
+		t.Errorf("once readable again: %d", r.StatusCode)
 	}
 }

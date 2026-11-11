@@ -3,6 +3,7 @@ package routing
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -181,4 +182,43 @@ func keys(m map[string]json.RawMessage) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// The pass-through is charged as the operation it runs: an alias of an expensive endpoint
+// cannot be used to get past that endpoint's weight and server limit.
+func TestPassthroughIsChargedAsItsOperation(t *testing.T) {
+	_, c := newFake(t)
+	mux := http.NewServeMux()
+	var kinds []string
+	NewHandlers(c).Mount(mux, func(kind string, h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			kinds = append(kinds, kind)
+			h.ServeHTTP(w, r)
+		})
+	})
+	for action, want := range map[string]string{
+		"sources_to_targets": "matrix", "optimized_route": "matrix", "isochrone": "isochrone",
+		"route": "route", "locate": "snap", "height": "elevation",
+		"trace_route": "valhalla", "trace_attributes": "valhalla", "expansion": "valhalla",
+		"centroid": "valhalla", "status": "valhalla", "no_such_action": "valhalla",
+	} {
+		for _, method := range []string{"GET", "POST"} {
+			kinds = nil
+			req := httptest.NewRequest(method, "/api/v1/valhalla/"+action, strings.NewReader("{}"))
+			mux.ServeHTTP(httptest.NewRecorder(), req)
+			if len(kinds) != 1 || kinds[0] != want {
+				t.Errorf("%s %s charged as %v, want %s", method, action, kinds, want)
+			}
+		}
+	}
+	// Every forwarded action has been thought about.
+	for a := range passthroughActions {
+		if ValhallaKind(a) == "valhalla" {
+			switch a {
+			case "trace_route", "trace_attributes", "expansion", "centroid", "status":
+			default:
+				t.Errorf("action %s falls back to the generic kind", a)
+			}
+		}
+	}
 }

@@ -219,7 +219,11 @@ func serve() error {
 		return fmt.Errorf("scheduler: %w", err)
 	}
 	go ss.Run(ctx, 30*time.Second)
-	go ks.Run(ctx, 10*time.Second) // quota use and refusal counts, so quotas survive a restart
+	limiterDone := make(chan struct{})
+	go func() { // quota use and refusal counts, so quotas survive a restart
+		defer close(limiterDone)
+		ks.Run(ctx, 10*time.Second)
+	}()
 	go watcher.Run(ctx, 2*time.Second)
 	sup.Start(ctx)
 	f.start(ctx)
@@ -245,16 +249,7 @@ func serve() error {
 	case <-ctx.Done():
 		slog.Info("shutting down")
 	}
-	sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(sctx)
-	// Requests answered while the server drained were charged after the limiter's own final
-	// flush (it runs when the signal arrives), so write what is left now that none can come.
-	if err := ks.Flush(sctx); err != nil {
-		slog.Warn("rate limits: flush at shutdown", "err", err)
-	}
-	stop() // cancels jobs, scheduler, supervisor children, stats (final flush)
-	time.Sleep(500 * time.Millisecond)
+	shutdown(srv, ks, limiterDone, stop, 15*time.Second)
 	return nil
 }
 
@@ -278,4 +273,29 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// shutdown stops the server in an order that loses no quota use: let requests finish for up
+// to grace, cut off the ones that have not (a long pack download), stop the background work,
+// wait for the limiter's own last flush, and then write once more whatever was charged while
+// the server drained. That last flush has its own time: the drain may have used all of grace.
+func shutdown(srv *http.Server, ks *keys.Service, limiterDone <-chan struct{}, stop func(), grace time.Duration) {
+	sctx, cancel := context.WithTimeout(context.Background(), grace)
+	err := srv.Shutdown(sctx)
+	cancel()
+	if err != nil {
+		slog.Warn("shutdown: requests still running after the grace period were cut off", "grace", grace.String())
+		_ = srv.Close()
+	}
+	stop() // cancels jobs, scheduler, supervisor children, stats and the limiter (final flushes)
+	select {
+	case <-limiterDone:
+	case <-time.After(6 * time.Second):
+	}
+	fctx, fcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer fcancel()
+	if err := ks.Flush(fctx); err != nil {
+		slog.Warn("rate limits: flush at shutdown", "err", err)
+	}
+	time.Sleep(500 * time.Millisecond)
 }

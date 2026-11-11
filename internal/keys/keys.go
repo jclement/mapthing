@@ -54,6 +54,8 @@ var (
 	ErrDayLimit   = errors.New("daily quota exceeded")
 	ErrMonthLimit = errors.New("monthly quota exceeded")
 	ErrBusy       = errors.New("server limit for this kind of request reached")
+	// ErrUnavailable: a quota could not be checked because its stored use could not be read.
+	ErrUnavailable = errors.New("quota use could not be read")
 )
 
 type cached struct {
@@ -70,11 +72,15 @@ type Service struct {
 	cache map[string]cached // by hash
 	cfg   Config
 	// Rate limiting state (limiter.go).
-	buckets   map[int64]*bucket     // per key
-	ipBuckets map[ipKey]*bucket     // per key and client
-	global    map[string]*bucket    // per kind
-	quota     map[int64]*quotaState // per key: units used this day and month
-	pending   map[store.QuotaKey]int64
+	buckets   map[int64]*bucket          // per key
+	ipBuckets map[ipKey]*bucket          // per key and client
+	global    map[string]*bucket         // per kind
+	periods   map[store.QuotaKey]*period // per key and UTC day or month: units used
+	gone      map[int64]bool             // revoked keys whose last units are still to be written
+	// dbMu orders reads and writes of stored quota use (seed, Flush, UsageOf). Taken before mu.
+	dbMu      sync.Mutex
+	lastWarn  time.Time                                                            // of the "could not read quota use" log line: at most one in ten seconds
+	readQuota func(ctx context.Context, keyID int64, period string) (int64, error) // st.QuotaUsed; tests fail it
 	limited   map[store.LimitedKey]int64
 	refusals  map[int64][]Refusal
 }
@@ -82,8 +88,8 @@ type Service struct {
 // NewService returns a key service with the stored (or default) weights and global limits.
 func NewService(st *store.Store) *Service {
 	s := &Service{st: st, now: time.Now, cache: map[string]cached{}, buckets: map[int64]*bucket{},
-		ipBuckets: map[ipKey]*bucket{}, global: map[string]*bucket{}, quota: map[int64]*quotaState{},
-		pending: map[store.QuotaKey]int64{}, limited: map[store.LimitedKey]int64{}, refusals: map[int64][]Refusal{}}
+		ipBuckets: map[ipKey]*bucket{}, global: map[string]*bucket{}, periods: map[store.QuotaKey]*period{},
+		gone: map[int64]bool{}, readQuota: st.QuotaUsed, limited: map[store.LimitedKey]int64{}, refusals: map[int64][]Refusal{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	s.loadConfig(ctx)
@@ -121,6 +127,12 @@ func (s *Service) Revoke(ctx context.Context, id int64) error {
 		return err
 	}
 	s.forget(id)
+	// A revoked key is never charged again: drop what the limiter holds for it. Its unwritten
+	// units go with the next flush, which then drops its periods too.
+	s.mu.Lock()
+	delete(s.refusals, id)
+	s.gone[id] = true
+	s.mu.Unlock()
 	return nil
 }
 

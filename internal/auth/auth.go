@@ -373,8 +373,14 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			return
 		}
 		d := a.keys.Charge(r.Context(), k, kind, a.ClientIP(r))
-		setRateHeaders(w, d)
 		ri.KeyID = k.ID
+		if d.Scope == keys.ScopeUnavailable {
+			// Not a limit: the key's quota could not be checked. Nothing was charged.
+			w.Header().Set("Retry-After", "1")
+			WriteError(w, r, http.StatusServiceUnavailable, "unavailable", d.Message())
+			return
+		}
+		setRateHeaders(w, d)
 		if !d.OK {
 			ri.Limited = d.Scope
 			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(d.RetryAfter.Seconds()))))

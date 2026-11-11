@@ -28,8 +28,18 @@ func (h *Handlers) Mount(mux *http.ServeMux, wrap func(kind string, h http.Handl
 
 	add("POST /api/v1/route", "route", h.nativeRoute)
 	// Methods are explicit: a method-less pattern conflicts with the server's "GET /" UI route.
-	add("GET /api/v1/valhalla/{action}", "valhalla", h.passthrough)
-	add("POST /api/v1/valhalla/{action}", "valhalla", h.passthrough)
+	// The pass-through is charged as the operation it runs, so /valhalla/isochrone costs and
+	// is limited exactly like /api/v1/isochrone (ValhallaKind). Each kind has its own wrapped
+	// handler; the action in the path picks one.
+	pass := map[string]http.Handler{}
+	for _, kind := range []string{"route", "matrix", "isochrone", "snap", "elevation", "valhalla"} {
+		pass[kind] = wrap(kind, http.HandlerFunc(h.passthrough))
+	}
+	byAction := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pass[ValhallaKind(r.PathValue("action"))].ServeHTTP(w, r)
+	})
+	mux.Handle("GET /api/v1/valhalla/{action}", byAction)
+	mux.Handle("POST /api/v1/valhalla/{action}", byAction)
 
 	add("POST /directions/v2:computeRoutes", "route", h.googleComputeRoutes)
 
@@ -155,6 +165,25 @@ var passthroughActions = map[string]bool{
 	"route": true, "optimized_route": true, "sources_to_targets": true, "isochrone": true,
 	"trace_route": true, "trace_attributes": true, "locate": true, "height": true,
 	"expansion": true, "centroid": true, "status": true,
+}
+
+// ValhallaKind is the usage kind a pass-through action is charged and limited as: the kind of
+// the dedicated endpoint that runs the same operation, and "valhalla" for actions without one
+// (map matching, expansion, centroid, status, and anything unknown, which the handler refuses).
+func ValhallaKind(action string) string {
+	switch action {
+	case "route":
+		return "route"
+	case "sources_to_targets", "optimized_route": // an optimised route computes a matrix first
+		return "matrix"
+	case "isochrone":
+		return "isochrone"
+	case "locate":
+		return "snap"
+	case "height":
+		return "elevation"
+	}
+	return "valhalla"
 }
 
 func (h *Handlers) passthrough(w http.ResponseWriter, r *http.Request) {

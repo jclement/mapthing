@@ -3,6 +3,7 @@ package keys
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -389,4 +390,264 @@ func TestRecentRefusalsAndPerClientBuckets(t *testing.T) {
 	// Changing or revoking a key forgets its buckets.
 	e.s.forget(1)
 	e.ok(k, "tile", "203.0.113.9", 1)
+}
+
+// Review 3, finding 1: a quota whose stored use cannot be read grants nothing.
+func TestFailedQuotaReadGrantsNothing(t *testing.T) {
+	e := newLimEnv(t)
+	ctx := context.Background()
+	k := key(1, store.Limits{DailyQuota: 30})
+	e.ok(k, "route", "", 3) // the whole day's quota
+	e.restart(true)
+
+	// The database does not answer (or the first request after the restart gave up waiting).
+	reads := 0
+	real := e.s.readQuota
+	e.s.readQuota = func(context.Context, int64, string) (int64, error) {
+		reads++
+		return 0, errors.New("database is locked")
+	}
+	for range 5 {
+		d := e.charge(k, "tile", "")
+		if d.OK || d.Scope != ScopeUnavailable || !errors.Is(d.Err(), ErrUnavailable) || d.RetryAfter <= 0 {
+			t.Fatalf("with the quota unreadable: %+v (the key was out of quota before the restart)", d)
+		}
+	}
+	if reads != 5 {
+		t.Errorf("%d reads for 5 requests: a failed read must be tried again", reads)
+	}
+	// It is not a refusal by a limit, and nothing was charged.
+	if n := len(e.s.PendingLimited()); n != 0 {
+		t.Errorf("counted as %d limit refusals", n)
+	}
+	// A key without a quota does not depend on that read.
+	e.ok(key(2, store.Limits{RPS: 10}), "tile", "", 3)
+	// The database is back: the earlier use is found, the key is out of quota. Nothing was
+	// remembered from the failures.
+	e.s.readQuota = real
+	if d := e.charge(k, "tile", ""); d.OK || d.Scope != ScopeDaily {
+		t.Fatalf("after the database came back: %+v", d)
+	}
+
+	// A client that hangs up while its request waits does not decide what the quota is.
+	e.restart(true)
+	gone, cancel := context.WithCancel(ctx)
+	cancel()
+	if d := e.s.Charge(gone, k, "tile", ""); d.OK || d.Scope != ScopeDaily {
+		t.Fatalf("first request after a restart, cancelled: %+v", d)
+	}
+	if d := e.charge(k, "tile", ""); d.OK || d.Scope != ScopeDaily {
+		t.Fatalf("the request after it: %+v", d)
+	}
+
+	// Many first requests at once, some of whose reads fail: none of them wins a fresh quota.
+	e.restart(true)
+	var mu sync.Mutex
+	n := 0
+	real = e.s.readQuota
+	e.s.readQuota = func(c context.Context, id int64, p string) (int64, error) {
+		mu.Lock()
+		n++
+		fail := n%2 == 1
+		mu.Unlock()
+		if fail {
+			return 0, errors.New("busy")
+		}
+		return real(c, id, p)
+	}
+	var wg sync.WaitGroup
+	allowed := make(chan bool, 40)
+	for range 40 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			allowed <- e.charge(k, "tile", "").OK
+		}()
+	}
+	wg.Wait()
+	close(allowed)
+	for ok := range allowed {
+		if ok {
+			t.Fatal("a request was allowed on an exhausted quota")
+		}
+	}
+	// A key given a quota after it was already in use counts what this run flushed, once.
+	late := key(7, store.Limits{})
+	e.s.readQuota = real
+	e.ok(late, "route", "", 2) // 20 units, no quota, never read
+	_ = e.s.Flush(ctx)
+	e.ok(late, "route", "", 1) // 10 more, not flushed
+	late.Limits = store.Limits{DailyQuota: 45}
+	e.ok(late, "route", "", 1) // 40
+	if d := e.charge(late, "route", ""); d.OK {
+		t.Fatal("50 units on a quota of 45: the units flushed before the quota existed were lost or doubled")
+	}
+	e.ok(late, "tile", "", 5)
+	if u := e.s.UsageOf(ctx, late); u.UnitsToday != 45 {
+		t.Errorf("units today %d, want 45", u.UnitsToday)
+	}
+}
+
+// Review 3, finding 3: requests on both sides of midnight UTC do not disturb each other.
+func TestRolloverKeepsBothPeriods(t *testing.T) {
+	e := newLimEnv(t)
+	ctx := context.Background()
+	k := key(1, store.Limits{DailyQuota: 100, MonthlyQuota: 150})
+	before := time.Date(2026, 11, 30, 23, 59, 59, 900e6, time.UTC)
+	after := time.Date(2026, 12, 1, 0, 0, 0, 100e6, time.UTC)
+	e.now = before
+	e.ok(k, "route", "", 6) // 60 on 30 November
+	// B is charged just after midnight; A, which read the clock just before it, lands after B.
+	e.now = after
+	e.ok(k, "route", "", 5) // B: 50 on 1 December
+	e.now = before
+	e.ok(k, "route", "", 1) // A: belongs to November (70 of the day, 70 of the month)
+	e.now = after
+	// The new day still knows B's 50: five more routes fit, a sixth does not.
+	e.ok(k, "route", "", 5)
+	d := e.charge(k, "route", "")
+	if d.OK || d.Scope != ScopeDaily {
+		t.Fatalf("after a straggler from the old day, the new day forgot what it had used: %+v", d)
+	}
+	if u := e.s.UsageOf(ctx, k); u.UnitsToday != 100 || u.UnitsMonth != 100 {
+		t.Errorf("1 December: %+v, want 100 and 100", u)
+	}
+	// And what is written is right for all four periods.
+	if err := e.s.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for period, want := range map[string]int64{"2026-11-30": 70, "2026-11": 70, "2026-12-01": 100, "2026-12": 100} {
+		if got, _ := e.st.QuotaUsed(ctx, 1, period); got != want {
+			t.Errorf("stored %s: %d, want %d", period, got, want)
+		}
+	}
+	// The periods that are over are dropped once written; the current ones stay.
+	e.s.mu.Lock()
+	n := len(e.s.periods)
+	e.s.mu.Unlock()
+	if n != 2 {
+		t.Errorf("%d periods kept after the flush, want the current day and month", n)
+	}
+	// The same at a month's end when only the monthly quota is near: November's straggler
+	// does not eat December's month.
+	e.restart(true)
+	if u := e.s.UsageOf(ctx, k); u.UnitsMonth != 100 {
+		t.Errorf("after a restart: %+v", u)
+	}
+}
+
+// Review 3, finding 6: a refusal reports the figures of the limit that refused.
+func TestRefusalFiguresAreOfTheRefusingLimit(t *testing.T) {
+	e := newLimEnv(t)
+	ctx := context.Background()
+	// Only a per-client limit.
+	k := key(1, store.Limits{IPRPS: 2, IPBurst: 4})
+	if d := e.charge(k, "tile", "203.0.113.9"); !d.OK || d.Limit != 4 || d.Remaining != 3 || d.Reset != time.Second {
+		t.Fatalf("allowed, per-client only: %+v", d)
+	}
+	e.ok(k, "tile", "203.0.113.9", 3)
+	d := e.charge(k, "tile", "203.0.113.9")
+	if d.OK || d.Scope != ScopeIP || d.Limit != 4 || d.Remaining != 0 || d.Reset != 2*time.Second {
+		t.Fatalf("per-client refusal: %+v, want limit 4, remaining 0, whole again in 2 s", d)
+	}
+	// Another client of the same key sees its own bucket, not the abuser's.
+	if d := e.charge(k, "tile", "198.51.100.7"); !d.OK || d.Remaining != 3 {
+		t.Fatalf("another client: %+v", d)
+	}
+	// A big key bucket and a small client one: the refusal describes the client's.
+	both := key(2, store.Limits{RPS: 100, Burst: 1000, IPRPS: 1, IPBurst: 2, DailyQuota: 1000000})
+	e.ok(both, "tile", "203.0.113.9", 2)
+	if d := e.charge(both, "tile", "203.0.113.9"); d.Scope != ScopeIP || d.Limit != 2 || d.Remaining != 0 {
+		t.Fatalf("per-client refusal on a key with other limits: %+v", d)
+	}
+	// Only the server's limit: a key with no limits still learns what it ran into (in requests).
+	cfg := DefaultConfig()
+	cfg.Global = map[string]GlobalLimit{"route": {RPS: 0.5, Burst: 3}}
+	if err := e.s.SetConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	free := key(3, store.Limits{})
+	e.ok(free, "route", "", 3)
+	d = e.charge(free, "route", "")
+	if d.OK || d.Scope != ScopeGlobal || d.Limit != 3 || d.Remaining != 0 || d.Reset != 6*time.Second || d.RetryAfter != 2*time.Second {
+		t.Fatalf("server-limit refusal: %+v, want limit 3, remaining 0, reset 6 s, retry 2 s", d)
+	}
+	// Allowed requests of a key without limits still carry no figures.
+	e.now = e.now.Add(time.Minute)
+	if d := e.charge(free, "route", ""); !d.OK || d.Limit != 0 {
+		t.Fatalf("unlimited key, allowed: %+v", d)
+	}
+	// Quota refusals describe the quota, also when a rate is closer to empty in share.
+	q := key(4, store.Limits{RPS: 1000, Burst: 2000, DailyQuota: 3})
+	e.ok(q, "tile", "", 3)
+	if d := e.charge(q, "tile", ""); d.Scope != ScopeDaily || d.Limit != 3 || d.Remaining != 0 {
+		t.Fatalf("quota refusal: %+v", d)
+	}
+}
+
+// Review 3, extras: nothing is kept for revoked keys, and a full per-client table loses its
+// least recently used clients first.
+func TestLimiterStateIsReclaimed(t *testing.T) {
+	e := newLimEnv(t)
+	ctx := context.Background()
+	stored, secret, err := e.s.Create(ctx, "soon gone", store.Limits{RPS: 1, Burst: 2, IPRPS: 1, IPBurst: 1, DailyQuota: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := e.s.Authenticate(ctx, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.ok(k, "tile", "203.0.113.9", 1)
+	e.charge(k, "tile", "203.0.113.9") // refused: a refusal to remember
+	if err := e.s.Revoke(ctx, stored.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Looking at the revoked key (the Keys page can list them) must not bring state back.
+	if u := e.s.UsageOf(ctx, k); u.UnitsToday != 1 || len(u.Limited) != 0 {
+		t.Errorf("usage of the revoked key: %+v", u)
+	}
+	if err := e.s.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.s.UsageOf(ctx, k)
+	e.s.mu.Lock()
+	left := len(e.s.periods) + len(e.s.buckets) + len(e.s.ipBuckets) + len(e.s.refusals) + len(e.s.gone)
+	e.s.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d pieces of limiter state left for a revoked key", left)
+	}
+	// Its last units were written all the same.
+	if got, _ := e.st.QuotaUsed(ctx, stored.ID, e.now.Format("2006-01-02")); got != 1 {
+		t.Errorf("stored units of the revoked key: %d", got)
+	}
+
+	// Per-client buckets: fill the table with clients seen at different times within the
+	// idle window, then add one more. The oldest tenth goes; the recent ones stay.
+	wide := key(50, store.Limits{IPRPS: 1, IPBurst: 1})
+	start := e.now
+	for i := range maxIPBuckets {
+		e.now = start.Add(time.Duration(i) * 10 * time.Millisecond) // 200 s in all
+		e.s.Charge(ctx, wide, "tile", "c"+time.Duration(i).String())
+	}
+	e.now = e.now.Add(time.Second)
+	e.s.Charge(ctx, wide, "tile", "newcomer")
+	e.s.mu.Lock()
+	defer e.s.mu.Unlock()
+	if n := len(e.s.ipBuckets); n > maxIPBuckets*9/10 || n < maxIPBuckets*8/10 {
+		t.Fatalf("%d buckets after making room, want about nine tenths of %d", n, maxIPBuckets)
+	}
+	has := func(i int) bool {
+		_, ok := e.s.ipBuckets[ipKey{50, "c" + time.Duration(i).String()}]
+		return ok
+	}
+	if has(0) || has(maxIPBuckets/20) {
+		t.Error("the oldest clients were kept")
+	}
+	if !has(maxIPBuckets-1) || !has(maxIPBuckets/2) {
+		t.Error("recently seen clients were dropped")
+	}
+	if _, ok := e.s.ipBuckets[ipKey{50, "newcomer"}]; !ok {
+		t.Error("the new client has no bucket")
+	}
 }

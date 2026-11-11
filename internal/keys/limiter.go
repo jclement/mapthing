@@ -38,6 +38,9 @@ const (
 	ScopeDaily   = "daily"   // the key's daily quota
 	ScopeMonthly = "monthly" // the key's monthly quota
 	ScopeGlobal  = "global"  // the server's limit for this kind of request
+	// ScopeUnavailable: the key has a quota and what it has used could not be read (the
+	// database did not answer). Not a limit: the request is refused with 503 and not counted.
+	ScopeUnavailable = "unavailable"
 )
 
 // GlobalLimit is a server-wide limit for one kind, in requests.
@@ -211,6 +214,8 @@ func (d Decision) Err() error {
 		return ErrMonthLimit
 	case ScopeGlobal:
 		return ErrBusy
+	case ScopeUnavailable:
+		return ErrUnavailable
 	}
 	return ErrRateLimit
 }
@@ -228,6 +233,8 @@ func (d Decision) Message() string {
 		return "this API key has used its monthly quota; it resets on the 1st at 00:00 UTC"
 	case ScopeGlobal:
 		return "the server is at its limit for this kind of request; try again shortly"
+	case ScopeUnavailable:
+		return "this API key's quota could not be checked just now; try again shortly"
 	}
 	return ""
 }
@@ -265,10 +272,57 @@ func (b *bucket) take(now time.Time, rate float64, capacity, cost float64) (ok b
 // refund puts back what take took (a later check refused the request).
 func (b *bucket) refund(cost float64) { b.tokens += cost }
 
-type quotaState struct {
-	day, month           string
-	dayUnits, monthUnits int64 // including what is not flushed yet
-	seededDay, seededMon bool
+// period is a key's use of one UTC day or month. State is kept per period, so a request
+// that started before midnight and one that started after never share (or reset) a counter.
+type period struct {
+	seeded  bool  // base has been read
+	base    int64 // what earlier runs of the server had stored
+	run     int64 // charged by this run
+	flushed int64 // of run, already written
+}
+
+func (p *period) used() int64 { return p.base + p.run }
+
+// periodLocked returns the state of a key's period, making it when new. s.mu is held.
+func (s *Service) periodLocked(qk store.QuotaKey) *period {
+	p := s.periods[qk]
+	if p == nil {
+		p = &period{}
+		s.periods[qk] = p
+	}
+	return p
+}
+
+// seed reads what earlier runs stored for a period, once. A failed read seeds nothing: the
+// caller must not count against a quota it could not read, and the next request tries again.
+// dbMu orders it with Flush, so "stored" and "flushed by this run" are of the same moment.
+func (s *Service) seed(ctx context.Context, qk store.QuotaKey) error {
+	s.mu.Lock()
+	ok := s.periodLocked(qk).seeded
+	s.mu.Unlock()
+	if ok {
+		return nil
+	}
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	s.mu.Lock()
+	ok = s.periodLocked(qk).seeded
+	s.mu.Unlock()
+	if ok {
+		return nil // another request read it while this one waited
+	}
+	// One client hanging up must not decide whether the quota can be read.
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	stored, err := s.readQuota(rctx, qk.KeyID, qk.Period)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	p := s.periodLocked(qk)
+	p.base, p.seeded = stored-p.flushed, true
+	s.mu.Unlock()
+	return nil
 }
 
 type ipKey struct {
@@ -303,57 +357,50 @@ func clientNet(ip string) string {
 	return p.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
-// Charge charges one request of kind from client address ip against key k: the server's
-// global limit for the kind, then the key's rate, its per-client rate and its quotas. Nothing
-// is charged when any of them refuses.
+// Charge charges one request of kind from client address ip against key k: the key's quotas,
+// the server's limit for the kind, the key's rate and its per-client rate. Nothing is charged
+// when any of them refuses.
 func (s *Service) Charge(ctx context.Context, k *store.APIKey, kind, ip string) Decision {
 	now := s.now()
 	lim := k.Limits.Normalise()
 	day := now.UTC().Format("2006-01-02")
-	month := day[:7]
+	dayKey := store.QuotaKey{KeyID: k.ID, Period: day}
+	monKey := store.QuotaKey{KeyID: k.ID, Period: day[:7]}
+	hasQuota := lim.DailyQuota > 0 || lim.MonthlyQuota > 0
 
-	// Units used need what an earlier run of the server already counted. It is read once
-	// per key and period, before anything of this run is counted for that period, so the
-	// stored figure never includes what is added here.
-	s.mu.Lock()
-	q := s.quota[k.ID]
-	if q == nil {
-		q = &quotaState{}
-		s.quota[k.ID] = q
+	var pd, pm *period
+	for attempt := 0; ; attempt++ {
+		if hasQuota {
+			// A quota is only as good as what is known of earlier use. If that cannot be read
+			// the request is refused (503), rather than counted from zero.
+			for _, qk := range []store.QuotaKey{dayKey, monKey} {
+				if err := s.seed(ctx, qk); err != nil {
+					s.mu.Lock()
+					if now.Sub(s.lastWarn) >= 10*time.Second || now.Before(s.lastWarn) {
+						s.lastWarn = now
+						slog.Warn("rate limits: quota use could not be read, refusing requests of keys with a quota", "key", k.ID, "err", err)
+					}
+					s.mu.Unlock()
+					return Decision{Scope: ScopeUnavailable, RetryAfter: time.Second, Cost: s.Config().Cost(kind)}
+				}
+			}
+		}
+		s.mu.Lock()
+		pd, pm = s.periodLocked(dayKey), s.periodLocked(monKey)
+		if !hasQuota || (pd.seeded && pm.seeded) {
+			break
+		}
+		s.mu.Unlock() // dropped between the two (a flush tidied an old period): once more
+		if attempt >= 2 {
+			return Decision{Scope: ScopeUnavailable, RetryAfter: time.Second, Cost: s.Config().Cost(kind)}
+		}
 	}
-	needDay := q.day != day || !q.seededDay
-	needMon := q.month != month || !q.seededMon
-	s.mu.Unlock()
-	var storedDay, storedMon int64
-	if needDay {
-		storedDay, _ = s.st.QuotaUsed(ctx, k.ID, day)
-	}
-	if needMon {
-		storedMon, _ = s.st.QuotaUsed(ctx, k.ID, month)
-	}
-
-	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg := s.cfg
 	cost := cfg.Cost(kind)
 	d := Decision{Cost: cost}
-	// Roll the periods over, keeping what is still waiting to be written.
-	if q.day != day {
-		q.day, q.dayUnits, q.seededDay = day, 0, false
-	}
-	if q.month != month {
-		q.month, q.monthUnits, q.seededMon = month, 0, false
-	}
-	if needDay && !q.seededDay {
-		q.dayUnits += storedDay
-		q.seededDay = true
-	}
-	if needMon && !q.seededMon {
-		q.monthUnits += storedMon
-		q.seededMon = true
-	}
 
-	refuse := func(scope string, wait time.Duration) Decision {
+	refuse := func(scope string, wait time.Duration, f figures) Decision {
 		d.OK, d.Scope, d.RetryAfter = false, scope, max(wait, time.Second)
 		s.limited[store.LimitedKey{KeyID: k.ID, Day: day, Scope: scope}]++
 		r := append(s.refusals[k.ID], Refusal{At: now.UTC(), Kind: kind, Scope: scope, IP: ip})
@@ -361,16 +408,19 @@ func (s *Service) Charge(ctx context.Context, k *store.APIKey, kind, ip string) 
 			r = r[len(r)-keepRefusals:]
 		}
 		s.refusals[k.ID] = r
-		s.headers(&d, lim, k.ID, q, now)
+		// The figures of the limit that refused: that is the one the client has to wait for.
+		d.Limit, d.Remaining, d.Reset = f.limit, f.remaining, f.reset
 		return d
 	}
+	dayFig := figures{lim.DailyQuota, max(lim.DailyQuota-pd.used(), 0), untilNextDay(now)}
+	monFig := figures{lim.MonthlyQuota, max(lim.MonthlyQuota-pm.used(), 0), untilNextMonth(now)}
 
 	// Quotas first: a key that is out of quota should not also drain its buckets.
-	if lim.DailyQuota > 0 && q.dayUnits+int64(cost) > lim.DailyQuota {
-		return refuse(ScopeDaily, untilNextDay(now))
+	if lim.DailyQuota > 0 && pd.used()+int64(cost) > lim.DailyQuota {
+		return refuse(ScopeDaily, untilNextDay(now), dayFig)
 	}
-	if lim.MonthlyQuota > 0 && q.monthUnits+int64(cost) > lim.MonthlyQuota {
-		return refuse(ScopeMonthly, untilNextMonth(now))
+	if lim.MonthlyQuota > 0 && pm.used()+int64(cost) > lim.MonthlyQuota {
+		return refuse(ScopeMonthly, untilNextMonth(now), monFig)
 	}
 	var gb *bucket
 	if g, ok := cfg.Global[kind]; ok && g.RPS > 0 {
@@ -380,7 +430,7 @@ func (s *Service) Charge(ctx context.Context, k *store.APIKey, kind, ip string) 
 			s.global[kind] = gb
 		}
 		if ok, wait := gb.take(now, g.RPS, float64(g.Burst), 1); !ok {
-			return refuse(ScopeGlobal, wait)
+			return refuse(ScopeGlobal, wait, bucketFigures(gb, g.RPS, g.Burst, now)) // in requests
 		}
 	}
 	var kb *bucket
@@ -394,12 +444,13 @@ func (s *Service) Charge(ctx context.Context, k *store.APIKey, kind, ip string) 
 			if gb != nil {
 				gb.refund(1)
 			}
-			return refuse(ScopeRate, wait)
+			return refuse(ScopeRate, wait, bucketFigures(kb, lim.RPS, lim.Burst, now))
 		}
 	}
+	var ib *bucket
 	if lim.IPRPS > 0 && ip != "" {
 		ik := ipKey{k.ID, clientNet(ip)}
-		ib := s.ipBuckets[ik]
+		ib = s.ipBuckets[ik]
 		if ib == nil {
 			s.pruneIPLocked(now)
 			ib = &bucket{}
@@ -412,48 +463,53 @@ func (s *Service) Charge(ctx context.Context, k *store.APIKey, kind, ip string) 
 			if kb != nil {
 				kb.refund(float64(cost))
 			}
-			return refuse(ScopeIP, wait)
+			return refuse(ScopeIP, wait, bucketFigures(ib, lim.IPRPS, lim.IPBurst, now))
 		}
 	}
-	q.dayUnits += int64(cost)
-	q.monthUnits += int64(cost)
-	s.pending[store.QuotaKey{KeyID: k.ID, Period: day}] += int64(cost)
-	s.pending[store.QuotaKey{KeyID: k.ID, Period: month}] += int64(cost)
+	pd.run += int64(cost)
+	pm.run += int64(cost)
 	d.OK = true
-	s.headers(&d, lim, k.ID, q, now)
+
+	// An allowed request reports the limit closest to running out for this client: the
+	// smallest share left among the key's rate, this client's rate and the quotas.
+	var cs []figures
+	if kb != nil {
+		cs = append(cs, bucketFigures(kb, lim.RPS, lim.Burst, now))
+	}
+	if ib != nil {
+		cs = append(cs, bucketFigures(ib, lim.IPRPS, lim.IPBurst, now))
+	}
+	if lim.DailyQuota > 0 {
+		dayFig.remaining = max(lim.DailyQuota-pd.used(), 0)
+		cs = append(cs, dayFig)
+	}
+	if lim.MonthlyQuota > 0 {
+		monFig.remaining = max(lim.MonthlyQuota-pm.used(), 0)
+		cs = append(cs, monFig)
+	}
+	if len(cs) > 0 {
+		sort.SliceStable(cs, func(i, j int) bool {
+			return float64(cs[i].remaining)/float64(cs[i].limit) < float64(cs[j].remaining)/float64(cs[j].limit)
+		})
+		d.Limit, d.Remaining, d.Reset = cs[0].limit, cs[0].remaining, cs[0].reset
+	}
 	return d
 }
 
-// headers fills in the limit closest to running out.
-func (s *Service) headers(d *Decision, lim store.Limits, id int64, q *quotaState, now time.Time) {
-	type cand struct {
-		limit, remaining int64
-		reset            time.Duration
+// figures describe one limit for the X-RateLimit-* headers.
+type figures struct {
+	limit, remaining int64
+	reset            time.Duration
+}
+
+// bucketFigures describes a bucket as it stands at now (it has just been refilled by take).
+func bucketFigures(b *bucket, rps float64, burst int, now time.Time) figures {
+	tokens := float64(burst)
+	if !b.last.IsZero() {
+		tokens = math.Min(tokens, b.tokens+now.Sub(b.last).Seconds()*rps)
 	}
-	var cs []cand
-	if lim.RPS > 0 {
-		tokens := float64(lim.Burst)
-		if b := s.buckets[id]; b != nil && !b.last.IsZero() {
-			tokens = math.Min(float64(lim.Burst), b.tokens+now.Sub(b.last).Seconds()*lim.RPS)
-		}
-		tokens = math.Max(tokens, 0)
-		cs = append(cs, cand{int64(lim.Burst), int64(tokens),
-			time.Duration(math.Ceil((float64(lim.Burst)-tokens)/lim.RPS)) * time.Second})
-	}
-	if lim.DailyQuota > 0 {
-		cs = append(cs, cand{lim.DailyQuota, max(lim.DailyQuota-q.dayUnits, 0), untilNextDay(now)})
-	}
-	if lim.MonthlyQuota > 0 {
-		cs = append(cs, cand{lim.MonthlyQuota, max(lim.MonthlyQuota-q.monthUnits, 0), untilNextMonth(now)})
-	}
-	if len(cs) == 0 {
-		return
-	}
-	// Closest to running out: the smallest share left.
-	sort.SliceStable(cs, func(i, j int) bool {
-		return float64(cs[i].remaining)/float64(cs[i].limit) < float64(cs[j].remaining)/float64(cs[j].limit)
-	})
-	d.Limit, d.Remaining, d.Reset = cs[0].limit, cs[0].remaining, cs[0].reset
+	tokens = math.Max(tokens, 0)
+	return figures{int64(burst), int64(tokens), time.Duration(math.Ceil((float64(burst)-tokens)/rps)) * time.Second}
 }
 
 func untilNextDay(now time.Time) time.Duration {
@@ -466,8 +522,9 @@ func untilNextMonth(now time.Time) time.Duration {
 	return time.Date(u.Year(), u.Month()+1, 1, 0, 0, 0, 0, time.UTC).Sub(u)
 }
 
-// pruneIPLocked forgets per-client buckets that have been idle, and when there are still too
-// many, the oldest. Called before adding one.
+// pruneIPLocked makes room before a per-client bucket is added: when the table is full it
+// forgets the buckets idle for ten minutes, and if that is not enough the least recently used
+// ones, down to nine tenths of the cap.
 func (s *Service) pruneIPLocked(now time.Time) {
 	if len(s.ipBuckets) < maxIPBuckets {
 		return
@@ -477,30 +534,70 @@ func (s *Service) pruneIPLocked(now time.Time) {
 			delete(s.ipBuckets, k)
 		}
 	}
-	for k := range s.ipBuckets { // still full: make room (map order is as good as random)
-		if len(s.ipBuckets) < maxIPBuckets*9/10 {
-			break
-		}
-		delete(s.ipBuckets, k)
+	target := maxIPBuckets * 9 / 10
+	if len(s.ipBuckets) < target {
+		return
+	}
+	type aged struct {
+		k    ipKey
+		last time.Time
+	}
+	all := make([]aged, 0, len(s.ipBuckets))
+	for k, b := range s.ipBuckets {
+		all = append(all, aged{k, b.last})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].last.Before(all[j].last) })
+	for _, a := range all[:len(all)-target+1] {
+		delete(s.ipBuckets, a.k)
 	}
 }
 
-// Flush writes used units and refusal counts to the database. On failure they are kept.
+// Flush writes used units and refusal counts to the database. On failure they are kept and
+// written by the next one. It also drops state nobody needs any more: periods that are over,
+// and everything of revoked keys, once written.
 func (s *Service) Flush(ctx context.Context) error {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
 	s.mu.Lock()
-	units, limited := s.pending, s.limited
-	s.pending, s.limited = map[store.QuotaKey]int64{}, map[store.LimitedKey]int64{}
-	s.mu.Unlock()
-	if err := s.st.AddQuota(ctx, units, limited); err != nil {
-		s.mu.Lock()
-		for k, v := range units {
-			s.pending[k] += v
+	units := map[store.QuotaKey]int64{}
+	for qk, p := range s.periods {
+		if d := p.run - p.flushed; d > 0 {
+			units[qk] = d
 		}
+	}
+	limited := s.limited
+	s.limited = map[store.LimitedKey]int64{}
+	s.mu.Unlock()
+
+	err := s.st.AddQuota(ctx, units, limited)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
 		for k, v := range limited {
 			s.limited[k] += v
 		}
-		s.mu.Unlock()
 		return err
+	}
+	for qk, d := range units {
+		if p := s.periods[qk]; p != nil {
+			p.flushed += d
+		}
+	}
+	day := s.now().UTC().Format("2006-01-02")
+	left := map[int64]bool{}
+	for qk, p := range s.periods {
+		over := qk.Period != day && qk.Period != day[:7]
+		if (over || s.gone[qk.KeyID]) && p.run == p.flushed {
+			delete(s.periods, qk)
+			continue
+		}
+		left[qk.KeyID] = true
+	}
+	for id := range s.gone {
+		if !left[id] {
+			delete(s.gone, id)
+		}
 	}
 	return nil
 }
@@ -542,27 +639,47 @@ type Usage struct {
 	RateRemaining int64 `json:"rate_remaining"`
 }
 
-// UsageOf reports a key's use in the current day and month and its recent refusals.
+// UsageOf reports a key's use in the current day and month and its recent refusals. It
+// creates no limiter state, so asking about a revoked key leaves nothing behind.
 func (s *Service) UsageOf(ctx context.Context, k *store.APIKey) Usage {
 	now := s.now()
 	day := now.UTC().Format("2006-01-02")
-	month := day[:7]
-	storedDay, _ := s.st.QuotaUsed(ctx, k.ID, day)
-	storedMon, _ := s.st.QuotaUsed(ctx, k.ID, month)
+	u := Usage{RateRemaining: -1}
+	// stored + what this run has not written yet; dbMu keeps the two of the same moment.
+	s.dbMu.Lock()
+	for i, period := range []string{day, day[:7]} {
+		qk := store.QuotaKey{KeyID: k.ID, Period: period}
+		stored, err := s.readQuota(ctx, k.ID, period)
+		s.mu.Lock()
+		p := s.periods[qk]
+		var n int64
+		switch {
+		case err == nil && p != nil:
+			n = stored + p.run - p.flushed
+		case err == nil:
+			n = stored
+		case p != nil && p.seeded:
+			n = p.used()
+		case p != nil:
+			n = p.run
+		}
+		s.mu.Unlock()
+		if i == 0 {
+			u.UnitsToday = n
+		} else {
+			u.UnitsMonth = n
+		}
+	}
+	s.dbMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	u := Usage{
-		UnitsToday:    storedDay + s.pending[store.QuotaKey{KeyID: k.ID, Period: day}],
-		UnitsMonth:    storedMon + s.pending[store.QuotaKey{KeyID: k.ID, Period: month}],
-		Limited:       append([]Refusal{}, s.refusals[k.ID]...),
-		RateRemaining: -1,
-	}
+	u.Limited = append([]Refusal{}, s.refusals[k.ID]...)
 	if lim := k.Limits.Normalise(); lim.RPS > 0 {
-		tokens := float64(lim.Burst)
-		if b := s.buckets[k.ID]; b != nil && !b.last.IsZero() {
-			tokens = math.Min(tokens, b.tokens+now.Sub(b.last).Seconds()*lim.RPS)
+		b := s.buckets[k.ID]
+		if b == nil {
+			b = &bucket{}
 		}
-		u.RateRemaining = int64(math.Max(tokens, 0))
+		u.RateRemaining = bucketFigures(b, lim.RPS, lim.Burst, now).remaining
 	}
 	return u
 }
