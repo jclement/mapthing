@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jclement/mapthing/internal/auth"
@@ -84,6 +85,8 @@ type Server struct {
 	mux     *http.ServeMux
 	diskCtl *diskStats
 	procs   *procSampler
+	// logStreams counts open live log tails (bounded: internal/server/logs.go).
+	logStreams atomic.Int32
 }
 
 // New builds the router.

@@ -175,18 +175,30 @@ Terminal colour codes are stripped.
 **Redaction** happens once, on the way in, so no secret reaches memory, the files, the console
 or the UI. `logs.Redact` masks (as `[redacted]`):
 
-- `Authorization`, `Proxy-Authorization`, `X-Goog-Api-Key`, `X-Mapthing-Internal`, `X-Api-Key`,
-  `Cookie` and `Set-Cookie` values, in header, `key=value`, JSON and Go map forms;
+- the whole value of `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie` (any
+  scheme, Digest fields, every cookie), in header, `key=value`, JSON and Go map forms; a quoted
+  or bracketed value ends at its closing quote or bracket, any other at the end of the line;
+- `X-Goog-Api-Key`, `X-Mapthing-Internal` and `X-Api-Key` values;
 - bearer tokens anywhere;
 - query parameters `key`, `sig` and any whose name contains `password`, `secret`, `token`,
   `api_key`, `access_key`, `credential` or `signature`;
 - `name=value` and `"name": "value"` pairs with such a name (`ADMIN_PASSWORD=…`, `TUNNEL_TOKEN=…`);
 - credentials in URLs (`scheme://user:pass@host`);
-- mapthing keys (`mt_…`), Google API keys (`AIza…`) and JWT-shaped blobs wherever they appear.
+- mapthing keys (`mt_…`, also when cut short), Google API keys (`AIza…`) and JWT-shaped blobs
+  wherever they appear;
+- all of the above behind percent-encoding (`%6bey=…`, an encoded header dump, up to three
+  layers): when decoding a line reveals a secret, the line is kept decoded and masked.
 
 The admin password and the internal token are also registered as literals (`Sink.AddSecret`) and
-removed whatever surrounds them. Redaction errs on the side of masking. Request logging records
-the path without its query string.
+removed whatever surrounds them, percent-encoded or not. Redaction runs on the whole line (up
+to 1 MiB) before the line is cut to the 16 KiB that is kept, so a secret lying across the cut is
+not shown in part. It errs on the side of masking. Request logging records the path without
+its query string.
+
+Build output has other readers than the log: the job log in SQLite, the `job` and `log` events
+on `/admin/api/events`, the job's `error`, and the failure details in history. The job runner
+applies the same redactor before any of them (`jobs.Runner.Redact`), and the admin API masks
+job errors, job log lines and history again on the way out, for rows an older version stored.
 
 **Storage.** The last 5 000 entries stay in memory. Every entry is also appended to
 `<data>/logs/log-current.jsonl` (one JSON object per line). At a tenth of
@@ -208,9 +220,13 @@ written or read and can be deleted.)
 - `GET /admin/api/logs/stream?…&after=<id>` (SSE): event `entry` per matching line as it is
   written, after first replaying the matches newer than `after`, so a page that loaded history
   and then connects misses nothing. A reader that falls behind loses lines rather than slowing
-  the writer, and is told with event `dropped` `{count}`.
+  the writer, and is told with event `dropped` `{count}`. Every write has a 20 s deadline: a
+  client that stops reading is disconnected and unsubscribed. At most 16 streams are open at
+  once (503 `too_many_streams` beyond that).
 - `GET /admin/api/logs/download?…[&format=jsonl]` → every match, oldest first, as a text file
-  (the console format) or JSON lines.
+  (the console format) or JSON lines. It covers what existed when it started, reads the files
+  through handles opened at that moment (so it never holds up rotation, however slow the
+  client), and is cut off if the client stops reading.
 
 The admin **Logs** page (`/admin/logs`) is a client of these: live tail with pause and
 follow, source chips, level, text search, time range, download. Its URL carries the filter, so
@@ -588,7 +604,11 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   `invalid` (owned, or left by a build that was killed, and failing validation: `problems` says why).
   `can_activate`: it validates, is not live or building, and no build is running. `can_delete`: it is not live and not being built.
   `disk.bytes` counts a file shared by hard link (terrain reused from the previous generation) once; `disk.sum_bytes` is the generations' sizes added up.
-  Rolling back is activating the `previous` generation. `DELETE /admin/api/generations/{id}` → 204. Activations and deletions by hand are recorded in history (`kind` `generation`).
+  Rolling back is activating the `previous` generation. `DELETE /admin/api/generations/{id}` → 204.
+  A build, an activation and a delete each claim their generation under one short lock
+  (`build.Builder.busyMu`) before touching it, and `current` only moves to a claimed generation,
+  so a delete cannot remove a directory that is being written, validated or made live, and an
+  activation of one being deleted answers 409 `busy`. Updates of `.retention.json` are serialised. Activations and deletions by hand are recorded in history (`kind` `generation`).
 - `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,refresh_downloads,regions:[{id,enabled}]}` (cron 5-field, UTC; PUT fields optional, 400 `bad_cron`)
   + *extra* `next_run,last_run,upcoming:[5 times],default_cron,timezone,history`.
 - `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}` (revoked keys left out; `?revoked=1` includes them with `revoked_at`).

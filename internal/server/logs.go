@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -104,17 +105,36 @@ func (s *Server) logsDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("Cache-Control", "no-store")
-	enc := json.NewEncoder(w)
+	// A reader that stops reading must not keep this handler (and its open files) forever:
+	// every stretch of output gets a fresh deadline, and a failed write ends the download.
+	rc := http.NewResponseController(w)
+	bw := bufio.NewWriterSize(w, 64<<10)
+	enc := json.NewEncoder(bw)
+	n := 0
+	_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 	sink.Each(f, func(e logs.Entry) bool {
 		var err error
 		if jsonl {
 			err = enc.Encode(e)
 		} else {
-			_, err = fmt.Fprintln(w, logs.FormatText(e))
+			_, err = fmt.Fprintln(bw, logs.FormatText(e))
+		}
+		if n++; n%256 == 0 {
+			_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 		}
 		return err == nil && r.Context().Err() == nil
 	})
+	_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	_ = bw.Flush()
 }
+
+// streamWriteTimeout is how long one write to a log stream or download may take before the
+// client is given up on. maxLogStreams bounds concurrent live tails (each holds a goroutine,
+// a socket and a queue of up to 1 024 lines). Variables so tests can shorten them.
+var (
+	streamWriteTimeout = 20 * time.Second
+	maxLogStreams      = int32(16)
+)
 
 // logsStream: GET /admin/api/logs/stream?… (SSE) → event "entry" per matching entry as it is
 // written. With after=<id> the entries since then come first, so a page that loaded history
@@ -124,11 +144,13 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, r, http.StatusInternalServerError, "internal", "streaming unsupported")
+	if s.logStreams.Add(1) > maxLogStreams {
+		s.logStreams.Add(-1)
+		w.Header().Set("Retry-After", "5")
+		writeError(w, r, http.StatusServiceUnavailable, "too_many_streams", "too many live log views are open; close one and try again")
 		return
 	}
+	defer s.logStreams.Add(-1)
 	ch, dropped, cancel := sink.Subscribe()
 	defer cancel()
 	h := w.Header()
@@ -137,11 +159,35 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, "retry: 3000\n\n")
+
+	// Every write and flush has a deadline and is checked: a client that stops reading is
+	// dropped (and unsubscribed) instead of pinning this goroutine in a blocked write.
+	rc := http.NewResponseController(w)
+	failed := false
+	write := func(format string, args ...any) {
+		if failed {
+			return
+		}
+		_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			failed = true
+		}
+	}
+	flush := func() bool {
+		if failed {
+			return false
+		}
+		_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+		if err := rc.Flush(); err != nil {
+			failed = true
+		}
+		return !failed
+	}
 	send := func(e logs.Entry) {
 		b, _ := json.Marshal(e)
-		_, _ = fmt.Fprintf(w, "event: entry\ndata: %s\n\n", b)
+		write("event: entry\ndata: %s\n\n", b)
 	}
+	write("retry: 3000\n\n")
 	var last int64
 	if f.After != 0 {
 		// Subscribed first, so nothing falls between the catch-up and the live stream;
@@ -152,13 +198,15 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 			last = e.ID
 		}
 	}
-	fl.Flush()
+	if !flush() {
+		return
+	}
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
-	flush := time.NewTicker(200 * time.Millisecond) // batch bursts (a build prints hundreds of lines a second)
-	defer flush.Stop()
+	batch := time.NewTicker(200 * time.Millisecond) // batch bursts (a build prints hundreds of lines a second)
+	defer batch.Stop()
 	dirty := false
-	for {
+	for !failed {
 		select {
 		case <-r.Context().Done():
 			return
@@ -167,18 +215,22 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 				send(e)
 				dirty = true
 			}
-		case <-flush.C:
+		case <-batch.C:
 			if n := dropped(); n > 0 {
-				_, _ = fmt.Fprintf(w, "event: dropped\ndata: {\"count\":%d}\n\n", n)
+				write("event: dropped\ndata: {\"count\":%d}\n\n", n)
 				dirty = true
 			}
 			if dirty {
-				fl.Flush()
+				if !flush() {
+					return
+				}
 				dirty = false
 			}
 		case <-tick.C:
-			_, _ = fmt.Fprint(w, ": keepalive\n\n")
-			fl.Flush()
+			write(": keepalive\n\n")
+			if !flush() {
+				return
+			}
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/jobs"
+	"github.com/jclement/mapthing/internal/logs"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/store"
 	"github.com/jclement/mapthing/internal/tiles"
@@ -351,6 +352,33 @@ func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 
 // ---------- jobs and builds ----------
 
+// redact masks secrets in text on its way out. Jobs redact what they store (jobs.Runner.Redact),
+// but rows written by an older version, or by a runner without a redactor, are still raw.
+func (s *Server) redact(text string) string {
+	if text == "" {
+		return text
+	}
+	if s.d.Logs != nil {
+		return s.d.Logs.Redact(text)
+	}
+	return logs.Redact(text)
+}
+
+// jobView is jobs.View with the error and stage details masked.
+func (s *Server) jobView(row store.JobRow) jobs.JobJSON {
+	v := jobs.View(row)
+	v.Error = s.redact(v.Error)
+	if len(v.Stages) > 0 {
+		st := make([]store.StageRow, len(v.Stages))
+		copy(st, v.Stages)
+		for i := range st {
+			st[i].Detail = s.redact(st[i].Detail)
+		}
+		v.Stages = st
+	}
+	return v
+}
+
 func (s *Server) jobRow(ctx context.Context, row *store.JobRow) store.JobRow {
 	if cur, ok := s.d.Jobs.Current(); ok && cur.ID == row.ID {
 		return cur
@@ -369,7 +397,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]jobs.JobJSON, 0, len(js))
 	for _, j := range js {
-		out = append(out, jobs.View(s.jobRow(r.Context(), j)))
+		out = append(out, s.jobView(s.jobRow(r.Context(), j)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
 }
@@ -393,12 +421,13 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	}
 	lines := make([]jobs.LogJSON, 0, len(logs))
 	for _, l := range logs {
+		l.Line = s.redact(l.Line)
 		lines = append(lines, jobs.LogView(l))
 	}
 	writeJSON(w, http.StatusOK, struct {
 		jobs.JobJSON
 		Log []jobs.LogJSON `json:"log"`
-	}{jobs.View(s.jobRow(r.Context(), j)), lines})
+	}{s.jobView(s.jobRow(r.Context(), j)), lines})
 }
 
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
@@ -420,7 +449,7 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) eventSnapshot() []jobs.Event {
 	var ev []jobs.Event
 	if cur, ok := s.d.Jobs.Current(); ok {
-		ev = append(ev, jobs.Event{Type: "job", Data: jobs.View(cur)})
+		ev = append(ev, jobs.Event{Type: "job", Data: s.jobView(cur)})
 	}
 	return ev
 }
@@ -450,7 +479,7 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, jobs.View(*row))
+	writeJSON(w, http.StatusAccepted, s.jobView(*row))
 }
 
 // ---------- generations ----------
@@ -732,7 +761,34 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
+	for i := range h {
+		h[i].Message = s.redact(h[i].Message)
+		if len(h[i].Details) > 0 {
+			// Details are JSON: mask the strings inside rather than the encoded text.
+			var d any
+			if json.Unmarshal(h[i].Details, &d) == nil {
+				h[i].Details, _ = json.Marshal(redactJSON(d, s.redact))
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"history": h})
+}
+
+// redactJSON applies redact to every string in a decoded JSON value.
+func redactJSON(v any, redact func(string) string) any {
+	switch x := v.(type) {
+	case string:
+		return redact(x)
+	case []any:
+		for i, e := range x {
+			x[i] = redactJSON(e, redact)
+		}
+	case map[string]any:
+		for k, e := range x {
+			x[k] = redactJSON(e, redact)
+		}
+	}
+	return v
 }
 
 // ---------- schedule ----------

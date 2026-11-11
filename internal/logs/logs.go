@@ -66,8 +66,12 @@ const (
 	currentName = "log-current.jsonl"
 	segPrefix   = "log-"
 	segSuffix   = ".jsonl"
-	// maxLine caps one message; longer ones are cut (a tool dumping a megabyte on one line).
-	maxLine = 16 << 10
+	// maxLine caps one stored message; longer ones are cut (a tool dumping a megabyte on one
+	// line). maxInput caps what is looked at at all. Redaction runs on the input before the
+	// cut to maxLine, so a secret lying across that cut is masked whole, not shown in part;
+	// one lying across maxInput is far beyond anything that is kept.
+	maxLine  = 16 << 10
+	maxInput = 1 << 20
 )
 
 // Sink collects log entries. The zero value is not usable; call New.
@@ -164,11 +168,13 @@ func (s *Sink) Add(e Entry) {
 	if s == nil {
 		return
 	}
-	e.Msg = strings.TrimRight(StripANSI(e.Msg), "\r\n")
-	if len(e.Msg) > maxLine {
-		e.Msg = e.Msg[:maxLine] + " … [cut]"
+	if len(e.Msg) > maxInput {
+		e.Msg = e.Msg[:maxInput]
 	}
-	e.Msg = s.Redact(strings.ToValidUTF8(e.Msg, "?"))
+	e.Msg = s.Redact(strings.ToValidUTF8(strings.TrimRight(StripANSI(e.Msg), "\r\n"), "?"))
+	if len(e.Msg) > maxLine {
+		e.Msg = strings.ToValidUTF8(e.Msg[:maxLine], "") + " … [cut]"
+	}
 	if e.Level == "" {
 		e.Level = DetectLevel(e.Msg)
 	}
@@ -303,8 +309,14 @@ func readFile(path string, fn func(Entry)) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 4*maxLine)
+	scanEntries(f, fn)
+}
+
+// scanEntries reads JSON-lines entries from r. It stops early only at the end of the data;
+// a caller that is done ignores the rest (a segment is a few megabytes at most).
+func scanEntries(r io.Reader, fn func(Entry)) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
@@ -400,7 +412,7 @@ func readFirst(path string, fn func(Entry)) {
 	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 4*maxLine)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		var e Entry
 		if json.Unmarshal(sc.Bytes(), &e) == nil && e.ID != 0 {
@@ -445,6 +457,13 @@ func (s *Sink) Subscribe() (ch <-chan Entry, dropped func() int, cancel func()) 
 			delete(s.dropped, c)
 			s.mu.Unlock()
 		}
+}
+
+// Subscribers returns how many live subscribers there are.
+func (s *Sink) Subscribers() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.subs)
 }
 
 // DetectLevel guesses a line's level from the conventions the children use (Valhalla's

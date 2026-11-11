@@ -3,8 +3,10 @@ package build
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -40,7 +42,7 @@ func TestInventoryStates(t *testing.T) {
 	if err := b.updateRetention(func(r *retentionRecord) { r.Building = append(r.Building, leftover, running) }); err != nil {
 		t.Fatal(err)
 	}
-	b.setBusy(running, "")
+	b.reserveBuild(running)
 	// A copy in flight under a dot name is not a generation at all.
 	if err := os.MkdirAll(filepath.Join(b.generationsDir(), ".incoming-x"), 0o755); err != nil {
 		t.Fatal(err)
@@ -129,7 +131,10 @@ func TestDeleteGenerationRules(t *testing.T) {
 	}
 
 	// The one a build is writing, and the one an activation is switching to.
-	b.setBusy(running, adopting)
+	b.reserveBuild(running)
+	if !b.reserveActivation(adopting) {
+		t.Fatal("could not reserve the activation")
+	}
 	for _, id := range []string{running, adopting} {
 		if err := b.DeleteGeneration(id); !errors.Is(err, ErrGenerationBusy) || !exists(id) {
 			t.Fatalf("deleting busy generation %s: err=%v exists=%v", id, err, exists(id))
@@ -139,7 +144,8 @@ func TestDeleteGenerationRules(t *testing.T) {
 	if err := b.DeleteGeneration(old); err != nil || exists(old) {
 		t.Fatalf("deleting an old generation during a build: err=%v exists=%v", err, exists(old))
 	}
-	b.setBusy("", "")
+	b.reserveBuild("")
+	b.releaseActivation()
 	if rec := b.loadRetention(); len(rec.Generations) != 1 || rec.Generations[0] != live {
 		t.Errorf("retention record after delete: %v (the deleted generation should be forgotten)", rec.Generations)
 	}
@@ -183,5 +189,170 @@ func TestDeleteGenerationRules(t *testing.T) {
 	// After all that the live generation still validates.
 	if _, err := Validate(filepath.Join(b.generationsDir(), live), live, AllParts()); err != nil {
 		t.Errorf("live generation after the deletes: %v", err)
+	}
+}
+
+// Review 1, finding 1: a delete and an activation of the same generation cannot interleave.
+// Whichever claims it first wins; the other is refused, and the live generation is never
+// removed.
+func TestDeleteAndActivationDoNotInterleave(t *testing.T) {
+	ctx := context.Background()
+	exists := func(b *Builder, id string) bool {
+		_, err := os.Stat(filepath.Join(b.generationsDir(), id, "manifest.json"))
+		return err == nil
+	}
+
+	// 1. The delete has passed its checks and is about to remove the directory when an
+	// activation of the same generation arrives.
+	b := newAdoptBuilder(t)
+	const g1, g2 = "20261101T000000Z", "20261102T000000Z"
+	b.addGen(t, g1)
+	b.addGen(t, g2)
+	if _, err := b.Adopt(ctx, g1, AdoptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	atRemove, goOn := make(chan struct{}), make(chan struct{})
+	b.removeAll = func(dir string) error {
+		close(atRemove)
+		<-goOn
+		return os.RemoveAll(dir)
+	}
+	delDone := make(chan error, 1)
+	go func() { delDone <- b.DeleteGeneration(g2) }()
+	<-atRemove
+	if _, err := b.Adopt(ctx, g2, AdoptOptions{}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("activating a generation that is being deleted: %v, want ErrBusy", err)
+	}
+	if b.CurrentGeneration() != g1 {
+		t.Fatalf("current moved to %q while it was being deleted", b.CurrentGeneration())
+	}
+	// A second delete of the same generation is refused too.
+	if err := b.DeleteGeneration(g2); !errors.Is(err, ErrGenerationBusy) {
+		t.Fatalf("second delete: %v", err)
+	}
+	close(goOn)
+	if err := <-delDone; err != nil || exists(b, g2) {
+		t.Fatalf("the delete: err=%v, still there=%v", err, exists(b, g2))
+	}
+	if !exists(b, g1) || b.CurrentGeneration() != g1 {
+		t.Fatal("the live generation was harmed")
+	}
+
+	// 2. The activation has claimed the generation and is starting its routing graph (or has
+	// just swapped current) when a delete arrives.
+	b = newAdoptBuilder(t)
+	b.addGen(t, g1)
+	b.addGen(t, g2)
+	if _, err := b.Adopt(ctx, g1, AdoptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	preparing, finish := make(chan struct{}), make(chan struct{})
+	adoptDone := make(chan error, 1)
+	go func() {
+		_, err := b.Adopt(ctx, g2, AdoptOptions{Prepare: func(context.Context, string) (Prepared, error) {
+			close(preparing)
+			<-finish
+			return nil, nil
+		}})
+		adoptDone <- err
+	}()
+	<-preparing
+	if err := b.DeleteGeneration(g2); !errors.Is(err, ErrGenerationBusy) {
+		t.Fatalf("deleting a generation that is being activated: %v, want ErrGenerationBusy", err)
+	}
+	close(finish)
+	if err := <-adoptDone; err != nil {
+		t.Fatal(err)
+	}
+	if b.CurrentGeneration() != g2 || !exists(b, g2) {
+		t.Fatalf("after the activation: current %q, exists %v", b.CurrentGeneration(), exists(b, g2))
+	}
+	if err := b.DeleteGeneration(g2); !errors.Is(err, ErrGenerationLive) {
+		t.Fatalf("deleting the now-live generation: %v", err)
+	}
+}
+
+// Hammer both orders at once: whatever happens, the generation current points at exists.
+func TestDeleteActivateRace(t *testing.T) {
+	ctx := context.Background()
+	b := newAdoptBuilder(t)
+	const base = "20261101T000000Z"
+	b.addGen(t, base)
+	if _, err := b.Adopt(ctx, base, AdoptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 40 {
+		id := fmt.Sprintf("202612%02dT000000Z", i%28+1)
+		b.addGen(t, id)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = b.DeleteGeneration(id) }()
+		go func() { defer wg.Done(); _, _ = b.Adopt(ctx, id, AdoptOptions{}) }()
+		wg.Wait()
+		cur := b.CurrentGeneration()
+		if _, err := Validate(filepath.Join(b.generationsDir(), cur), cur, AllParts()); err != nil {
+			t.Fatalf("round %d: the live generation %s is gone or broken: %v", i, cur, err)
+		}
+		// Put the base back as live so the next round starts the same way.
+		if cur != base {
+			if _, err := os.Stat(filepath.Join(b.generationsDir(), base)); err != nil {
+				b.addGen(t, base)
+			}
+			if _, err := b.Adopt(ctx, base, AdoptOptions{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = b.DeleteGeneration(id)
+	}
+}
+
+// The retention record survives concurrent updates from builds, activations and deletes.
+func TestRetentionRecordConcurrentUpdates(t *testing.T) {
+	b := newAdoptBuilder(t)
+	const n = 40
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("g%03d", i)
+		if err := os.MkdirAll(filepath.Join(b.generationsDir(), ids[i]), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := b.own(id); err != nil {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if err := b.updateRetention(func(r *retentionRecord) { r.Building = append(r.Building, "b-"+id) }); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	rec := b.loadRetention()
+	if len(rec.Generations) != n || len(rec.Building) != n {
+		t.Fatalf("lost updates: %d owned and %d building, want %d each", len(rec.Generations), len(rec.Building), n)
+	}
+	// Deleting half of them concurrently forgets exactly those.
+	for _, id := range ids[:n/2] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := b.DeleteGeneration(id); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if rec := b.loadRetention(); len(rec.Generations) != n/2 {
+		t.Fatalf("after deletes: %d owned, want %d", len(rec.Generations), n/2)
+	}
+	if _, err := os.Stat(b.retentionPath() + ".part"); !os.IsNotExist(err) {
+		t.Error("a temporary retention file was left behind")
 	}
 }

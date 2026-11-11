@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -105,7 +106,10 @@ func (s *Sink) Query(f Filter, limit int) (entries []Entry, more bool) {
 }
 
 // Each calls fn for every entry matching f, oldest first (a download of the filtered view).
-// It stops when fn returns false.
+// It stops when fn returns false. fn may be slow (it writes to a network connection): the
+// files are opened under the lock and read after it is released, so a reader that stalls
+// never holds up rotation, and with it every writer. A segment rotated or deleted meanwhile
+// is still read through its open handle.
 func (s *Sink) Each(f Filter, fn func(Entry) bool) {
 	if s.opt.Dir == "" {
 		for _, e := range s.snapshot() {
@@ -116,11 +120,25 @@ func (s *Sink) Each(f Filter, fn func(Entry) bool) {
 		return
 	}
 	s.fileMu.RLock()
-	defer s.fileMu.RUnlock()
+	var handles []*os.File
+	for _, path := range s.files() {
+		if fh, err := os.Open(path); err == nil {
+			handles = append(handles, fh)
+		}
+	}
+	s.fileMu.RUnlock()
+	defer func() {
+		for _, fh := range handles {
+			_ = fh.Close()
+		}
+	}()
+	// The current file keeps growing while this runs: stop at what existed at the start, so
+	// a download ends.
+	last := s.lastSeen()
 	stop := false
-	for _, file := range s.files() {
-		readFile(file, func(e Entry) {
-			if !stop && f.Match(e) && !fn(e) {
+	for _, fh := range handles {
+		scanEntries(fh, func(e Entry) {
+			if !stop && e.ID <= last && f.Match(e) && !fn(e) {
 				stop = true
 			}
 		})
@@ -128,4 +146,10 @@ func (s *Sink) Each(f Filter, fn func(Entry) bool) {
 			return
 		}
 	}
+}
+
+func (s *Sink) lastSeen() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastID
 }

@@ -296,3 +296,164 @@ func TestMinLevelDropsDebug(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// Review 1, finding 4: secrets behind percent-encoding, and credential headers whose value is
+// more than one token. Every secret here is synthetic.
+func TestRedactEncodedAndMultiPartCredentials(t *testing.T) {
+	const key = "mt_abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrst"
+	enc := func(s string) string { // percent-encode every byte
+		var b strings.Builder
+		for i := 0; i < len(s); i++ {
+			fmt.Fprintf(&b, "%%%02X", s[i])
+		}
+		return b.String()
+	}
+	cases := []struct {
+		name, in string
+		secrets  []string
+	}{
+		{"encoded parameter name and key prefix", "GET /x?%6bey=%6dt_" + key[3:] + " 200", []string{key[3:]}},
+		{"wholly encoded key", "GET /tiles/1/2/3.mvt?key=" + enc(key), []string{key[3:], enc(key[3:])}},
+		{"encoded header dump", "headers=" + enc("Authorization: Bearer "+key) + "&x=1", []string{key[3:]}},
+		{"double-encoded parameter", "next=%252Fx%253Fapi_key%253Dsekritsekritsekrit", []string{"sekritsekritsekrit"}},
+		{"custom scheme", "Authorization: Custom abcdefghijklmnop", []string{"abcdefghijklmnop", "Custom"}},
+		{"digest", `Authorization: Digest username="jeff", realm="maps", nonce="dcd98b7102dd2f0e", response="6629fae49393a05397450978507c4ef1"`,
+			[]string{"dcd98b7102dd2f0e", "6629fae49393a05397450978507c4ef1", "jeff"}},
+		{"several cookies", "Cookie: theme=dark; mapthing_session=0123456789abcdef0123456789abcdef; other=1", []string{"0123456789abcdef"}},
+		{"set-cookie", "Set-Cookie: mapthing_session=0123456789abcdef0123456789abcdef; Path=/; HttpOnly", []string{"0123456789abcdef"}},
+		{"json headers keep their neighbours", `{"Authorization":"Custom abcdefghijklmnop","Accept":"*/*"}`, []string{"abcdefghijklmnop"}},
+		{"go header map", "map[Accept:[*/*] Cookie:[a=1; mapthing_session=0123456789abcdef0123456789abcdef] X:[y]]", []string{"0123456789abcdef"}},
+		{"proxy authorization", "Proxy-Authorization: Basic dXNlcjpodW50ZXIyaHVudGVyMg==", []string{"dXNlcjpodW50ZXIy"}},
+	}
+	for _, c := range cases {
+		got := Redact(c.in)
+		if !strings.Contains(got, Mask) {
+			t.Errorf("%s: nothing redacted: %q", c.name, got)
+		}
+		for _, s := range c.secrets {
+			if strings.Contains(got, s) {
+				t.Errorf("%s: %q survived: %q", c.name, s, got)
+			}
+		}
+	}
+	// What sits beside a quoted header value is still there.
+	if got := Redact(`{"Authorization":"Custom abcdefghijklmnop","Accept":"*/*"}`); !strings.Contains(got, `"Accept":"*/*"`) {
+		t.Errorf("the next JSON field was swallowed: %q", got)
+	}
+	// Percent signs in ordinary lines change nothing.
+	for _, plain := range []string{"nodes: [ 15.5M 15% ] ways: [ 0 ]", "GET /fonts/Noto%20Sans%20Regular/0-255.pbf 200", "100% done", "bad escape %zz and %4"} {
+		if got := Redact(plain); got != plain {
+			t.Errorf("ordinary line changed: %q → %q", plain, got)
+		}
+	}
+
+	// Registered literals are found in URL-encoded form as well.
+	var r Redactor
+	r.AddSecret("p@ss w0rd/é!")
+	for _, in := range []string{
+		"login with p%40ss%20w0rd%2F%C3%A9%21 failed",
+		"login with p%40ss%20w0rd%2f%c3%a9! failed",                     // partly encoded, lower-case hex
+		"redirect=%2Flogin%3Fx%3Dp%2540ss%2520w0rd%252F%25C3%25A9%2521", // encoded twice
+	} {
+		got := r.Redact(in)
+		if !strings.Contains(got, Mask) || strings.Contains(got, "w0rd") {
+			t.Errorf("encoded registered secret survived: %q → %q", in, got)
+		}
+	}
+	// A nil redactor still applies the patterns.
+	if got := (*Redactor)(nil).Redact("?key=" + key); strings.Contains(got, key[3:]) {
+		t.Errorf("nil redactor: %q", got)
+	}
+}
+
+// Review 1, finding 5: the cut to the stored length happens after redaction, so a secret
+// lying across the cut is not shown in part.
+func TestRedactionBeforeTruncation(t *testing.T) {
+	const key = "mt_abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrst"
+	const password = "correct-horse-battery-staple-9"
+	check := func(name, secret string, sink *Sink, shown int) {
+		t.Helper()
+		// Put the secret at every offset around the cut, so each prefix length is tried.
+		for off := -len(secret) - 2; off <= 2; off++ {
+			pad := strings.Repeat("x", maxLine+off)
+			sink.Log("child", LevelInfo, "", pad+" "+secret+" tail")
+		}
+		got, _ := sink.Query(Filter{}, 1000)
+		for _, e := range got {
+			if len(e.Msg) > maxLine+32 {
+				t.Fatalf("%s: stored %d bytes, the cap is %d", name, len(e.Msg), maxLine)
+			}
+			// No run of the secret longer than `shown` characters may appear.
+			for n := len(secret); n > shown; n-- {
+				if strings.Contains(e.Msg, secret[:n]) {
+					t.Fatalf("%s: the first %d characters of the secret were logged (…%q)", name, n, e.Msg[len(e.Msg)-60:])
+				}
+			}
+		}
+	}
+	s := New(Options{Ring: 200})
+	s.AddSecret(password)
+	check("registered literal", password, s, 3) // shorter runs also occur in ordinary text
+	// "mt_" itself is not secret; nothing of the key body may follow it.
+	check("mapthing key", key, New(Options{Ring: 200}), 3)
+
+	// Input far beyond the cap is bounded, and still redacted where it is kept.
+	huge := New(Options{})
+	huge.Log("child", LevelInfo, "", "?key="+key+strings.Repeat("y", 3<<20))
+	got, _ := huge.Query(Filter{}, 1)
+	if len(got) != 1 || len(got[0].Msg) > maxLine+32 || strings.Contains(got[0].Msg, key[3:]) {
+		t.Fatalf("huge line: %d bytes", len(got[0].Msg))
+	}
+}
+
+// Review 1, finding 2: a download whose reader has stopped must not hold up rotation, and so
+// every writer behind it.
+func TestStalledDownloadDoesNotBlockWriters(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Options{Dir: dir, MaxBytes: 64 << 10, Ring: 10})
+	defer s.Close()
+	line := strings.Repeat("x", 300)
+	for i := range 100 {
+		s.Log("child", LevelInfo, "", fmt.Sprintf("before %03d %s", i, line))
+	}
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan int)
+	go func() {
+		n := 0
+		s.Each(Filter{}, func(Entry) bool {
+			if n == 0 {
+				close(entered)
+				<-release // the client stopped reading
+			}
+			n++
+			return true
+		})
+		done <- n
+	}()
+	<-entered
+	wrote := make(chan struct{})
+	go func() {
+		// Enough to rotate many times and delete the segments the download had open.
+		for i := range 2000 {
+			s.Log("child", LevelInfo, "", fmt.Sprintf("during %04d %s", i, line))
+		}
+		close(wrote)
+	}()
+	select {
+	case <-wrote:
+	case <-time.After(10 * time.Second):
+		t.Fatal("writers are blocked behind a stalled download")
+	}
+	if got, _ := s.Query(Filter{Text: "during 1999"}, 1); len(got) != 1 {
+		t.Error("the last line written during the download is missing")
+	}
+	close(release)
+	select {
+	case n := <-done:
+		// It reads what it had opened (deleted segments included), and nothing written later.
+		if n != 100 {
+			t.Errorf("the download saw %d entries, want the 100 that existed when it started", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the download did not finish")
+	}
+}

@@ -110,6 +110,7 @@ func (j *Job) Progress(frac float64, msg string) {
 	if frac > 1 {
 		frac = 1
 	}
+	msg = j.r.redact(msg)
 	j.mu.Lock()
 	j.row.Pct = frac
 	j.row.Message = msg
@@ -127,6 +128,7 @@ func (j *Job) Logf(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	now := time.Now()
 	for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
+		l = j.r.redact(l) // before the store, the event stream and the log
 		if err := j.r.st.AppendJobLog(context.WithoutCancel(j.ctx), j.ID, now, l); err != nil {
 			slog.Warn("job log", "job", j.ID, "err", err)
 		}
@@ -174,6 +176,10 @@ type Runner struct {
 	Details ErrorDetails
 	// Log, if set, receives every job log line as well (the server's log: internal/logs).
 	Log func(jobID int64, name string, at time.Time, line string)
+	// Redact, if set, is applied to everything a job says before it is stored or published:
+	// log lines, progress messages, the error, and the failure details kept in history. A
+	// tool's output can carry a download URL with credentials or a request header.
+	Redact func(string) string
 
 	mu      sync.Mutex
 	funcs   map[string]Func
@@ -334,6 +340,40 @@ func (r *Runner) poke() {
 	}
 }
 
+func (r *Runner) redact(s string) string {
+	if r.Redact == nil || s == "" {
+		return s
+	}
+	return r.Redact(s)
+}
+
+// redactValue applies redact to every string inside a decoded JSON-like value.
+func redactValue(v any, redact func(string) string) any {
+	switch x := v.(type) {
+	case string:
+		return redact(x)
+	case []string:
+		out := make([]string, len(x))
+		for i, s := range x {
+			out[i] = redact(s)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = redactValue(e, redact)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = redactValue(e, redact)
+		}
+		return out
+	}
+	return v
+}
+
 // Start recovers jobs interrupted by a restart (running → failed, queued → re-queued) and
 // processes the queue until ctx is done.
 func (r *Runner) Start(ctx context.Context) error {
@@ -417,6 +457,12 @@ func (r *Runner) run(parent context.Context, id int64) {
 
 	err = safeRun(ctx, f, j)
 
+	// The error is kept in the job row and history, sent over the event stream and shown
+	// on several pages: mask it once, here.
+	var errText string
+	if err != nil {
+		errText = r.redact(err.Error())
+	}
 	fin := time.Now().UTC()
 	j.mu.Lock()
 	j.row.FinishedAt = &fin
@@ -437,22 +483,22 @@ func (r *Runner) run(parent context.Context, id int64) {
 	case ctx.Err() != nil && parent.Err() == nil:
 		j.row.Status, j.row.Error = StatusCancelled, "cancelled"
 	default:
-		j.row.Status, j.row.Error = StatusFailed, err.Error()
+		j.row.Status, j.row.Error = StatusFailed, errText
 	}
 	final := j.row
 	j.mu.Unlock()
 	j.flush(true)
 	if err != nil {
-		j.Logf("job %s: %v", final.Status, err)
+		j.Logf("job %s: %s", final.Status, errText)
 	}
 
 	h := store.HistoryEntry{Kind: "job", OK: err == nil, JobID: &final.ID}
 	h.Message = fmt.Sprintf("%s (%s) %s in %s", final.Name, final.Trigger, final.Status, fin.Sub(now).Round(time.Second))
 	if err != nil {
-		h.Message += ": " + err.Error()
+		h.Message += ": " + errText
 		if r.Details != nil {
 			if d, ok := r.Details(err); ok {
-				h.Details, _ = json.Marshal(d)
+				h.Details, _ = json.Marshal(redactValue(d, r.redact))
 			}
 		}
 	}
@@ -460,7 +506,7 @@ func (r *Runner) run(parent context.Context, id int64) {
 		slog.Warn("history", "err", herr)
 	}
 	_ = r.st.PruneJobLogs(context.WithoutCancel(parent), 50)
-	slog.Info("job end", "job", id, "status", final.Status, "err", err)
+	slog.Info("job end", "job", id, "status", final.Status, "err", errText)
 }
 
 func safeRun(ctx context.Context, f Func, j *Job) (err error) {

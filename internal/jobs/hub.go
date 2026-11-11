@@ -63,11 +63,6 @@ func (h *Hub) Subscribers() int {
 // is called and its events are sent first.
 func (h *Hub) Handler(snapshot func() []Event) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fl, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-			return
-		}
 		ch, cancel := h.Subscribe()
 		defer cancel()
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -75,13 +70,29 @@ func (h *Hub) Handler(snapshot func() []Event) http.Handler {
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprint(w, "retry: 3000\n\n")
+		// Each write has a deadline and is checked, so a client that stops reading is dropped
+		// and unsubscribed instead of holding this goroutine in a blocked write.
+		rc := http.NewResponseController(w)
+		ok := true
+		flush := func() bool {
+			_ = rc.SetWriteDeadline(time.Now().Add(WriteTimeout))
+			if err := rc.Flush(); err != nil {
+				ok = false
+			}
+			return ok
+		}
+		_ = rc.SetWriteDeadline(time.Now().Add(WriteTimeout))
+		if _, err := fmt.Fprint(w, "retry: 3000\n\n"); err != nil {
+			return
+		}
 		if snapshot != nil {
 			for _, e := range snapshot() {
-				writeEvent(w, e)
+				ok = ok && writeEvent(w, e)
 			}
 		}
-		fl.Flush()
+		if !ok || !flush() {
+			return
+		}
 		tick := time.NewTicker(15 * time.Second)
 		defer tick.Stop()
 		for {
@@ -89,20 +100,30 @@ func (h *Hub) Handler(snapshot func() []Event) http.Handler {
 			case <-r.Context().Done():
 				return
 			case e := <-ch:
-				writeEvent(w, e)
-				fl.Flush()
+				_ = rc.SetWriteDeadline(time.Now().Add(WriteTimeout))
+				if !writeEvent(w, e) || !flush() {
+					return
+				}
 			case <-tick.C:
-				_, _ = fmt.Fprint(w, ": keepalive\n\n")
-				fl.Flush()
+				_ = rc.SetWriteDeadline(time.Now().Add(WriteTimeout))
+				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil || !flush() {
+					return
+				}
 			}
 		}
 	})
 }
 
-func writeEvent(w http.ResponseWriter, e Event) {
+// WriteTimeout is how long one write to an event stream may take before the client is given
+// up on.
+var WriteTimeout = 20 * time.Second
+
+// writeEvent writes one event; false when the client is gone.
+func writeEvent(w http.ResponseWriter, e Event) bool {
 	b, err := json.Marshal(e.Data)
 	if err != nil {
-		return
+		return true // nothing was written; the stream is fine
 	}
-	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, b)
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, b)
+	return err == nil
 }

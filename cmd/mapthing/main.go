@@ -133,6 +133,7 @@ func serve() error {
 	au.SetInternalToken(cfg.InternalToken)
 	au.SetTrustProxy(cfg.TrustedProxy)
 	runner := jobs.NewRunner(st)
+	runner.Redact = sink.Redact
 	runner.Log = func(id int64, _ string, at time.Time, line string) {
 		sink.Add(logs.Entry{Time: at, Source: logs.SourceBuild, Job: strconv.FormatInt(id, 10), Msg: line})
 	}

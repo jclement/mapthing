@@ -9,7 +9,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/tiles"
 )
@@ -103,14 +102,14 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	st := s.d.Scheduler.State()
 	builds := map[string]any{"schedule_enabled": st.Enabled, "next_run": st.NextRun, "cron": st.Cron, "active": nil, "last": nil}
 	if cur, ok := s.d.Jobs.Current(); ok && cur.Name == scheduler.BuildJob {
-		builds["active"] = jobs.View(cur)
+		builds["active"] = s.jobView(cur)
 	}
 	if js, err := s.d.Store.Jobs(ctx, 20); err == nil {
 		for _, j := range js {
 			if j.Name != scheduler.BuildJob || j.FinishedAt == nil {
 				continue
 			}
-			v := jobs.View(*j)
+			v := s.jobView(*j)
 			last := map[string]any{"id": v.ID, "status": v.Status, "trigger": v.Trigger, "started_at": v.StartedAt,
 				"finished_at": v.FinishedAt, "error": v.Error, "generation_id": v.GenerationID}
 			if j.StartedAt != nil {

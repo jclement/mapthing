@@ -36,9 +36,27 @@ type GenerationInfo struct {
 	Bytes int64
 }
 
-func (b *Builder) setBusy(building, activating string) {
+// reserveBuild records the generation a build is writing ("" when it ends).
+func (b *Builder) reserveBuild(id string) {
 	b.busyMu.Lock()
-	b.building, b.activating = building, activating
+	b.building = id
+	b.busyMu.Unlock()
+}
+
+// reserveActivation claims id for an adoption. false when a delete of it is under way.
+func (b *Builder) reserveActivation(id string) bool {
+	b.busyMu.Lock()
+	defer b.busyMu.Unlock()
+	if b.deleting[id] {
+		return false
+	}
+	b.activating = id
+	return true
+}
+
+func (b *Builder) releaseActivation() {
+	b.busyMu.Lock()
+	b.activating = ""
 	b.busyMu.Unlock()
 }
 
@@ -47,12 +65,6 @@ func (b *Builder) Building() string {
 	b.busyMu.Lock()
 	defer b.busyMu.Unlock()
 	return b.building
-}
-
-func (b *Builder) activatingNow() string {
-	b.busyMu.Lock()
-	defer b.busyMu.Unlock()
-	return b.activating
 }
 
 // Inventory lists every generation directory (newest first) with its state, and the disk
@@ -134,8 +146,9 @@ var (
 )
 
 // DeleteGeneration removes generations/<id> for good. It refuses the live generation
-// (ErrGenerationLive), the one a build is writing or an activation is switching to
-// (ErrGenerationBusy), and anything that is not a generation directory (ErrNoGeneration).
+// (ErrGenerationLive), the one a build is writing, an activation is switching to or another
+// delete is removing (ErrGenerationBusy), and anything that is not a generation directory
+// (ErrNoGeneration). Other generations can be deleted while a build runs.
 // Unlike retention it deletes a generation whether or not this data directory owns it: this
 // is a person's decision. A symbolic link under generations/ is removed, not followed.
 func (b *Builder) DeleteGeneration(id string) error {
@@ -143,26 +156,42 @@ func (b *Builder) DeleteGeneration(id string) error {
 		return fmt.Errorf("%w: %q is not a generation id", ErrNoGeneration, id)
 	}
 	dir := filepath.Join(b.generationsDir(), id)
+
+	// The checks and the claim are one step under the coordination lock. A build or an
+	// activation claims its generation under the same lock before touching it, and current
+	// only ever moves to a generation so claimed; so once this delete holds its claim, the
+	// directory cannot become live, be validated or be written until the claim is released.
+	b.busyMu.Lock()
 	fi, err := os.Lstat(dir)
-	if err != nil {
+	switch {
+	case err != nil:
+		b.busyMu.Unlock()
 		return fmt.Errorf("%w: there is no generation %s", ErrNoGeneration, id)
-	}
-	if id == b.Building() || id == b.activatingNow() {
+	case id == b.building || id == b.activating || b.deleting[id]:
+		b.busyMu.Unlock()
 		return ErrGenerationBusy
-	}
-	if id == b.CurrentGeneration() {
+	case b.isLive(id, dir):
+		b.busyMu.Unlock()
 		return ErrGenerationLive
+	case fi.Mode()&os.ModeSymlink == 0 && !fi.IsDir():
+		b.busyMu.Unlock()
+		return fmt.Errorf("%w: %s is not a directory", ErrNoGeneration, id)
 	}
-	// By directory too: current may name the same directory another way.
-	if live, err := filepath.EvalSymlinks(b.currentLink()); err == nil {
-		if real, err := filepath.EvalSymlinks(dir); err == nil && real == live {
-			return ErrGenerationLive
-		}
+	if b.deleting == nil {
+		b.deleting = map[string]bool{}
 	}
+	b.deleting[id] = true
+	b.busyMu.Unlock()
+	defer func() {
+		b.busyMu.Lock()
+		delete(b.deleting, id)
+		b.busyMu.Unlock()
+	}()
+
 	if fi.Mode()&os.ModeSymlink != 0 {
 		err = os.Remove(dir)
-	} else if !fi.IsDir() {
-		return fmt.Errorf("%w: %s is not a directory", ErrNoGeneration, id)
+	} else if b.removeAll != nil {
+		err = b.removeAll(dir)
 	} else {
 		err = os.RemoveAll(dir)
 	}
@@ -173,4 +202,18 @@ func (b *Builder) DeleteGeneration(id string) error {
 		r.Generations = without(r.Generations, id)
 		r.Building = without(r.Building, id)
 	})
+}
+
+// isLive reports whether id, or the directory it names, is what current points at (current
+// may name the same directory another way).
+func (b *Builder) isLive(id, dir string) bool {
+	if id == b.CurrentGeneration() {
+		return true
+	}
+	if live, err := filepath.EvalSymlinks(b.currentLink()); err == nil {
+		if real, err := filepath.EvalSymlinks(dir); err == nil && real == live {
+			return true
+		}
+	}
+	return false
 }
