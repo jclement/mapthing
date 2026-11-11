@@ -103,7 +103,11 @@ function CreateKey({
     }
   }
 
-  const origin = typeof location !== "undefined" ? location.origin : "https://maps.example.com";
+  // The address clients use: MAPTHING_PUBLIC_URL when set, else wherever this page was opened.
+  const sys = useApi(() => api.system(), []);
+  const origin =
+    sys.data?.public_url ||
+    (typeof location !== "undefined" ? location.origin : "https://maps.example.com");
 
   if (created) {
     return (

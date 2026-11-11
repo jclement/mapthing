@@ -56,3 +56,19 @@ func TestSlimModeFromEnv(t *testing.T) {
 		t.Errorf("MAPTHING_SERVE=tiles,maps accepted")
 	}
 }
+
+func TestTrustedProxy(t *testing.T) {
+	t.Setenv("ADMIN_USER", "a")
+	t.Setenv("ADMIN_PASSWORD", "b")
+	for v, want := range map[string]bool{"": false, "off": false, "0": false, "on": true, "ON": true, "true": true, "1": true} {
+		t.Setenv("MAPTHING_TRUSTED_PROXY", v)
+		c, err := FromEnv()
+		if err != nil || c.TrustedProxy != want {
+			t.Errorf("MAPTHING_TRUSTED_PROXY=%q: %v, %v; want %v", v, c.TrustedProxy, err, want)
+		}
+	}
+	t.Setenv("MAPTHING_TRUSTED_PROXY", "cloudflare")
+	if _, err := FromEnv(); err == nil {
+		t.Error("a value that is neither on nor off was accepted")
+	}
+}

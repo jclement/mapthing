@@ -384,6 +384,9 @@ export interface SystemInfo {
   current_generation: string | null;
   attribution: { name: string; license: string; url?: string; note?: string }[];
   imagery_source: { name: string; attribution: string; url?: string } | null;
+  /** MAPTHING_PUBLIC_URL ("" when unset): the address clients use, for snippets. */
+  public_url?: string;
+  trusted_proxy?: boolean;
 }
 
 // ---------- types: keyed ----------

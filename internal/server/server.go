@@ -340,7 +340,8 @@ func (s *Server) logRequests(h http.Handler) http.Handler {
 			traffic.Observe(stats.TrafficKind(info.Kind, r.URL.Path), dur, sw.status)
 		}
 		if sw.status >= 500 || slog.Default().Enabled(r.Context(), slog.LevelDebug) {
-			slog.Info("http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "bytes", sw.n, "dur", dur.Round(time.Millisecond))
+			slog.Info("http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "bytes", sw.n,
+				"dur", dur.Round(time.Millisecond), "ip", s.d.Auth.ClientIP(r))
 		}
 	})
 }

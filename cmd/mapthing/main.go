@@ -131,6 +131,7 @@ func serve() error {
 	ss := stats.New(st)
 	au := auth.New(cfg.AdminUser, cfg.AdminPassword, st, ks, ss, cfg.PublicURL)
 	au.SetInternalToken(cfg.InternalToken)
+	au.SetTrustProxy(cfg.TrustedProxy)
 	runner := jobs.NewRunner(st)
 	runner.Log = func(id int64, _ string, at time.Time, line string) {
 		sink.Add(logs.Entry{Time: at, Source: logs.SourceBuild, Job: strconv.FormatInt(id, 10), Msg: line})
@@ -200,7 +201,8 @@ func serve() error {
 	deps := server.Deps{
 		DataDir: cfg.DataDir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner,
 		Scheduler: sched, Supervisor: sup, Tiles: ts, Assets: assets.FS(), UI: web.Dist(), Logs: sink,
-		Info: map[string]any{"serve": cfg.Serve.List(), "renderer": map[bool]string{false: "on", true: "off"}[cfg.RendererOff]},
+		Info: map[string]any{"serve": cfg.Serve.List(), "renderer": map[bool]string{false: "on", true: "off"}[cfg.RendererOff],
+			"public_url": cfg.PublicURL, "trusted_proxy": cfg.TrustedProxy},
 	}
 	f = &features{cfg: cfg, store: st, runner: runner, sup: sup, watcher: watcher, tiles: ts}
 	if err := f.wire(ctx, &deps); err != nil {
@@ -228,7 +230,7 @@ func serve() error {
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("mapthing listening", "addr", cfg.Listen, "data", cfg.DataDir, "version", server.Version, "generation", ts.Generation(),
-			"serve", cfg.Serve.List(), "renderer", !cfg.RendererOff)
+			"serve", cfg.Serve.List(), "renderer", !cfg.RendererOff, "public_url", cfg.PublicURL, "trusted_proxy", cfg.TrustedProxy)
 		errc <- srv.ListenAndServe()
 	}()
 	select {

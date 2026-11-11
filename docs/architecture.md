@@ -490,7 +490,7 @@ when the style does not template it, and with `MAPTHING_IMAGERY_URL` set replace
 every font in the stack answer 404.
 
 **Configuration** (environment): `MAPTHING_DATA`, `MAPTHING_LISTEN`, `ADMIN_USER`,
-`ADMIN_PASSWORD`, `MAPTHING_PUBLIC_URL`, `MAPTHING_VALHALLA_URL` (default
+`ADMIN_PASSWORD`, `MAPTHING_PUBLIC_URL`, `MAPTHING_TRUSTED_PROXY` (`off`), `MAPTHING_VALHALLA_URL` (default
 `http://127.0.0.1:8002`; blue/green also uses the next port), `MAPTHING_VALHALLA_CMD` (`{config}`), `MAPTHING_RENDERER_URL` (default
 `http://127.0.0.1:8081`), `MAPTHING_RENDERER_CMD` (default `node /opt/renderer/server.js`),
 `MAPTHING_RENDERER_HEALTH_URL` (default renderer URL + `/health`), `MAPTHING_RASTER_CACHE_MB`
@@ -499,6 +499,33 @@ every font in the stack answer 404.
 `MAPTHING_DEBUG`, `MAPTHING_LOG_MAX_MB` (50: total size of the log files), `MAPTHING_RENDERER` (`on`; `off` starts no renderer and raster tiles answer
 404 `renderer_off`), `MAPTHING_SERVE` (`tiles,routing,elevation`; a part left out is not served
 and its files are not required of a generation: [operations.md](operations.md)). Caches live in `/data/raster-cache`, `/data/imagery-cache`, `/data/pack-cache`.
+
+**Behind a proxy or tunnel.** The usual deployment is a tunnel or reverse proxy that terminates
+TLS and reaches the container over plain HTTP on a private network (`samples/`).
+
+- `MAPTHING_PUBLIC_URL` is the base of every URL the server writes: tile, glyph and sprite URLs
+  in styles, `tiles` in TileJSON, and the snippets the admin UI shows for a new key
+  (`public_url` in `/admin/api/system`). Without it the base is taken from each request
+  (`X-Forwarded-Proto` and `X-Forwarded-Host` when present, else the request's own scheme and
+  host), which is right only when the proxy passes the public host through. The renderer's
+  internal requests and the admin UI's own map (a session, no key) always get the host they
+  came in on, so the admin map also works on `http://127.0.0.1:8080`.
+- `MAPTHING_TRUSTED_PROXY=on` makes `auth.Auth.ClientIP` take the client address from
+  `CF-Connecting-IP`, else the first `X-Forwarded-For` entry (values that are not an IP
+  address are skipped), else the connection. It is what the login throttle (5 failures in
+  5 minutes per address), per-client rate limits and request log lines (`ip=`) use. Off by
+  default, and the headers are then ignored: a directly reachable server must not let a client
+  name its own address. Turn it on only when the port is not published to clients (the
+  compose sample binds it to 127.0.0.1; anyone on the host itself can still claim an address).
+- The renderer's internal token is accepted only from a loopback **connection**, never from a
+  forwarded address, whatever this setting is.
+- The session cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` when the browser came over
+  HTTPS: a TLS connection, `X-Forwarded-Proto: https`, Cloudflare's `CF-Visitor`, or a request
+  for the host of an `https` `MAPTHING_PUBLIC_URL`. Over plain HTTP on the box itself
+  (`http://127.0.0.1:8080/admin`) it is not `Secure`, so that still works.
+- The CSRF check accepts the request's host, `X-Forwarded-Host` and the public URL's host.
+- Server-sent events (`/admin/api/events`, `/admin/api/logs/stream`) send a comment every 15 s
+  and `X-Accel-Buffering: no`, so proxies neither buffer nor time them out.
 
 **Errors.** Keyed and admin errors are JSON `{"error":{"code","message"}}`, except under
 `/maps/api/` (Google Elevation shape), `/directions/v2` (Google RPC shape) and `/ors/` (ORS

@@ -90,7 +90,8 @@ refuses to start, with a clear message, when the data volume is too small.
 | Variable | Default | |
 |---|---|---|
 | `ADMIN_USER`, `ADMIN_PASSWORD` | (required) | the admin login |
-| `MAPTHING_PUBLIC_URL` | from the request | external base URL written into styles and TileJSON |
+| `MAPTHING_PUBLIC_URL` | from the request | external base URL written into styles, TileJSON and the key snippets; set it behind a proxy or tunnel |
+| `MAPTHING_TRUSTED_PROXY` | `off` | `on` when every request arrives through a reverse proxy or tunnel: the client address is then taken from `CF-Connecting-IP`, else the first `X-Forwarded-For` entry, for login throttling, rate limits and logs |
 | `MAPTHING_DATA` | `/data` | data directory |
 | `MAPTHING_LISTEN` | `:8080` | listen address |
 | `MAPTHING_WATER_POLYGONS_URL`, `MAPTHING_LAND_POLYGONS_URL` | osmdata.openstreetmap.de | mirrors for Planetiler's ocean/land polygons |

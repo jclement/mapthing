@@ -181,9 +181,13 @@ func (s *Server) Mount(mux *http.ServeMux, wrap func(kind string, h http.Handler
 	}
 }
 
-// baseURL is the public base URL for links inside styles and TileJSON.
+// baseURL is the base of the URLs written into styles and TileJSON: MAPTHING_PUBLIC_URL for
+// a client with a key. The renderer and the admin UI (a session, no key) get the address they
+// came in on instead: the renderer talks to this process directly, and the admin map must keep
+// working on http://127.0.0.1:8080 where the session cookie would not follow it to the public
+// host.
 func (s *Server) baseURL(r *http.Request) string {
-	if p, _ := auth.FromContext(r.Context()); s.opt.PublicURL != "" && !p.Internal {
+	if p, _ := auth.FromContext(r.Context()); s.opt.PublicURL != "" && !p.Internal && !p.Admin {
 		return strings.TrimRight(s.opt.PublicURL, "/")
 	}
 	scheme := "http"
