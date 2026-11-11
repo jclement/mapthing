@@ -28,7 +28,9 @@ live. To put it on the internet under your own hostname, follow
 - **Elevation** at points and along paths, from the best open DEM for each area (USGS 3DEP in
   the US, NRCan and provincial data in Canada, Copernicus elsewhere).
 - **Compatibility endpoints**, so existing clients can switch by changing a URL: Google
-  Elevation API, Google Routes `computeRoutes`, and OpenRouteService v2.
+  Elevation API, Google Routes `computeRoutes`, Mapbox Static Tiles URLs, and OpenRouteService
+  v2. [docs/switching.md](docs/switching.md) says exactly what switches by changing the host,
+  what has an equivalent, and what is not served at all.
 
 ## Sizing
 

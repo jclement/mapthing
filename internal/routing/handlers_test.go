@@ -55,6 +55,20 @@ func TestPassthrough(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "3.9.1") {
 		t.Errorf("status: %d %s", rec.Code, rec.Body)
 	}
+	// However the key was sent, it stays here: the engine never sees it.
+	for _, p := range []string{"api_key", "access_token", "key"} {
+		do(t, c, "GET", "/api/v1/valhalla/status?verbose=1&"+p+"=mt_secret", "", nil)
+	}
+	f.mu.Lock()
+	for _, q := range f.queries {
+		if strings.Contains(q, "mt_secret") {
+			t.Errorf("the engine was sent the key: %s", q)
+		}
+	}
+	if len(f.queries) < 4 || !strings.Contains(f.queries[len(f.queries)-1], "verbose=1") {
+		t.Errorf("queries as the engine saw them: %v", f.queries)
+	}
+	f.mu.Unlock()
 	rec = do(t, c, "POST", "/api/v1/valhalla/route", `{"locations":[]}`, nil)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"trip"`) {
 		t.Errorf("route: %d", rec.Code)

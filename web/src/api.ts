@@ -791,6 +791,14 @@ export function keySnippets(origin: string, secret: string, style: StyleName = D
       value: `${origin}/tiles/basemap.pmtiles?key=${secret}`,
     },
     {
+      label: "Mapbox Static Tiles URL (host and token changed)",
+      value: `${origin}/styles/v1/mapbox/${style}/tiles/512/{z}/{x}/{y}@2x?access_token=${secret}`,
+    },
+    {
+      label: "Google Routes API compatible (computeRoutes)",
+      value: `curl -X POST ${origin}/directions/v2:computeRoutes -H 'Content-Type: application/json' -H 'X-Goog-Api-Key: ${secret}' -H 'X-Goog-FieldMask: routes.distanceMeters,routes.duration' -d '{"origin":{"location":{"latLng":{"latitude":31.8457,"longitude":-102.3676}}},"destination":{"location":{"latLng":{"latitude":31.9973,"longitude":-102.0779}}},"travelMode":"DRIVE"}'`,
+    },
+    {
       label: "Google Elevation API compatible",
       value: `${origin}/maps/api/elevation/json?locations=31.9686,-102.0779&key=${secret}`,
     },
