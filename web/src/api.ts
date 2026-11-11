@@ -373,11 +373,34 @@ export interface Overview {
   };
 }
 
+/** One environment variable mapthing reads (GET /admin/api/settings). */
+export interface Setting {
+  name: string;
+  group: string;
+  value: string; // the effective value; a fixed mask for a secret that is set
+  default?: string;
+  source: "env" | "image" | "default"; // set by the operator, set by the image itself, or unset
+  secret?: boolean;
+  set: boolean;
+  help: string;
+}
+
+export interface SoftwareVersion {
+  name: string;
+  version: string; // "" when it could not be determined
+  detail?: string;
+}
+
+export interface SettingsInfo {
+  settings: Setting[];
+  versions: SoftwareVersion[];
+}
+
 export interface SystemInfo {
   version: string;
   commit: string;
   build_date: string;
-  components: { name: string; version: string }[];
+  components: SoftwareVersion[];
   ready: boolean;
   readiness: { name: string; ok: boolean; detail?: string }[];
   disk: { free_bytes: number; total_bytes: number };
@@ -505,6 +528,7 @@ export const api = {
   overview: () => request<Overview>("GET", "/admin/api/overview"),
   stats: () => request<Stats>("GET", "/admin/api/stats"),
   system: () => request<SystemInfo>("GET", "/admin/api/system"),
+  settings: () => request<SettingsInfo>("GET", "/admin/api/settings"),
 
   styles: () => request<StyleInfo[]>("GET", "/styles"),
 

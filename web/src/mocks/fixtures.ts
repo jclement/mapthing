@@ -6,6 +6,8 @@ import type {
   Generation,
   LogEntry,
   Region,
+  Setting,
+  SettingsInfo,
   SystemInfo,
 } from "../api";
 
@@ -619,4 +621,150 @@ export function logEntries(): LogEntry[] {
   add(2, "mapthing", "info", "stats flushed rows=14");
   out.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
   return out;
+}
+
+export function settingsInfo(): SettingsInfo {
+  const set = (name: string, group: string, value: string, def: string, help: string): Setting => ({
+    name,
+    group,
+    value,
+    default: def,
+    source: "env",
+    set: true,
+    help,
+  });
+  const dflt = (name: string, group: string, def: string, help: string): Setting => ({
+    name,
+    group,
+    value: def,
+    default: def,
+    source: "default",
+    set: false,
+    help,
+  });
+  return {
+    versions: [
+      { name: "mapthing", version: "0.9.0", detail: "commit 7efee20a1b2c, built 2026-11-10" },
+      { name: "Go", version: "1.27.3", detail: "the language mapthing is built with" },
+      { name: "Valhalla", version: "3.9.1", detail: "routing engine and graph builder" },
+      {
+        name: "Planetiler (Protomaps basemap)",
+        version: "basemaps ca93fc06efba",
+        detail: "vector basemap builder, protomaps-basemap.jar",
+      },
+      {
+        name: "Renderer (MapLibre Native)",
+        version: "6.4.1",
+        detail: "raster tiles, Node 24.11.1",
+      },
+      { name: "GDAL", version: "3.8.4", detail: "elevation build" },
+      { name: "osmium", version: "1.16.0", detail: "merging and clipping extracts" },
+      { name: "Java", version: "21.0.8", detail: "runs Planetiler" },
+    ],
+    settings: [
+      set("ADMIN_USER", "Access", "admin", "(required)", "The admin login name."),
+      {
+        name: "ADMIN_PASSWORD",
+        group: "Access",
+        value: "••••••••",
+        default: "(required)",
+        source: "env",
+        secret: true,
+        set: true,
+        help: "The admin password.",
+      },
+      set(
+        "MAPTHING_PUBLIC_URL",
+        "Access",
+        "https://maps.example.com",
+        "taken from each request",
+        "The address clients use. Written into styles, TileJSON and key snippets. Set it behind a proxy or tunnel.",
+      ),
+      set(
+        "MAPTHING_TRUSTED_PROXY",
+        "Access",
+        "on",
+        "off",
+        "on: every request arrives through a proxy or tunnel, so the client address comes from CF-Connecting-IP or X-Forwarded-For.",
+      ),
+      {
+        ...dflt("MAPTHING_LISTEN", "Access", ":8080", "The address the server listens on."),
+        source: "image",
+        set: true,
+      },
+      {
+        name: "MAPTHING_INTERNAL_TOKEN",
+        group: "Access",
+        value: "",
+        default: "generated at each start",
+        source: "default",
+        secret: true,
+        set: false,
+        help: "Shared with the renderer so it can read tiles without an API key.",
+      },
+      dflt(
+        "MAPTHING_DATA",
+        "Serving",
+        "/data",
+        "The data folder: generations, downloads, caches, logs and the database.",
+      ),
+      dflt(
+        "MAPTHING_SERVE",
+        "Serving",
+        "tiles,routing,elevation",
+        "Which parts this server serves.",
+      ),
+      dflt(
+        "MAPTHING_RENDERER",
+        "Serving",
+        "on",
+        "off runs without the raster renderer; raster tile requests then answer 404.",
+      ),
+      dflt(
+        "MAPTHING_LOG_MAX_MB",
+        "Serving",
+        "50",
+        "Total size of the log files kept in the data folder.",
+      ),
+      set(
+        "MAPTHING_RASTER_CACHE_MB",
+        "Caches and limits",
+        "8192",
+        "2048",
+        "Disk cache of rendered raster tiles.",
+      ),
+      dflt(
+        "MAPTHING_IMAGERY_CACHE_MB",
+        "Caches and limits",
+        "4096",
+        "Disk cache of satellite imagery tiles.",
+      ),
+      dflt(
+        "MAPTHING_DISK_GUARD_FACTOR",
+        "Builds",
+        "1",
+        "Multiplies the free disk a build asks for before it starts.",
+      ),
+      dflt(
+        "MAPTHING_PLANETILER_XMX",
+        "Builds",
+        "60% of available memory",
+        "Java heap for the basemap build, for example 12g.",
+      ),
+      dflt(
+        "MAPTHING_CONTOURS_MAXZOOM",
+        "Terrain and contours",
+        "12",
+        "Deepest contour zoom. 0 turns contours off.",
+      ),
+      {
+        name: "MAPTHING_TRUSTED_PROXI",
+        group: "Not recognised",
+        value: "on",
+        source: "env",
+        set: true,
+        help: "mapthing does not read this variable. Check the name.",
+      },
+    ],
+  };
 }

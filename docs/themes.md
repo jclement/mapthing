@@ -7,7 +7,7 @@ a client can toggle imagery under the roads and labels.
 | Theme | For | Character |
 |---|---|---|
 | `overlay` | light apps that draw dense data on the map (points, pipelines, survey grids) | cool pale-grey land, greyed water and vegetation, neutral (never warm) land-use fills, well pads (`industrial`) in neutral grey, white roads ranked by width and casing darkness, white-cored service roads, muted taupe tracks, streams from z12, Interstate and US shields only below z11, no POI icons, soft hillshade |
-| `overlay-dark` | the same, in dark application chrome | charcoal land, dark slate water, roads lighten with rank, service roads with a body over a dark casing, warm-grey tracks, streams from z12, grey route tags instead of black shields, highlight-led hillshade, no POI icons |
+| `overlay-dark` | the same, in dark application chrome | charcoal land, dark slate water, roads lighten with rank and motorways alone are a muted gold, well pads and yards (`industrial`) a warm grey clearly lighter than the land, service roads with a body over a dark casing, warm-grey tracks, streams from z12, grey route tags instead of black shields, highlight-led hillshade, no POI icons |
 | `field` | outdoor use in sunlight | warm paper land, strong blue water and green vegetation, orange motorways, yellow trunk/primary/secondary roads, dark-cased white tertiary, minor and lease/service roads (about 3 px at z13, 5.5 px at z15), dark-brown dashed tracks from z11, strong hillshade, labels 20% larger with 2 px halos, route shields 1.4x the Protomaps size |
 
 ## Design rules
@@ -15,7 +15,12 @@ a client can toggle imagery under the roads and labels.
 - **Overlay themes recede.** Basemap hue is kept away from the colours data layers tend to use:
   water is a desaturated grey-blue (so cyan and blue data stay distinct), vegetation is nearly
   neutral (so green data stays distinct), tracks are taupe rather than orange. Road rank is
-  carried by width and casing, not hue. Service and lease roads are always drawn as a road (a
+  carried by width and casing, not hue, with one exception: on `overlay-dark`, where every
+  road is a grey on charcoal and width alone did not lift the main routes out of a city grid,
+  motorways are a muted gold (`#a09258`), a hue none of the usual data colours use.
+- **Pads must be seen.** Well pads and yards are what a lease road leads to. On `overlay-dark`
+  they were two lightness steps from the land (`#201f1e` on `#1b1d1f`) and could not be seen;
+  they are `#2f2e2b`, still below every road so a lease road reads across a pad. Service and lease roads are always drawn as a road (a
   core with a casing), never as a single thin grey line that could be read as a survey grid.
 - **Labels stay legible.** Place and road labels are ≥ 3:1 against their halos in the overlay
   themes (most ≥ 4.5:1) and ≥ 4.5:1 in `field`.

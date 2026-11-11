@@ -19,8 +19,8 @@ describe("login", () => {
   });
 
   it("goes back to the login form when signing out", async () => {
-    const { user } = renderApp("/system");
-    await screen.findByRole("heading", { name: "System" });
+    const { user } = renderApp("/settings");
+    await screen.findByRole("heading", { name: "Settings" });
     await user.click(screen.getAllByRole("button", { name: "Sign out" })[0]);
     expect(await screen.findByLabelText("Username")).toBeInTheDocument();
   });

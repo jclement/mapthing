@@ -205,6 +205,8 @@ func serve() error {
 		Info: map[string]any{"serve": cfg.Serve.List(), "renderer": map[bool]string{false: "on", true: "off"}[cfg.RendererOff],
 			"public_url": cfg.PublicURL, "trusted_proxy": cfg.TrustedProxy},
 	}
+	deps.Settings = func() []config.Setting { return config.Describe(config.Environ(), sink.Redact) }
+	deps.Versions = imageVersions(cfg)
 	f = &features{cfg: cfg, store: st, runner: runner, sup: sup, watcher: watcher, tiles: ts}
 	if err := f.wire(ctx, &deps); err != nil {
 		return err

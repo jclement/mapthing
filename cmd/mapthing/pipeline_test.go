@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -141,5 +142,51 @@ func TestBuildOptionsReuseLiveTerrain(t *testing.T) {
 	}
 	if o := f.buildOptions(regions, nil, false, true, nil); o.ReuseTerrain != "" {
 		t.Errorf("rebuild_terrain still offers %q", o.ReuseTerrain)
+	}
+}
+
+func TestParseVersion(t *testing.T) {
+	for in, want := range map[string]string{
+		"valhalla_service 3.9.1\n":                         "3.9.1",
+		"openjdk version \"21.0.8\" 2026-07-15\nOpenJDK …": "21.0.8",
+		"osmium version 1.16.0\nlibosmium version 2.20.0":  "1.16.0",
+		"GDAL 3.8.4, released 2024/02/08":                  "3.8.4",
+		"v24.11.1":                                         "24.11.1",
+		"":                                                 "",
+		"no numbers here":                                  "",
+	} {
+		if got := parseVersion(in); got != want {
+			t.Errorf("parseVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Every MAPTHING_* variable the code reads is either on the Settings page or known to be
+// internal, so a new setting cannot be added without appearing there.
+func TestEveryEnvVarIsDescribed(t *testing.T) {
+	re := regexp.MustCompile(`"(MAPTHING_[A-Z0-9_]+)"`)
+	seen := map[string]string{}
+	for _, root := range []string{"../../internal", "../../cmd"} {
+		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return nil //nolint:nilerr // skip what cannot be read
+			}
+			b, _ := os.ReadFile(p)
+			for _, m := range re.FindAllSubmatch(b, -1) {
+				seen[string(m[1])] = p
+			}
+			return nil
+		})
+	}
+	if len(seen) < 30 {
+		t.Fatalf("found only %d variables; is the scan looking in the right place?", len(seen))
+	}
+	for name, where := range seen {
+		if strings.HasSuffix(name, "_") || strings.HasPrefix(name, "MAPTHING_TEST_") || strings.HasPrefix(name, "MAPTHING_FAKE_") {
+			continue // prefixes, and test hooks
+		}
+		if !config.KnownVar(name) {
+			t.Errorf("%s (read in %s) is not on the Settings page: add it to internal/config/settings.go", name, where)
+		}
 	}
 }

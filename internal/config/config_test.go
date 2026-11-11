@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseServe(t *testing.T) {
 	all := Serve{Tiles: true, Routing: true, Elevation: true}
@@ -70,5 +73,67 @@ func TestTrustedProxy(t *testing.T) {
 	t.Setenv("MAPTHING_TRUSTED_PROXY", "cloudflare")
 	if _, err := FromEnv(); err == nil {
 		t.Error("a value that is neither on nor off was accepted")
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	env := []string{
+		"ADMIN_USER=admin",
+		"ADMIN_PASSWORD=correct-horse",
+		"MAPTHING_PUBLIC_URL=https://maps.example.com",
+		"MAPTHING_IMAGERY_URL=https://tiles.example.com/{z}/{x}/{y}.jpg?key=sekrit",
+		"MAPTHING_LOG_MAX_MB=",                         // set but empty: the default applies
+		"MAPTHING_RENDERER_CMD=/opt/renderer/start.sh", // what the image sets
+		"MAPTHING_LISTEN=:9090",                        // the image sets :8080; this was changed
+		"MAPTHING_TRUSTED_PROXI=on",                    // a typo
+		"MAPTHING_SPARE_API_KEY=abc123",                // unknown and secret-looking
+		"MAPTHING_IMAGE_VERSION=1.2.3",                 // the image's own, not a setting
+		"TUNNEL_TOKEN=eyJhbGciOi",                      // not ours at all: never listed
+		"PATH=/usr/bin",
+	}
+	redact := func(s string) string { return strings.ReplaceAll(s, "sekrit", "[redacted]") }
+	got := map[string]Setting{}
+	var order []string
+	for _, s := range Describe(env, redact) {
+		got[s.Name] = s
+		order = append(order, s.Name)
+	}
+	check := func(name, value, source string, set bool) {
+		t.Helper()
+		s, ok := got[name]
+		if !ok || s.Value != value || s.Source != source || s.Set != set {
+			t.Errorf("%s = %+v (listed %v); want value %q source %q set %v", name, s, ok, value, source, set)
+		}
+	}
+	check("ADMIN_USER", "admin", "env", true)
+	check("ADMIN_PASSWORD", SecretMask, "env", true)
+	check("MAPTHING_INTERNAL_TOKEN", "", "default", false)
+	check("MAPTHING_PUBLIC_URL", "https://maps.example.com", "env", true)
+	check("MAPTHING_IMAGERY_URL", "https://tiles.example.com/{z}/{x}/{y}.jpg?key=[redacted]", "env", true)
+	check("MAPTHING_LOG_MAX_MB", "50", "default", false)
+	check("MAPTHING_TRUSTED_PROXY", "off", "default", false)
+	check("MAPTHING_RENDERER_CMD", "/opt/renderer/start.sh", "image", true)
+	check("MAPTHING_LISTEN", ":9090", "env", true)
+	check("MAPTHING_TRUSTED_PROXI", "on", "env", true)
+	check("MAPTHING_SPARE_API_KEY", SecretMask, "env", true)
+	if got["MAPTHING_TRUSTED_PROXI"].Group != "Not recognised" {
+		t.Errorf("the typo is in group %q", got["MAPTHING_TRUSTED_PROXI"].Group)
+	}
+	for _, absent := range []string{"MAPTHING_IMAGE_VERSION", "TUNNEL_TOKEN", "PATH"} {
+		if _, ok := got[absent]; ok {
+			t.Errorf("%s should not be listed", absent)
+		}
+	}
+	all := strings.Join(order, ",")
+	for _, s := range got {
+		if strings.Contains(s.Value, "correct-horse") || strings.Contains(s.Value, "sekrit") || strings.Contains(s.Value, "abc123") || strings.Contains(s.Value, "eyJ") {
+			t.Errorf("%s leaks a secret: %q", s.Name, s.Value)
+		}
+		if s.Help == "" {
+			t.Errorf("%s has no help text", s.Name)
+		}
+	}
+	if order[0] != "ADMIN_USER" || !strings.HasSuffix(all, "MAPTHING_SPARE_API_KEY,MAPTHING_TRUSTED_PROXI") {
+		t.Errorf("order: %s", all)
 	}
 }

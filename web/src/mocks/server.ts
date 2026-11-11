@@ -726,6 +726,7 @@ export function emitLog(e: Omit<LogEntry, "id" | "t"> & { t?: string }) {
 }
 
 on("GET", /^\/admin\/api\/overview$/, () => overview());
+on("GET", /^\/admin\/api\/settings$/, () => fx.settingsInfo());
 on("GET", /^\/admin\/api\/stats$/, () => stats());
 on("GET", /^\/admin\/api\/system$/, () => {
   const live = S.generations.find((g) => g.status === "live");
