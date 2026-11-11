@@ -7,6 +7,7 @@ import { EventsProvider } from "./lib/events";
 import { BuildsPage } from "./pages/Builds";
 import { KeysPage } from "./pages/Keys";
 import { LoginPage } from "./pages/Login";
+import { LogsPage } from "./pages/Logs";
 import { MapPage } from "./pages/Map";
 import { RegionsPage } from "./pages/Regions";
 import { SchedulePage } from "./pages/Schedule";
@@ -49,6 +50,7 @@ export function AppShell() {
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="keys" element={<KeysPage />} />
           <Route path="stats" element={<StatsPage />} />
+          <Route path="logs" element={<LogsPage />} />
           <Route path="system" element={<SystemPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

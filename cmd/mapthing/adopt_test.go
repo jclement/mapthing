@@ -173,7 +173,7 @@ func TestActivateGenerationBlueGreen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sup := supervisor.New("")
+	sup := supervisor.New()
 	sup.Start(ctx)
 	var mu sync.Mutex
 	var swaps []string

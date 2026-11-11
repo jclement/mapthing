@@ -18,6 +18,7 @@ import (
 	"github.com/jclement/mapthing/internal/auth"
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/keys"
+	"github.com/jclement/mapthing/internal/logs"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/stats"
 	"github.com/jclement/mapthing/internal/store"
@@ -39,8 +40,9 @@ type Deps struct {
 	Scheduler  *scheduler.Scheduler
 	Supervisor *supervisor.Supervisor
 	Tiles      *tiles.Server
-	Assets     fs.FS // styles/fonts/sprites (for the style list)
-	UI         fs.FS // built admin UI (index.html at the root)
+	Logs       *logs.Sink // the server's log (nil → the logs endpoints answer 503)
+	Assets     fs.FS      // styles/fonts/sprites (for the style list)
+	UI         fs.FS      // built admin UI (index.html at the root)
 
 	// Mounts register feature endpoints (routing, elevation, compatibility APIs).
 	Mounts []Mountable
@@ -116,6 +118,10 @@ func (s *Server) routes() {
 	m.Handle("POST /admin/api/build", admin(s.startBuild))
 	m.Handle("GET /admin/api/generations", admin(s.generations))
 	m.Handle("POST /admin/api/generations/{id}/activate", admin(s.activateGeneration))
+
+	m.Handle("GET /admin/api/logs", admin(s.logsQuery))
+	m.Handle("GET /admin/api/logs/download", admin(s.logsDownload))
+	m.Handle("GET /admin/api/logs/stream", admin(s.logsStream))
 
 	m.Handle("GET /admin/api/schedule", admin(s.getSchedule))
 	m.Handle("PUT /admin/api/schedule", admin(s.putSchedule))

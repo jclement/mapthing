@@ -95,6 +95,7 @@ refuses to start, with a clear message, when the data volume is too small.
 | `MAPTHING_LISTEN` | `:8080` | listen address |
 | `MAPTHING_WATER_POLYGONS_URL`, `MAPTHING_LAND_POLYGONS_URL` | osmdata.openstreetmap.de | mirrors for Planetiler's ocean/land polygons |
 | `MAPTHING_RENDERER` | `on` | `off` runs without the raster renderer (raster tiles answer 404); saves about 150 MiB at idle |
+| `MAPTHING_LOG_MAX_MB` | `50` | total size of the log files kept in `/data/logs` (the admin Logs page reads them) |
 | `MAPTHING_SERVE` | `tiles,routing,elevation` | what this server serves; `routing,elevation` makes a backend that needs no basemap |
 
 **Building on one machine and serving on another.** `mapthing-build -regions-file … -out DIR`

@@ -160,7 +160,7 @@ func newEnv(t *testing.T, withGeneration bool, opts ...func(*Deps)) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sup := supervisor.New("")
+	sup := supervisor.New()
 	deps := Deps{DataDir: dir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner, Scheduler: sched,
 		Supervisor: sup, Tiles: ts, Assets: testAssets, UI: fstest.MapFS{"index.html": {Data: []byte("<html>ui</html>")}, "assets/app-123.js": {Data: []byte("js")}}}
 	for _, o := range opts {

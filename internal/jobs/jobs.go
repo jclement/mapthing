@@ -131,6 +131,9 @@ func (j *Job) Logf(format string, args ...any) {
 			slog.Warn("job log", "job", j.ID, "err", err)
 		}
 		j.r.hub.publish(Event{Type: "log", Data: LogView(store.LogLine{JobID: j.ID, At: now.UTC(), Line: l})})
+		if j.r.Log != nil {
+			j.r.Log(j.ID, j.Name, now, l)
+		}
 	}
 }
 
@@ -169,6 +172,8 @@ type Runner struct {
 
 	// Details, if set, turns job errors into structured history details.
 	Details ErrorDetails
+	// Log, if set, receives every job log line as well (the server's log: internal/logs).
+	Log func(jobID int64, name string, at time.Time, line string)
 
 	mu      sync.Mutex
 	funcs   map[string]Func

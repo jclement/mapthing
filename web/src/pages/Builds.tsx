@@ -9,6 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 import { api, type Generation, type Job, type LogLine, type Stage, type StageName } from "../api";
 import {
   Badge,
@@ -299,9 +300,15 @@ function HistoryRow({ j }: { j: Job }) {
             </div>
             {failed && (
               <p className="mt-2 text-xs text-muted">
-                Failed during {STAGE_LABEL[failed.name]}. The previous generation stayed live.
+                Failed during {stageLabel(failed.name)}. The previous generation stayed live.
               </p>
             )}
+            <Link
+              to={`/logs?job=${encodeURIComponent(j.id)}`}
+              className="mt-2 inline-block text-xs font-medium text-accent-strong hover:underline"
+            >
+              {j.status === "failed" ? "See what went wrong in the log" : "Open this build's log"}
+            </Link>
           </td>
         </tr>
       )}

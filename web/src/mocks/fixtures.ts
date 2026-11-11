@@ -1,5 +1,13 @@
 // Realistic fixtures for the mock backend (dev without a server, tests, screenshots).
-import type { ApiKey, CatalogEntry, ElevationSource, Generation, Region, SystemInfo } from "../api";
+import type {
+  ApiKey,
+  CatalogEntry,
+  ElevationSource,
+  Generation,
+  LogEntry,
+  Region,
+  SystemInfo,
+} from "../api";
 
 const GB = 1e9;
 const MB = 1e6;
@@ -429,4 +437,157 @@ export function systemInfo(ready: boolean, gen: string | null): SystemInfo {
       url: "https://example.com",
     },
   };
+}
+
+// A few days of log lines: the server, both routing instances, the renderer and two builds
+// (j_0103 succeeded, j_0102 failed in the basemap stage).
+export function logEntries(): LogEntry[] {
+  const out: LogEntry[] = [];
+  const now = Date.now();
+  let seq = 0;
+  const add = (
+    minsAgo: number,
+    source: string,
+    level: LogEntry["level"],
+    msg: string,
+    job?: string,
+  ) => {
+    const ms = now - minsAgo * 60000;
+    out.push({
+      id: `${ms}${String(seq++ % 1000000).padStart(6, "0")}`,
+      t: new Date(ms).toISOString(),
+      source,
+      level,
+      msg,
+      ...(job ? { job } : {}),
+    });
+  };
+  const d = 1440;
+  let m = 0; // minutes ago; step() moves it towards now
+  const step = (
+    delta: number,
+    source: string,
+    level: LogEntry["level"],
+    msg: string,
+    job?: string,
+  ) => {
+    m -= delta;
+    add(m, source, level, msg, job);
+  };
+  // The failed build, 6.2 days ago.
+  m = 6.2 * d;
+  step(0, "mapthing", "info", "job start job=j_0102 name=build trigger=manual");
+  step(0, "build", "info", "== stage: guard", "j_0102");
+  step(1, "build", "info", "disk: need 61 GB, 74 GB free", "j_0102");
+  step(1, "build", "info", "== stage: download", "j_0102");
+  step(4, "build", "info", "texas-latest.osm.pbf: unchanged (2026-11-03)", "j_0102");
+  step(1, "build", "info", "== stage: basemap", "j_0102");
+  step(1, "build", "info", "$ java -Xmx12g -jar /opt/mapthing/protomaps-basemap.jar", "j_0102");
+  for (let i = 0; i < 30; i++)
+    step(
+      0.4,
+      "build",
+      "info",
+      `0:${String(i).padStart(2, "0")}:12 INF [osm_pass2] - nodes: [ ${(i * 3.1).toFixed(1)}M ${i * 3}% ] ways: [ 0 ]`,
+      "j_0102",
+    );
+  step(
+    0.2,
+    "build",
+    "warn",
+    "0:12:40 WAR [osm_pass2] - GC overhead is high: 41% of the last minute",
+    "j_0102",
+  );
+  step(
+    0.2,
+    "build",
+    "error",
+    "0:12:58 ERR [osm_pass2] - java.lang.OutOfMemoryError: Java heap space",
+    "j_0102",
+  );
+  step(0.1, "build", "error", "stage basemap failed: java: exit status 1", "j_0102");
+  step(
+    0,
+    "mapthing",
+    "error",
+    'job end job=j_0102 status=failed err="build stage basemap: java: exit status 1"',
+  );
+  // The last good build, 3.1 days ago, and the swap.
+  m = 3.1 * d;
+  step(0, "mapthing", "info", "job start job=j_0103 name=build trigger=schedule");
+  for (const st of [
+    "guard",
+    "download",
+    "merge",
+    "basemap",
+    "valhalla",
+    "terrain",
+    "verify",
+    "swap",
+    "retention",
+  ]) {
+    step(9, "build", "info", `== stage: ${st}`, "j_0103");
+    step(1, "build", "info", `stage ${st} done`, "j_0103");
+  }
+  step(1, "valhalla@8003", "info", "valhalla@8003 started (pid 2211)");
+  step(
+    0.1,
+    "valhalla@8003",
+    "info",
+    "2026/11/08 03:41:10.118 [INFO] Tile extract successfully loaded with 48213 tiles",
+  );
+  step(0.1, "mapthing", "info", "generation live id=20261108T030012Z previous=20261101T030009Z");
+  step(0.1, "valhalla@8002", "info", "valhalla@8002 stopped");
+  step(0, "mapthing", "info", "job end job=j_0103 status=succeeded");
+  // A renderer crash yesterday.
+  m = 1.2 * d;
+  step(
+    0,
+    "renderer",
+    "warn",
+    "render overlay-dark/512/14/3518/6630@2x: 4 tiles failed to load (degraded)",
+  );
+  step(
+    2,
+    "renderer",
+    "error",
+    "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+  );
+  step(0.01, "renderer", "error", "renderer exited after 2d 1h (signal: aborted); restart 1 in 1s");
+  step(
+    0.02,
+    "mapthing",
+    "info",
+    'child state child=renderer state=backoff msg="signal: aborted; restarting in 1s"',
+  );
+  step(
+    0.02,
+    "xvfb",
+    "info",
+    "The XKEYBOARD keymap compiler (xkbcomp) reports: Could not resolve keysym XF86CameraAccessEnable",
+  );
+  step(0.02, "renderer", "info", "renderer started (pid 2214)");
+  step(0.05, "renderer", "info", "renderer listening on 127.0.0.1:8081 (pool 4)");
+  step(0.01, "mapthing", "info", 'child state child=renderer state=running msg=""');
+  // Today.
+  add(190, "mapthing", "warn", "admin login failed ip=203.0.113.7");
+  add(
+    188,
+    "mapthing",
+    "info",
+    "http method=GET path=/styles/overlay-dark.json?key=[redacted] status=401 bytes=71 dur=0s ip=203.0.113.7",
+  );
+  for (let i = 0; i < 40; i++)
+    add(
+      170 - i * 4,
+      "valhalla@8003",
+      i % 13 === 5 ? "warn" : "info",
+      i % 13 === 5
+        ? "2026/11/11 14:02:11.402 [WARN] Exceeded max time for route: 5.2s"
+        : `2026/11/11 14:${String(i).padStart(2, "0")}:07.311 [INFO] 200 POST /route 0.0${(i % 7) + 2}s`,
+    );
+  add(6, "mapthing", "info", "catalog: Geofabrik index refreshed (512 extracts)");
+  add(2, "mapthing", "info", "stats flushed rows=14");
+  out.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
+  return out;
 }

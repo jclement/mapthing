@@ -174,6 +174,25 @@ export interface Generation {
   manifest: Manifest;
 }
 
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/** One line of the server's log (GET /admin/api/logs and its stream). */
+export interface LogEntry {
+  id: string; // orders entries; a nanosecond timestamp as a decimal string
+  t: string;
+  source: string; // "mapthing", "build", or a child process ("renderer", "valhalla@8002", "xvfb")
+  level: LogLevel;
+  job?: string; // build job id, for source "build"
+  msg: string;
+}
+
+export interface LogPage {
+  entries: LogEntry[]; // oldest first
+  more: boolean; // older matching entries exist
+  sources: string[];
+  store: { bytes: number; max_bytes: number; oldest?: string; file_error?: string };
+}
+
 export interface Schedule {
   cron: string; // 5-field, UTC
   enabled: boolean;
@@ -354,6 +373,9 @@ export const api = {
   createKey: (k: NewKey) => request<CreatedKey>("POST", "/admin/api/keys", k),
   revokeKey: (id: string) => request<void>("DELETE", `/admin/api/keys/${encodeURIComponent(id)}`),
 
+  /** `query` is the string lib/logs.ts apiQuery builds ("" or "?…"). */
+  logs: (query: string) => request<LogPage>("GET", `/admin/api/logs${query}`),
+
   stats: () => request<Stats>("GET", "/admin/api/stats"),
   system: () => request<SystemInfo>("GET", "/admin/api/system"),
 
@@ -400,6 +422,47 @@ export function subscribeEvents(onEvent: (e: ServerEvent) => void): () => void {
     for (const [t, h] of listeners) es.removeEventListener(t, h as EventListener);
     es.close();
   };
+}
+
+/** Live log lines from /admin/api/logs/stream (same query as api.logs, plus after=<id>). */
+export function subscribeLogs(
+  query: string,
+  on: {
+    entry: (e: LogEntry) => void;
+    dropped?: (count: number) => void;
+    state?: (connected: boolean) => void;
+  },
+): () => void {
+  const es = new EventSource(`/admin/api/logs/stream${query}`, { withCredentials: true });
+  const entry = (ev: MessageEvent) => {
+    try {
+      on.entry(JSON.parse(ev.data) as LogEntry);
+    } catch {
+      /* ignore a malformed event */
+    }
+  };
+  const dropped = (ev: MessageEvent) => {
+    try {
+      on.dropped?.((JSON.parse(ev.data) as { count: number }).count);
+    } catch {
+      /* ignore */
+    }
+  };
+  es.addEventListener("entry", entry as EventListener);
+  es.addEventListener("dropped", dropped as EventListener);
+  es.onopen = () => on.state?.(true);
+  es.onerror = () => on.state?.(false);
+  return () => {
+    es.removeEventListener("entry", entry as EventListener);
+    es.removeEventListener("dropped", dropped as EventListener);
+    es.close();
+  };
+}
+
+/** Download link for the filtered log (`query` as for api.logs). */
+export function logsDownloadUrl(query: string, format: "text" | "jsonl" = "text"): string {
+  const sep = query ? "&" : "?";
+  return `/admin/api/logs/download${query}${format === "jsonl" ? `${sep}format=jsonl` : ""}`;
 }
 
 // ---------- URLs ----------

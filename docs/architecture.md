@@ -56,7 +56,8 @@ renderer or without a basemap (`MAPTHING_RENDERER`, `MAPTHING_SERVE`). See
                               retention never touches any other directory
   current -> generations/<gen-id>   atomic symlink swap
   imagery-cache/              cached satellite imagery tiles (bounded LRU)
-  logs/
+  logs/                       the server's log: log-current.jsonl and rotated log-<id>.jsonl
+                              segments, bounded in total by MAPTHING_LOG_MAX_MB (see Logs)
 ```
 
 A **region** is something you download (a Geofabrik extract such as `us/texas` or
@@ -120,6 +121,7 @@ Admin (session cookie):
 | GET/PUT | `/admin/api/schedule` | refresh schedule (cron expression, default weekly Sunday 03:00 UTC; per-region enable) |
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
 | GET | `/admin/api/stats` | tiles/routes/elevation calls by key and by day, cache hit rates, disk per generation and region, RAM, subprocess state |
+| GET | `/admin/api/logs`, `/admin/api/logs/stream` (SSE), `/admin/api/logs/download` | the server's log: filtered pages, a live tail, and the filtered view as a file (see Logs) |
 | GET | `/admin/api/system` | versions, disk free, attribution, and the slim-mode settings (`renderer`: `on`/`off`, `serve`: the served parts) |
 
 ## Go layout
@@ -136,6 +138,7 @@ internal/jobs         job runner, progress, logs, SSE fan-out
 internal/build        generation builds (download, merge, planetiler, valhalla, elevation, verify, swap)
 internal/scheduler    cron → build jobs
 internal/supervisor   child processes (valhalla_service, renderer)
+internal/logs         the one log: capture, redaction, ring buffer, rotating files, queries, live tail
 internal/pmtiles      the one PMTiles v3 implementation: reader (leaf cache), writer (any order,
                       dedupe, in-place Create/Commit or spooled Finish to an io.Writer), extract
 internal/tiles        z/x/y serving, TileJSON, styles, packs, imagery proxy, raster proxy
@@ -146,6 +149,71 @@ internal/server       HTTP routes, embedding web/dist
 web/                  admin UI (React + Vite + Tailwind + MapLibre GL JS), built into web/dist
 docker/               Dockerfile, renderer sidecar, style assets, fonts
 ```
+
+## Logs
+
+Everything the container prints goes through one sink (`internal/logs`), wired in
+`cmd/mapthing/main.go`:
+
+| Source | What |
+|---|---|
+| `mapthing` | the server's own `slog` output (the sink's `slog.Handler` is the default logger) |
+| `renderer`, `valhalla@<port>` | each supervised child's stdout and stderr (`supervisor.Supervisor.Output`), plus a line from the supervisor when the child starts, cannot start, or exits (level `error`, with the reason and the restart delay) |
+| `xvfb` | the renderer's X server; `docker/renderer/start.sh` prefixes its lines with `[xvfb] ` |
+| `build` | build-job output (`jobs.Runner.Log`), tagged with the job id |
+
+Each entry is `{id, t, source, level, job?, msg}`. `id` orders entries and is unique across
+restarts (the time in nanoseconds, nudged forward on a tie; a string in JSON). `level` is
+`debug`, `info`, `warn` or `error`: the server's own lines carry theirs, a child's JSON log line
+(`{"level":…,"msg":…}`) is unpacked, and other lines are classified by the conventions the tools
+use (`[ERROR]`, ` WAR `, `Error:` …; unknown is `info`). Valhalla's per-request chatter (five
+lines for every health probe) is `debug`. Debug lines are dropped unless `MAPTHING_DEBUG` is set.
+Terminal colour codes are stripped.
+
+**Redaction** happens once, on the way in, so no secret reaches memory, the files, the console
+or the UI. `logs.Redact` masks (as `[redacted]`):
+
+- `Authorization`, `Proxy-Authorization`, `X-Goog-Api-Key`, `X-Mapthing-Internal`, `X-Api-Key`,
+  `Cookie` and `Set-Cookie` values, in header, `key=value`, JSON and Go map forms;
+- bearer tokens anywhere;
+- query parameters `key`, `sig` and any whose name contains `password`, `secret`, `token`,
+  `api_key`, `access_key`, `credential` or `signature`;
+- `name=value` and `"name": "value"` pairs with such a name (`ADMIN_PASSWORD=…`, `TUNNEL_TOKEN=…`);
+- credentials in URLs (`scheme://user:pass@host`);
+- mapthing keys (`mt_…`), Google API keys (`AIza…`) and JWT-shaped blobs wherever they appear.
+
+The admin password and the internal token are also registered as literals (`Sink.AddSecret`) and
+removed whatever surrounds them. Redaction errs on the side of masking. Request logging records
+the path without its query string.
+
+**Storage.** The last 5 000 entries stay in memory. Every entry is also appended to
+`<data>/logs/log-current.jsonl` (one JSON object per line). At a tenth of
+`MAPTHING_LOG_MAX_MB` (default 50, in MB of 10^6 bytes) the file is renamed `log-<last id>.jsonl`
+and the oldest segments are deleted so the total stays under the bound. Every line is still
+printed to stderr as `time LEVEL [source #job] message`, so `docker logs` shows everything the
+Logs page does. If the directory cannot be written the server runs on, memory only, and the
+Logs page says so. (Older versions wrote `<data>/logs/<child>.log`; those files are no longer
+written or read and can be deleted.)
+
+**API** (admin session). The three endpoints share one filter in the query string: `source=a,b`,
+`level` (that level and above), `q` (case-insensitive text), `job`, `since` and `until`
+(RFC 3339), `before` and `after` (entry ids).
+
+- `GET /admin/api/logs?…&limit=500` → `{entries (oldest first), more, sources, store:{bytes,
+  max_bytes, oldest, file_error?}}`: the newest `limit` (≤ 5 000) matches. Page back with
+  `before=<oldest id shown>`. It answers from memory when that holds enough and reads the files
+  otherwise, so it reaches as far back as they go (`store.oldest`).
+- `GET /admin/api/logs/stream?…&after=<id>` (SSE): event `entry` per matching line as it is
+  written, after first replaying the matches newer than `after`, so a page that loaded history
+  and then connects misses nothing. A reader that falls behind loses lines rather than slowing
+  the writer, and is told with event `dropped` `{count}`.
+- `GET /admin/api/logs/download?…[&format=jsonl]` → every match, oldest first, as a text file
+  (the console format) or JSON lines.
+
+The admin **Logs** page (`/admin/logs`) is a client of these: live tail with pause and
+follow, source chips, level, text search, time range, download. Its URL carries the filter, so
+`/admin/logs?job=12` shows one build and `/admin/logs?source=renderer` one process; a failed
+build's history row links to the first.
 
 ## Elevation
 
@@ -415,7 +483,7 @@ every font in the stack answer 404.
 `MAPTHING_RENDERER_HEALTH_URL` (default renderer URL + `/health`), `MAPTHING_RASTER_CACHE_MB`
 (2048), `MAPTHING_IMAGERY_CACHE_MB` (4096), `MAPTHING_PACK_CACHE_MB` (4096),
 `MAPTHING_PACK_MAX_TILES` (2000000), `MAPTHING_INTERNAL_TOKEN`, `MAPTHING_IMAGERY_URL`,
-`MAPTHING_DEBUG`, `MAPTHING_RENDERER` (`on`; `off` starts no renderer and raster tiles answer
+`MAPTHING_DEBUG`, `MAPTHING_LOG_MAX_MB` (50: total size of the log files), `MAPTHING_RENDERER` (`on`; `off` starts no renderer and raster tiles answer
 404 `renderer_off`), `MAPTHING_SERVE` (`tiles,routing,elevation`; a part left out is not served
 and its files are not required of a generation: [operations.md](operations.md)). Caches live in `/data/raster-cache`, `/data/imagery-cache`, `/data/pack-cache`.
 

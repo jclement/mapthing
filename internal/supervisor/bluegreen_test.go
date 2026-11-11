@@ -103,7 +103,7 @@ func get(base, path string) (string, error) {
 func TestBlueGreenSwapWithoutDowntime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sup := New("")
+	sup := New()
 	sup.Start(ctx)
 	var base atomic.Value
 	bg := newBG(t, sup, map[string]fakeCfg{"g1": {}, "g2": {delayMS: 700}}, &base)
@@ -184,7 +184,7 @@ func TestBlueGreenSwapWithoutDowntime(t *testing.T) {
 func TestBlueGreenKeepsOldWhenNewFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sup := New("")
+	sup := New()
 	sup.Start(ctx)
 	var base atomic.Value
 	bg := newBG(t, sup, map[string]fakeCfg{"g1": {}, "bad": {fail: true}}, &base)
@@ -213,7 +213,7 @@ func TestBlueGreenKeepsOldWhenNewFails(t *testing.T) {
 func TestBlueGreenUnavailableBinary(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sup := New("")
+	sup := New()
 	sup.Start(ctx)
 	bg := &BlueGreen{Name: "ghost", Sup: sup, Ports: freePorts(t),
 		Child: func(string, int) (Child, error) {
@@ -233,7 +233,7 @@ func TestBlueGreenUnavailableBinary(t *testing.T) {
 func TestBlueGreenPrepareAbortAndCommit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sup := New("")
+	sup := New()
 	sup.Start(ctx)
 	var base atomic.Value
 	bg := newBG(t, sup, map[string]fakeCfg{"g1": {}, "g2": {}, "g3": {}}, &base)

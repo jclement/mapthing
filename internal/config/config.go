@@ -32,6 +32,7 @@ type Config struct {
 	ImageryCacheMB int64  // MAPTHING_IMAGERY_CACHE_MB, default 4096
 	PackCacheMB    int64  // MAPTHING_PACK_CACHE_MB, default 4096
 	PackMaxTiles   uint64 // MAPTHING_PACK_MAX_TILES, default 2000000
+	LogMaxMB       int64  // MAPTHING_LOG_MAX_MB, default 50: total size of the log files in <data>/logs
 
 	// InternalToken authenticates the local renderer's requests (MAPTHING_INTERNAL_TOKEN;
 	// generated at startup when unset and passed to the renderer child).
@@ -87,6 +88,9 @@ func FromEnv() (Config, error) {
 	c.ImageryCacheMB = num("MAPTHING_IMAGERY_CACHE_MB", 4096)
 	c.PackCacheMB = num("MAPTHING_PACK_CACHE_MB", 4096)
 	c.PackMaxTiles = uint64(num("MAPTHING_PACK_MAX_TILES", 2_000_000))
+	if c.LogMaxMB = num("MAPTHING_LOG_MAX_MB", 50); c.LogMaxMB == 0 {
+		errs = append(errs, errors.New("MAPTHING_LOG_MAX_MB must be at least 1"))
+	}
 	if c.AdminUser == "" || c.AdminPassword == "" {
 		errs = append(errs, errors.New("ADMIN_USER and ADMIN_PASSWORD must be set"))
 	}

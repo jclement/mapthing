@@ -8,6 +8,7 @@ import {
   Map as MapIcon,
   Monitor,
   Moon,
+  ScrollText,
   Server,
   Sun,
 } from "lucide-react";
@@ -25,6 +26,7 @@ const NAV = [
   { to: "/schedule", label: "Schedule", icon: CalendarClock },
   { to: "/keys", label: "API keys", icon: KeyRound },
   { to: "/stats", label: "Stats", icon: Gauge },
+  { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/system", label: "System", icon: Server },
 ];
 

@@ -8,6 +8,7 @@ import type {
   ElevationSample,
   Generation,
   Job,
+  LogEntry,
   LogLine,
   LonLat,
   NewKey,
@@ -41,6 +42,7 @@ interface State {
   generations: Generation[];
   jobs: Job[];
   logs: Record<string, LogLine[]>;
+  logEntries: LogEntry[];
   keys: ApiKey[];
   schedule: Schedule;
   tickMs: number;
@@ -70,6 +72,12 @@ export function resetMock(opts: MockOptions = {}) {
     generations: gens,
     jobs: history,
     logs: {},
+    logEntries: empty
+      ? fx
+          .logEntries()
+          .filter((e) => e.source === "mapthing")
+          .slice(-6)
+      : fx.logEntries(),
     keys: empty ? [] : fx.apiKeys(),
     schedule: {
       cron: "0 3 * * 0",
@@ -582,6 +590,54 @@ on("DELETE", /^\/admin\/api\/keys\/(.+)$/, (m) => {
   S.keys = S.keys.filter((k) => k.id !== m[1]);
   return json(204, undefined);
 });
+// ---- logs ----
+const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 } as const;
+const idLess = (a: string, b: string) => (a.length !== b.length ? a.length < b.length : a < b);
+function logMatcher(q: URLSearchParams) {
+  const sources = (q.get("source") ?? "").split(",").filter(Boolean);
+  const level = q.get("level") as keyof typeof LEVEL_RANK | null;
+  const text = (q.get("q") ?? "").toLowerCase();
+  const job = q.get("job");
+  const since = q.get("since");
+  const until = q.get("until");
+  const before = q.get("before");
+  const after = q.get("after");
+  return (e: LogEntry) =>
+    (!sources.length || sources.includes(e.source)) &&
+    (!level || LEVEL_RANK[e.level] >= LEVEL_RANK[level]) &&
+    (!text || e.msg.toLowerCase().includes(text)) &&
+    (!job || e.job === job) &&
+    (!since || e.t >= since) &&
+    (!until || e.t < until) &&
+    (!before || idLess(e.id, before)) &&
+    (!after || idLess(after, e.id));
+}
+on("GET", /^\/admin\/api\/logs$/, (_m, _b, url) => {
+  const limit = Number(url.searchParams.get("limit")) || 500;
+  const all = S.logEntries.filter(logMatcher(url.searchParams));
+  const size = S.logEntries.reduce((n, e) => n + e.msg.length + 90, 0);
+  return {
+    entries: all.slice(-limit),
+    more: all.length > limit,
+    sources: [...new Set(S.logEntries.map((e) => e.source))].sort((a, b) =>
+      a === "mapthing" ? -1 : b === "mapthing" ? 1 : a.localeCompare(b),
+    ),
+    store: { bytes: size * 400, max_bytes: 50e6, oldest: S.logEntries[0]?.t },
+  };
+});
+
+/** Append a line to the mock log and send it to every open log stream (tests, and the ticker). */
+export function emitLog(e: Omit<LogEntry, "id" | "t"> & { t?: string }) {
+  const t = e.t ?? new Date().toISOString();
+  const last = S.logEntries[S.logEntries.length - 1]?.id ?? "0";
+  let id = `${Date.parse(t)}000000`;
+  if (!idLess(last, id)) id = (BigInt(last) + 1n).toString();
+  const entry: LogEntry = { ...e, id, t };
+  S.logEntries.push(entry);
+  for (const l of logListeners) l(entry);
+  return entry;
+}
+
 on("GET", /^\/admin\/api\/stats$/, () => stats());
 on("GET", /^\/admin\/api\/system$/, () => {
   const live = S.generations.find((g) => g.status === "live");
@@ -788,6 +844,8 @@ async function handle(input: RequestInfo | URL, init?: RequestInit): Promise<Res
   return null;
 }
 
+const logListeners = new Set<(e: LogEntry) => void>();
+
 class MockEventSource {
   readyState = 1;
   url: string;
@@ -800,9 +858,23 @@ class MockEventSource {
     const ev = new MessageEvent(e.type, { data: JSON.stringify(e.data) });
     for (const h of this.l.get(e.type) ?? []) h(ev);
   };
+  private logFn: ((e: LogEntry) => void) | null = null;
   constructor(url: string) {
     this.url = url;
-    listeners.add(this.fn);
+    const u = new URL(url, location.href);
+    if (u.pathname === "/admin/api/logs/stream") {
+      // The log stream: its own filter, and event "entry".
+      const match = logMatcher(u.searchParams);
+      this.logFn = (e) => {
+        if (!match(e)) return;
+        const ev = new MessageEvent("entry", { data: JSON.stringify(e) });
+        for (const h of this.l.get("entry") ?? []) h(ev);
+      };
+      logListeners.add(this.logFn);
+    } else {
+      listeners.add(this.fn);
+    }
+    setTimeout(() => this.onopen?.(new Event("open")), 0);
   }
   addEventListener(t: string, h: (e: MessageEvent) => void) {
     if (!this.l.has(t)) this.l.set(t, new Set());
@@ -814,6 +886,7 @@ class MockEventSource {
   close() {
     this.readyState = 2;
     listeners.delete(this.fn);
+    if (this.logFn) logListeners.delete(this.logFn);
   }
 }
 
