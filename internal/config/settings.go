@@ -55,6 +55,8 @@ var settingDefs = []settingDef{
 	{name: "MAPTHING_IMAGERY_URL", group: GroupServing, def: "built-in open sources", sensitive: true, help: "A satellite imagery tile URL template to use instead of the built-in sources."},
 	{name: "MAPTHING_IMAGERY_ATTRIBUTION", group: GroupServing, def: "", help: "Attribution text for MAPTHING_IMAGERY_URL."},
 	{name: "MAPTHING_IMAGERY_MAXZOOM", group: GroupServing, def: "19", help: "Deepest zoom MAPTHING_IMAGERY_URL has."},
+	{name: "MAPTHING_UPDATE_CHECK", group: GroupServing, def: "on", help: "off stops the daily question to the image registry whether a newer image exists. Nothing is sent but the request for the image's public description."},
+	{name: "MAPTHING_UPDATE_IMAGE", group: GroupServing, def: "ghcr.io/jclement/mapthing:<MAPTHING_TAG or latest>", help: "The image and tag to compare with, if you run a copy from another registry."},
 	{name: "MAPTHING_LOG_MAX_MB", group: GroupServing, def: "50", help: "Total size of the log files kept in the data folder."},
 	{name: "MAPTHING_DEBUG", group: GroupServing, def: "off", help: "Any value turns on debug logging, including every request and the routing engine's per-request lines."},
 

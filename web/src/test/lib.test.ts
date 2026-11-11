@@ -141,3 +141,37 @@ describe("limits", () => {
     expect(share(5, null)).toBe(0);
   });
 });
+
+describe("updateLine", () => {
+  it("covers every state of the update check", async () => {
+    const { updateLine } = await import("../lib/overview");
+    const base = {
+      enabled: true,
+      image: "ghcr.io/jclement/mapthing:latest",
+      current_revision: "a",
+      current_created: null,
+      checked_at: null,
+      latest_revision: "",
+      latest_created: null,
+      update_available: false,
+    };
+    expect(updateLine(null)).toBe("");
+    expect(updateLine(base)).toBe("not checked for a newer image yet");
+    expect(updateLine({ ...base, error: "the registry answered 502" })).toBe(
+      "could not check for a newer image",
+    );
+    expect(
+      updateLine({ ...base, checked_at: new Date().toISOString(), latest_revision: "a" }),
+    ).toMatch(/^up to date \(checked /);
+    expect(updateLine({ ...base, update_available: true, latest_revision: "b" })).toBe(
+      "a newer image is available",
+    );
+    expect(
+      updateLine({
+        ...base,
+        enabled: false,
+        reason: "this is a local build, not a published image",
+      }),
+    ).toBe("update check off: this is a local build, not a published image");
+  });
+});

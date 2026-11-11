@@ -26,6 +26,7 @@ import (
 	"github.com/jclement/mapthing/internal/store"
 	"github.com/jclement/mapthing/internal/supervisor"
 	"github.com/jclement/mapthing/internal/tiles"
+	"github.com/jclement/mapthing/internal/update"
 )
 
 // Version is set at build time (-ldflags "-X github.com/jclement/mapthing/internal/server.Version=…").
@@ -75,6 +76,8 @@ type Deps struct {
 	BuildEstimate func(ctx context.Context) (needBytes int64, ok bool)
 	// Versions lists the software in the image (Valhalla, Planetiler, the renderer, GDAL…),
 	// after mapthing itself and Go, which the server adds. Optional.
+	// Update reports whether a newer image has been published (nil → not shown).
+	Update   func() update.Status
 	Versions func() []Component
 	// Settings returns the effective configuration for the Settings page (config.Describe).
 	// nil → 503 on /admin/api/settings.
@@ -188,7 +191,15 @@ func (s *Server) routes() {
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": Version})
+	// building: a map build is running. An update script reads it to wait for a quiet moment
+	// (replacing the container loses a running build).
+	building := false
+	if s.d.Jobs != nil {
+		if cur, ok := s.d.Jobs.Current(); ok && cur.Name == scheduler.BuildJob {
+			building = true
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": Version, "building": building})
 }
 
 // readyz: a generation is live and the supervised children are up. Children that are

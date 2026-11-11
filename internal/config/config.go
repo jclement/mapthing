@@ -37,6 +37,10 @@ type Config struct {
 	ImageryCacheMB int64  // MAPTHING_IMAGERY_CACHE_MB, default 4096
 	PackCacheMB    int64  // MAPTHING_PACK_CACHE_MB, default 4096
 	PackMaxTiles   uint64 // MAPTHING_PACK_MAX_TILES, default 2000000
+	// UpdateCheckOff: MAPTHING_UPDATE_CHECK=off. By default the server asks the image registry
+	// once a day whether UpdateImage has moved on.
+	UpdateCheckOff bool
+	UpdateImage    string // MAPTHING_UPDATE_IMAGE, default ghcr.io/jclement/mapthing:<MAPTHING_TAG or latest>
 	LogMaxMB       int64  // MAPTHING_LOG_MAX_MB, default 50: total size of the log files in <data>/logs
 
 	// InternalToken authenticates the local renderer's requests (MAPTHING_INTERNAL_TOKEN;
@@ -76,6 +80,21 @@ func FromEnv() (Config, error) {
 		c.TrustedProxy = true
 	default:
 		errs = append(errs, fmt.Errorf("MAPTHING_TRUSTED_PROXY must be on or off, not %q", v))
+	}
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("MAPTHING_UPDATE_CHECK"))); v {
+	case "", "on", "1", "true", "yes":
+	case "off", "0", "false", "no":
+		c.UpdateCheckOff = true
+	default:
+		errs = append(errs, fmt.Errorf("MAPTHING_UPDATE_CHECK must be on or off, not %q", v))
+	}
+	if c.UpdateImage = strings.TrimSpace(os.Getenv("MAPTHING_UPDATE_IMAGE")); c.UpdateImage == "" {
+		// The sample compose file passes .env to the container, so the tag it runs is known.
+		tag := strings.TrimSpace(os.Getenv("MAPTHING_TAG"))
+		if tag == "" {
+			tag = "latest"
+		}
+		c.UpdateImage = "ghcr.io/jclement/mapthing:" + tag
 	}
 	var err error
 	if c.Serve, err = ParseServe(os.Getenv("MAPTHING_SERVE")); err != nil {

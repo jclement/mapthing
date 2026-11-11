@@ -1,0 +1,13 @@
+# /etc/systemd/system/mapthing-update.timer
+[Unit]
+Description=Nightly mapthing update
+
+[Timer]
+# 09:30 UTC, give or take half an hour. Pick an hour outside your build window (Schedule page)
+# so the two do not meet; the script also waits when a build is running.
+OnCalendar=*-*-* 09:30:00 UTC
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

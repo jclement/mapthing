@@ -1,5 +1,6 @@
 // What the Overview page concludes from GET /admin/api/overview, apart from the component.
-import type { KindTraffic, Overview, ProcessInfo } from "../api";
+import type { KindTraffic, Overview, ProcessInfo, UpdateStatus } from "../api";
+import * as fmt from "./format";
 
 type Tone = "neutral" | "ok" | "warn" | "bad" | "info" | "accent";
 
@@ -59,6 +60,18 @@ export interface Headline {
   tone: Tone;
   title: string;
   detail: string;
+}
+
+export const UPDATE_COMMAND = "docker compose pull && docker compose up -d";
+
+/** The software's update state in a few words, for the page header ("" = say nothing). */
+export function updateLine(u: UpdateStatus | null | undefined, now = Date.now()): string {
+  if (!u) return "";
+  if (!u.enabled) return `update check off: ${u.reason ?? "not configured"}`;
+  if (u.update_available) return "a newer image is available";
+  if (u.checked_at) return `up to date (checked ${fmt.relTime(u.checked_at, now)})`;
+  if (u.error) return "could not check for a newer image";
+  return "not checked for a newer image yet";
 }
 
 /** The one-line verdict at the top of the page. */
