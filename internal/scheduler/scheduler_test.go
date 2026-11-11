@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,13 +44,22 @@ func (f *fakeQ) refreshed(n int) string {
 }
 
 type fakeChecker struct {
+	mu      sync.Mutex
 	changed map[string]bool
 	fail    map[string]bool
 	asked   []string
+	// during runs inside each check (a slow publisher: tests move the clock in it).
+	during func(id string)
 }
 
 func (c *fakeChecker) CheckSource(_ context.Context, id string) (SourceCheck, error) {
+	c.mu.Lock()
 	c.asked = append(c.asked, id)
+	during := c.during
+	c.mu.Unlock()
+	if during != nil {
+		during(id)
+	}
 	if c.fail[id] {
 		return SourceCheck{}, errors.New("geofabrik unreachable")
 	}
@@ -425,8 +435,8 @@ func TestCheckAllRecordsWithoutBuilding(t *testing.T) {
 	e.policy("pinned", ModeNever, "", "", true)
 	e.chk.changed["texas"] = true
 	e.chk.fail["alberta"] = true
-	if err := e.s.CheckAll(context.Background()); err != nil {
-		t.Fatal(err)
+	if asked, err := e.s.CheckAll(context.Background()); err != nil || !asked {
+		t.Fatal(asked, err)
 	}
 	if len(e.q.calls) != 0 {
 		t.Fatal("a check started a build")
@@ -453,5 +463,207 @@ func TestNewRegionWaitsForItsFirstScheduleTime(t *testing.T) {
 	}
 	if e.at(2026, 11, 15, 3, 0); len(e.q.calls) != 1 {
 		t.Fatal("not refreshed at its first schedule time")
+	}
+}
+
+// Review 2, finding 2: an expression whose fields are valid but that never occurs is refused,
+// and one already in the database is unschedulable, never "overdue".
+func TestImpossibleCronNeverFires(t *testing.T) {
+	for _, bad := range []string{"0 0 30 2 *", "0 0 31 4 *", "TZ=America/Edmonton 0 3 * * *", "CRON_TZ=UTC 0 3 * * *", "tz=UTC 0 3 * * *"} {
+		if _, err := Parse(bad); err == nil {
+			t.Errorf("Parse(%q) accepted", bad)
+		}
+	}
+	if _, err := Parse("0 0 29 2 *"); err != nil { // leap days do occur
+		t.Errorf("29 February refused: %v", err)
+	}
+	if runs, err := NextRuns("0 0 30 2 *", time.Now(), 3); err == nil || len(runs) != 0 {
+		t.Errorf("preview of an impossible expression: %v %v", runs, err)
+	}
+
+	e := newEnv(t, "texas", "alberta")
+	ctx := context.Background()
+	if err := e.s.Set(ctx, "0 0 30 2 *", true); err == nil {
+		t.Error("the default schedule accepted an impossible expression")
+	}
+	// Written by an older version, or by hand: straight into the database.
+	if _, err := e.st.DB.ExecContext(ctx, `UPDATE regions SET refresh_mode = 'cron', refresh_cron = '0 0 30 2 *', refresh_only_changed = 0 WHERE id = 'texas'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.DB.ExecContext(ctx, `UPDATE regions SET refresh_mode = 'cron', refresh_cron = '0 0 30 2 *', refresh_only_changed = 1 WHERE id = 'alberta'`); err != nil {
+		t.Fatal(err)
+	}
+	def, _ := e.st.Schedule(ctx)
+	if st := StatusFor(e.region("texas"), def, e.now); st.Due || st.NextDue != nil || st.NextBuild != nil {
+		t.Fatalf("an impossible schedule is due: %+v", st)
+	}
+	for day := 5; day < 25; day++ {
+		for _, h := range []int{0, 3, 12} {
+			if msg := e.at(2026, 11, day, h, 0); msg != "" {
+				t.Fatalf("tick on the %dth at %d:00: %q", day, h, msg)
+			}
+		}
+	}
+	if len(e.q.calls) != 0 || len(e.chk.asked) != 0 {
+		t.Fatalf("an impossible schedule queued %d build(s) and made %d check(s)", len(e.q.calls), len(e.chk.asked))
+	}
+}
+
+// Review 2, finding 4: a region's refresh is only decided once its build is durably queued.
+func TestHandledOnlyAfterTheJobIsQueued(t *testing.T) {
+	e := newEnv(t, "texas", "alberta")
+	e.chk.changed["texas"] = true
+	before := *e.region("texas").RefreshHandledAt
+
+	// The job cannot be created (the database is unhappy).
+	e.q.err = errors.New("database is locked")
+	msg := e.at(2026, 11, 8, 3, 0)
+	if !strings.Contains(msg, "could not start") {
+		t.Fatalf("message %q", msg)
+	}
+	if got := *e.region("texas").RefreshHandledAt; !got.Equal(before) {
+		t.Fatalf("texas was marked handled (%v) although no job exists", got)
+	}
+	if h := e.lastHistory(); h.OK || h.JobID != nil {
+		t.Errorf("history %+v", h)
+	}
+	// Alberta had nothing new: that decision stands on its own.
+	if got := *e.region("alberta").RefreshHandledAt; !got.Equal(e.now) {
+		t.Errorf("alberta (unchanged) was not decided: %v", got)
+	}
+	// Next minute the database is fine: Texas is still due and gets its build, Alberta is not asked again.
+	e.q.err = nil
+	e.chk.asked = nil
+	if e.at(2026, 11, 8, 3, 1); len(e.q.calls) != 1 || e.q.refreshed(0) != "texas" {
+		t.Fatalf("after the failure: %v", e.q.params)
+	}
+	if strings.Join(e.chk.asked, ",") != "texas" {
+		t.Errorf("asked %v", e.chk.asked)
+	}
+	if got := *e.region("texas").RefreshHandledAt; !got.Equal(e.now) {
+		t.Errorf("texas not decided after its job was queued: %v", got)
+	}
+	// And only once.
+	if e.at(2026, 11, 8, 3, 2); len(e.q.calls) != 1 {
+		t.Fatal("queued twice")
+	}
+
+	// A restart between the two: the decisions are in the database, not just in memory.
+	q2 := &fakeQ{}
+	s2 := New(e.st, q2)
+	s2.Checker = e.chk
+	s2.now = func() time.Time { return e.now }
+	cctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s2.Start(cctx); err != nil {
+		t.Fatal(err)
+	}
+	if msg := s2.Tick(cctx); msg != "" || len(q2.calls) != 0 {
+		t.Fatalf("after a restart the handled regions fired again: %q", msg)
+	}
+}
+
+// Review 2, finding 5: a build only starts inside the window, also when asking the sources
+// took the clock past its end.
+func TestWindowIsCheckedAgainBeforeQueueing(t *testing.T) {
+	e := newEnv(t, "texas", "alberta")
+	ctx := context.Background()
+	if err := e.s.SetDefaults(ctx, "22:00-06:00", true); err != nil {
+		t.Fatal(err)
+	}
+	e.policy("texas", ModeCron, "59 5 * * *", "", true)              // due at 05:59, default window ends 06:00
+	e.policy("alberta", ModeCron, "59 5 * * *", "05:00-07:00", true) // its own, longer window
+	e.chk.changed["texas"], e.chk.changed["alberta"] = true, true
+	// The publisher is slow: each answer takes a minute.
+	e.chk.during = func(string) { e.now = e.now.Add(time.Minute) }
+
+	msg := e.at(2026, 11, 5, 5, 59)
+	// It is 06:01 by the time the sources have answered: Texas's window has closed.
+	if len(e.q.calls) != 1 || e.q.refreshed(0) != "alberta" {
+		t.Fatalf("queued %v (%q); only alberta is still inside its window", e.q.params, msg)
+	}
+	if !strings.Contains(msg, "Texas waits for its build window") {
+		t.Errorf("message %q", msg)
+	}
+	def, _ := e.st.Schedule(ctx)
+	if st := StatusFor(e.region("texas"), def, e.now); !st.Due || !st.Waiting {
+		t.Fatalf("texas should still be due and waiting: %+v", st)
+	}
+	// All day it waits; at 22:00 it is built.
+	e.chk.during = nil
+	if e.at(2026, 11, 5, 12, 0); len(e.q.calls) != 1 {
+		t.Fatal("texas was built outside its window")
+	}
+	if e.at(2026, 11, 5, 22, 0); len(e.q.calls) != 2 || e.q.refreshed(1) != "texas" {
+		t.Fatalf("at 22:00: %v", e.q.params)
+	}
+
+	// Every due region out of its window by then: nothing queued, nothing recorded, all still due.
+	e2 := newEnv(t, "texas")
+	_ = e2.s.SetDefaults(ctx, "22:00-06:00", true)
+	e2.policy("texas", ModeCron, "59 5 * * *", "", true)
+	e2.chk.changed["texas"] = true
+	e2.chk.during = func(string) { e2.now = e2.now.Add(2 * time.Minute) }
+	if msg := e2.at(2026, 11, 5, 5, 59); msg != "" || len(e2.q.calls) != 0 {
+		t.Fatalf("%q %v", msg, e2.q.calls)
+	}
+}
+
+// Review 2, finding 6: "check now" does not pile up on the publisher.
+func TestCheckAllCoalescesAndCoolsDown(t *testing.T) {
+	e := newEnv(t, "texas", "alberta")
+	ctx := context.Background()
+	release := make(chan struct{})
+	started := make(chan struct{}, 8)
+	e.chk.during = func(string) { started <- struct{}{}; <-release }
+
+	// Five impatient clicks at once.
+	var wg sync.WaitGroup
+	results := make(chan bool, 5)
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			asked, err := e.s.CheckAll(ctx)
+			if err != nil {
+				t.Error(err)
+			}
+			results <- asked
+		}()
+	}
+	<-started // one of them is talking to the publisher; the rest wait behind it
+	close(release)
+	wg.Wait()
+	close(results)
+	asked := 0
+	for a := range results {
+		if a {
+			asked++
+		}
+	}
+	e.chk.mu.Lock()
+	n := len(e.chk.asked)
+	e.chk.mu.Unlock()
+	if asked != 1 || n != 2 {
+		t.Fatalf("5 concurrent checks: %d of them asked the sources, %d source requests; want 1 and 2 (one per region)", asked, n)
+	}
+	// Again inside the cooldown: nothing is asked, the recorded results stand.
+	e.chk.during = nil
+	e.now = e.now.Add(CheckCooldown - time.Second)
+	if asked, err := e.s.CheckAll(ctx); err != nil || asked {
+		t.Fatalf("inside the cooldown: asked=%v err=%v", asked, err)
+	}
+	if e.region("texas").CheckedAt == nil {
+		t.Error("the first check's result is gone")
+	}
+	// After it: asked again.
+	e.now = e.now.Add(2 * time.Second)
+	if asked, err := e.s.CheckAll(ctx); err != nil || !asked {
+		t.Fatalf("after the cooldown: asked=%v err=%v", asked, err)
+	}
+	e.chk.mu.Lock()
+	defer e.chk.mu.Unlock()
+	if len(e.chk.asked) != 4 {
+		t.Errorf("source requests in total: %d, want 4", len(e.chk.asked))
 	}
 }

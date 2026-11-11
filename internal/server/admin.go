@@ -1326,13 +1326,20 @@ func (s *Server) patchRegion(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkRegions: POST /admin/api/regions/check → {regions:[…]}: look at every refreshed region's
-// source now and record whether it has something newer. Builds nothing.
+// source now and record whether it has something newer. Builds nothing. One check runs at a
+// time; a call within a minute of the last answers with that check's results (header
+// X-Mapthing-Check: recent) without asking the sources again.
 func (s *Server) checkRegions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	if err := s.d.Scheduler.CheckAll(ctx); err != nil {
+	asked, err := s.d.Scheduler.CheckAll(ctx)
+	if err != nil {
 		writeError(w, r, http.StatusServiceUnavailable, "unavailable", err.Error())
 		return
+	}
+	if !asked {
+		// Within the cooldown of the last check: its results are what is returned.
+		w.Header().Set("X-Mapthing-Check", "recent")
 	}
 	s.listRegions(w, r)
 }

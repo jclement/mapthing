@@ -100,6 +100,8 @@ type Builder struct {
 	building   string
 	activating string
 	deleting   map[string]bool
+	// sources caches the publishers' answers about extracts for a minute (source.go).
+	sources sourceCache
 	// retMu serialises every read-modify-write of generations/.retention.json (retention.go).
 	retMu sync.Mutex
 	// removeAll replaces os.RemoveAll for a manual delete (tests pause it).

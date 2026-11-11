@@ -59,11 +59,22 @@ func ValidMode(m string) bool {
 
 var parser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
-// Parse validates a 5-field cron expression (or @daily/@weekly descriptors).
+// Parse validates a 5-field cron expression (or @daily/@weekly descriptors). Schedules are
+// UTC only: a TZ= or CRON_TZ= prefix, which the cron library would otherwise honour, is
+// refused. So is an expression whose fields are each valid but that never occurs (30
+// February): the library answers the zero time for those, which must never be taken for a
+// time in the past.
 func Parse(expr string) (cron.Schedule, error) {
+	expr = strings.TrimSpace(expr)
+	if up := strings.ToUpper(expr); strings.HasPrefix(up, "TZ=") || strings.HasPrefix(up, "CRON_TZ=") {
+		return nil, fmt.Errorf("invalid cron expression %q: schedules are in UTC; a time zone prefix is not supported", expr)
+	}
 	s, err := parser.Parse(expr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression %q: %w", expr, err)
+	}
+	if s.Next(time.Now().UTC()).IsZero() {
+		return nil, fmt.Errorf("invalid cron expression %q: it never occurs (no such date in the next five years)", expr)
 	}
 	return s, nil
 }
@@ -175,12 +186,17 @@ type Scheduler struct {
 	lastRun *time.Time
 	// retryAfter holds off regions whose source could not be checked.
 	retryAfter map[string]time.Time
-	tickMu     sync.Mutex // one Tick at a time
+	// handledMem is when this process decided a region's refresh, for the (unlikely) case
+	// that writing it to the database failed: the region is still not decided twice.
+	handledMem map[string]time.Time
+	tickMu     sync.Mutex // one Tick or CheckAll at a time
+	// lastCheckAll is when CheckAll last asked the sources (its cooldown).
+	lastCheckAll time.Time
 }
 
 // New returns a scheduler. Call Start to load the stored schedule.
 func New(st *store.Store, q Enqueuer) *Scheduler {
-	return &Scheduler{st: st, q: q, now: time.Now, retryAfter: map[string]time.Time{}}
+	return &Scheduler{st: st, q: q, now: time.Now, retryAfter: map[string]time.Time{}, handledMem: map[string]time.Time{}}
 }
 
 // checkRetry is how long a region waits after its source could not be checked.
@@ -340,6 +356,10 @@ func StatusFor(r *store.Region, def *store.Schedule, now time.Time) RegionStatus
 		base = *r.RefreshHandledAt
 	}
 	next := sch.Next(base.UTC())
+	if next.IsZero() {
+		// No occurrence the library can find: unschedulable, never "overdue".
+		return st
+	}
 	st.NextDue = &next
 	st.Due = !next.After(now)
 	from := next
@@ -371,8 +391,9 @@ func (s *Scheduler) Tick(ctx context.Context) string {
 		return ""
 	}
 	type dueRegion struct {
-		r   *store.Region
-		pol Policy
+		r    *store.Region
+		pol  Policy
+		name string
 	}
 	var due []dueRegion
 	for _, r := range regions {
@@ -381,17 +402,24 @@ func (s *Scheduler) Tick(ctx context.Context) string {
 			_ = s.st.SetRegionHandled(ctx, r.ID, now)
 			continue
 		}
+		s.mu.Lock()
+		if t, ok := s.handledMem[r.ID]; ok && t.After(*r.RefreshHandledAt) {
+			r.RefreshHandledAt = &t
+		}
+		hold, held := s.retryAfter[r.ID]
+		s.mu.Unlock()
 		st := StatusFor(r, def, now)
 		if !st.Due || st.Waiting {
 			continue
 		}
-		s.mu.Lock()
-		hold, held := s.retryAfter[r.ID]
-		s.mu.Unlock()
 		if held && now.Before(hold) {
 			continue
 		}
-		due = append(due, dueRegion{r, st.Policy})
+		name := r.Name
+		if name == "" {
+			name = r.ID
+		}
+		due = append(due, dueRegion{r, st.Policy, name})
 	}
 	if len(due) == 0 {
 		return ""
@@ -402,79 +430,115 @@ func (s *Scheduler) Tick(ctx context.Context) string {
 		return ""
 	}
 
-	var refresh, refreshNames, unchanged, failed []string
+	// 1. Look at the sources. Results are recorded, but nothing is decided yet.
+	var refresh []dueRegion
+	var unchanged, failed []string
+	var unchangedIDs []string
 	for _, d := range due {
-		name := d.r.Name
-		if name == "" {
-			name = d.r.ID
-		}
 		if !d.pol.OnlyChanged || s.Checker == nil {
-			refresh, refreshNames = append(refresh, d.r.ID), append(refreshNames, name)
-			_ = s.st.SetRegionHandled(ctx, d.r.ID, now)
+			refresh = append(refresh, d)
 			continue
 		}
 		res, err := s.Checker.CheckSource(ctx, d.r.ID)
 		if err != nil {
-			// Not handled: it is still due, and is tried again after a pause.
+			// Not decided: it is still due, and is tried again after a pause.
 			_ = s.st.SetRegionCheck(ctx, d.r.ID, now, "error", err.Error())
 			s.mu.Lock()
 			s.retryAfter[d.r.ID] = now.Add(checkRetry)
 			s.mu.Unlock()
-			failed = append(failed, name)
+			failed = append(failed, d.name)
 			continue
 		}
 		s.mu.Lock()
 		delete(s.retryAfter, d.r.ID)
 		s.mu.Unlock()
-		_ = s.st.SetRegionHandled(ctx, d.r.ID, now)
 		if res.Changed {
 			_ = s.st.SetRegionCheck(ctx, d.r.ID, now, "changed", res.Detail)
-			refresh, refreshNames = append(refresh, d.r.ID), append(refreshNames, name)
+			refresh = append(refresh, d)
 		} else {
 			_ = s.st.SetRegionCheck(ctx, d.r.ID, now, "unchanged", res.Detail)
-			unchanged = append(unchanged, name)
+			unchanged, unchangedIDs = append(unchanged, d.name), append(unchangedIDs, d.r.ID)
 		}
 	}
-	sort.Strings(refresh)
-	sort.Strings(refreshNames)
 
-	s.mu.Lock()
-	s.lastRun = &now
-	s.mu.Unlock()
-	h := store.HistoryEntry{Kind: "schedule", At: now, OK: true}
-	details := map[string]any{"refresh": refresh, "unchanged": unchanged, "check_failed": failed}
+	// The checks may have taken minutes, and the tick's deadline may be gone. What follows is
+	// quick and must not be cut short half way: its own context, and the time as it is now.
+	cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer ccancel()
+	decided := s.now().UTC()
+	handle := func(id string) {
+		if err := s.st.SetRegionHandled(cctx, id, decided); err != nil {
+			slog.Warn("schedule: could not record a refresh decision", "region", id, "err", err)
+		}
+		s.mu.Lock()
+		s.handledMem[id] = decided
+		s.mu.Unlock()
+	}
+	// A region with nothing new is decided whatever happens to the others.
+	for _, id := range unchangedIDs {
+		handle(id)
+	}
+
+	// 2. A build may only start inside each region's window, and the window may have closed
+	// while the sources were being asked. Those regions stay due and wait for it to reopen.
+	var ids, names []string
+	var late []string
+	for _, d := range refresh {
+		if !d.pol.Window.Contains(decided) {
+			late = append(late, d.name)
+			continue
+		}
+		ids, names = append(ids, d.r.ID), append(names, d.name)
+	}
+	sort.Strings(ids)
+	sort.Strings(names)
+
+	h := store.HistoryEntry{Kind: "schedule", At: decided, OK: true}
+	details := map[string]any{"refresh": ids, "unchanged": unchanged, "check_failed": failed, "window_closed": late}
 	switch {
-	case len(refresh) == 0 && len(failed) > 0 && len(unchanged) == 0:
+	case len(ids) == 0 && len(unchanged) == 0 && len(failed) == 0:
+		// Only regions whose window closed meanwhile: nothing to record; they are still due.
+		return ""
+	case len(ids) == 0 && len(unchanged) == 0:
 		h.OK = false
 		h.Message = "scheduled refresh: could not check " + strings.Join(failed, ", ") + "; trying again in an hour"
-	case len(refresh) == 0:
+	case len(ids) == 0:
 		h.Message = "scheduled refresh: nothing new (" + strings.Join(unchanged, ", ") + " unchanged at the source); no build"
 		if len(failed) > 0 {
 			h.Message += "; could not check " + strings.Join(failed, ", ")
 		}
 	default:
-		row, err := s.q.Enqueue(ctx, BuildJob, map[string]any{"refresh": true, "refresh_regions": refresh},
+		// 3. The job first, durably; only then are its regions decided. If the process stops
+		// in between, the job is still there and the regions are merely looked at again (and
+		// found unchanged against the generation that job produces). If the job cannot be
+		// queued, nothing was decided and the regions stay due.
+		row, err := s.q.Enqueue(cctx, BuildJob, map[string]any{"refresh": true, "refresh_regions": ids},
 			jobs.EnqueueOptions{Trigger: "schedule", Unique: true})
 		switch {
 		case errors.Is(err, jobs.ErrBusy):
-			// Lost a race with a build started by hand: these regions are due again at once.
-			for _, id := range refresh {
-				_ = s.st.SetRegionHandled(ctx, id, regionBase(regions, id))
-			}
-			return ""
+			return "" // lost a race with a build started by hand: still due
 		case err != nil:
-			h.OK, h.Message = false, "scheduled refresh could not start: "+err.Error()
+			h.OK, h.Message = false, "scheduled refresh could not start (it will be tried again): "+err.Error()
 		default:
+			for _, id := range ids {
+				handle(id)
+			}
 			h.JobID = &row.ID
-			h.Message = "scheduled refresh queued for " + strings.Join(refreshNames, ", ")
+			h.Message = "scheduled refresh queued for " + strings.Join(names, ", ")
 			if len(unchanged) > 0 {
 				h.Message += "; unchanged: " + strings.Join(unchanged, ", ")
 			}
 		}
 	}
+	if len(late) > 0 {
+		h.Message += "; " + strings.Join(late, ", ") + " waits for its build window, which closed during the check"
+	}
+	s.mu.Lock()
+	s.lastRun = &decided
+	s.mu.Unlock()
 	h.Details = mustJSON(details)
 	slog.Info("schedule", "msg", h.Message)
-	if err := s.st.AddHistory(ctx, h); err != nil {
+	if err := s.st.AddHistory(cctx, h); err != nil {
 		slog.Warn("history", "err", err)
 	}
 	return h.Message
@@ -488,30 +552,36 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// regionBase returns the handled time a region had before this tick.
-func regionBase(regions []*store.Region, id string) time.Time {
-	for _, r := range regions {
-		if r.ID == id && r.RefreshHandledAt != nil {
-			return *r.RefreshHandledAt
-		}
-	}
-	return time.Unix(0, 0)
-}
+// CheckCooldown is how soon after one "check now" another actually asks the sources again.
+const CheckCooldown = time.Minute
 
 // CheckAll looks at the source of every region that is refreshed at all and records what it
-// found, without building anything ("Check now" in the admin UI).
-func (s *Scheduler) CheckAll(ctx context.Context) error {
+// found, without building anything ("Check now" in the admin UI). Calls do not pile up on the
+// publisher: one runs at a time (and not while the scheduler is deciding), a call that arrives
+// within CheckCooldown of the last one changes nothing and reports asked=false (the results of
+// the last one are what the caller then reads), and regions that share an extract ask for it
+// once (the checker caches by URL).
+func (s *Scheduler) CheckAll(ctx context.Context) (asked bool, err error) {
 	if s.Checker == nil {
-		return errors.New("this server cannot check region sources")
+		return false, errors.New("this server cannot check region sources")
+	}
+	s.tickMu.Lock()
+	defer s.tickMu.Unlock()
+	now := s.now().UTC()
+	if !s.lastCheckAll.IsZero() && now.Sub(s.lastCheckAll) < CheckCooldown {
+		return false, nil
 	}
 	regions, err := s.st.Regions(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
-	now := s.now().UTC()
+	s.lastCheckAll = now
 	for _, r := range regions {
 		if r.RefreshMode == ModeNever {
 			continue
+		}
+		if ctx.Err() != nil {
+			return true, ctx.Err()
 		}
 		res, err := s.Checker.CheckSource(ctx, r.ID)
 		switch {
@@ -523,7 +593,7 @@ func (s *Scheduler) CheckAll(ctx context.Context) error {
 			_ = s.st.SetRegionCheck(ctx, r.ID, now, "unchanged", res.Detail)
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // State is the default schedule as reported to the admin UI.
@@ -559,8 +629,9 @@ func (s *Scheduler) State() State {
 	// No regions yet: when the default schedule would next run.
 	if st.Enabled {
 		if sch, err := Parse(st.Cron); err == nil {
-			n := sch.Next(now)
-			st.NextRun = &n
+			if n := sch.Next(now); !n.IsZero() {
+				st.NextRun = &n
+			}
 		}
 	}
 	return st
@@ -576,6 +647,9 @@ func NextRuns(expr string, from time.Time, n int) ([]time.Time, error) {
 	t := from.UTC()
 	for range n {
 		t = sch.Next(t)
+		if t.IsZero() {
+			break
+		}
 		out = append(out, t)
 	}
 	return out, nil

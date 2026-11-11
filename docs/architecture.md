@@ -457,23 +457,55 @@ moment its refresh was last decided (when it was added, when its setting was cha
 last tick that handled it). When any region is due and inside its window, and no build is
 queued or running:
 
-1. Each due region with "only when changed" has its source checked
-   (`build.Builder.SourceChanged`: Geofabrik's replication sequence in `state.txt` against the
-   one in `downloads/<region>/meta.json`; a conditional `HEAD` for an extract without an update
-   feed; for a custom region, every extract it is clipped from). The result is stored on the
-   region (`checked_at`, `check_result`, `check_detail`).
+1. Each due region with "only when changed" is asked the question that matters: is there data
+   a build would newly put **into service**? (`build.Builder.SourceChanged`.) The comparison
+   is against the live generation, not the download cache, in this order:
+   - nothing downloaded, or a custom region not clipped yet: yes;
+   - the downloaded extract or clip is not the one in the live generation's manifest (by
+     MD5), the region is not in the live generation, or nothing is live: yes, without asking
+     the publisher. This is the case of a build that downloaded newer data and then failed:
+     the cache is current, the map is not, and it stays "something new" until a build succeeds;
+   - a custom region whose parent extracts on disk are newer than its clip: yes;
+   - the publisher has a newer extract than the one downloaded (Geofabrik's replication
+     sequence in `state.txt` against `downloads/<region>/meta.json`; a conditional `HEAD` for
+     an extract without an update feed; for a custom region, every extract it is clipped from).
+
+   The result is stored on the region (`checked_at`, `check_result`, `check_detail`).
+   Publisher answers are cached for a minute by URL, so regions that share an extract, and a
+   scheduled check and a "check now" close together, ask once.
 2. If no due region has anything new, history gets "scheduled refresh: nothing new (… unchanged
    at the source); no build" and nothing is built.
-3. Otherwise one build is queued with `{"refresh": true, "refresh_regions": [the due regions
-   that changed, or that refresh regardless]}`. The download stage re-fetches only those
-   extracts (and the parents custom regions among them are clipped from); every other region
-   keeps its downloaded file untouched.
-4. The due regions are marked handled, so each schedule time produces one decision.
+3. Otherwise the windows are looked at again with the time as it is now (asking the sources can
+   take minutes): a region whose window closed meanwhile is left out and stays due. One build
+   is queued with `{"refresh": true, "refresh_regions": [the due regions that changed, or that
+   refresh regardless]}`. The download stage re-fetches only those extracts (and the parents
+   custom regions among them are clipped from). Every other region keeps its data: an extract
+   region its file, a custom region its clip, even when an extract it is clipped from was
+   refreshed for another region (it is re-clipped at its own refresh). One sharing is by
+   design: an extract region and a custom region clipped from the same extract share that one
+   file, so refreshing either refreshes the extract for both.
+4. A region is marked handled (`refresh_handled_at`) only once its decision is durable: an
+   unchanged region at once, a region to refresh only after its job row exists. If the job
+   cannot be created nothing was decided and the regions are due again at the next tick. If
+   the process stops between the two, the job is still queued and the regions are merely
+   asked again afterwards (and, compared with the generation that job produces, found
+   unchanged). Each schedule time so produces one decision.
 
 A source that cannot be checked (Geofabrik unreachable) is neither built nor counted as
 handled: the region stays due and is tried again an hour later. A build that fails does not
 bring its regions back early; they wait for their next schedule time, and the failure is on
-Overview and Builds.
+Overview and Builds. At that time the data the failed build downloaded still counts as new
+(first bullet list above), so the update is not lost, whether or not the publisher has
+released anything since.
+
+**Cron expressions** are five fields, UTC only: a `TZ=` or `CRON_TZ=` prefix is refused, and so
+is an expression that never occurs (`0 0 30 2 *`), in a region's setting and in the default
+schedule alike. One that is in the database anyway is unschedulable, never overdue.
+
+**"Check sources now"** (`POST /admin/api/regions/check`) asks every refreshed region's source
+and records the answers without building. One check runs at a time and never alongside a
+scheduler tick; a call within a minute of the last answers with that check's results and the
+header `X-Mapthing-Check: recent`, without contacting the publisher.
 
 **What a region's setting does and does not decide.** A build always makes the basemap and the
 routing graph over **all** regions together: tiles and routes must cross region borders, and

@@ -119,6 +119,15 @@ func TestRegionRefreshPolicyAPI(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400", name, code, body)
 		}
 	}
+	// An expression that never occurs, and a time zone prefix (schedules are UTC only).
+	for _, expr := range []string{"0 0 30 2 *", "TZ=America/Edmonton 0 3 * * *"} {
+		if code, _, body := patch("us/delaware", map[string]any{"mode": "cron", "cron": expr}); code != 400 {
+			t.Errorf("cron %q: %d %s, want 400", expr, code, body)
+		}
+		if r, b := e.do(c, "PUT", "/admin/api/schedule", map[string]any{"cron": expr}, o); r.StatusCode != 400 {
+			t.Errorf("default schedule %q: %d %s, want 400", expr, r.StatusCode, b)
+		}
+	}
 	if d := get("us/delaware"); d.RefreshPolicy.Mode != "never" {
 		t.Errorf("a refused change was applied: %+v", d.RefreshPolicy)
 	}
@@ -170,6 +179,11 @@ func TestRegionRefreshPolicyAPI(t *testing.T) {
 	}
 	if js, _ := e.st.Jobs(context.Background(), 5); len(js) != 0 {
 		t.Errorf("a check queued %d job(s)", len(js))
+	}
+	// A second click straight away answers with the same results and says it did not ask again.
+	r, _ = e.do(c, "POST", "/admin/api/regions/check", nil, o)
+	if r.StatusCode != 200 || r.Header.Get("X-Mapthing-Check") != "recent" {
+		t.Errorf("second check: %d, X-Mapthing-Check %q", r.StatusCode, r.Header.Get("X-Mapthing-Check"))
 	}
 	if r, _ := e.do(nil, "POST", "/admin/api/regions/check", nil, o); r.StatusCode != 401 {
 		t.Errorf("check without a session: %d", r.StatusCode)
