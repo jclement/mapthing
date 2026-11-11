@@ -13,8 +13,8 @@ import { MapPage } from "./pages/Map";
 import { OverviewPage } from "./pages/Overview";
 import { RegionsPage } from "./pages/Regions";
 import { SchedulePage } from "./pages/Schedule";
+import { SettingsPage } from "./pages/Settings";
 import { StatsPage } from "./pages/Stats";
-import { SystemPage } from "./pages/System";
 
 type Auth = "checking" | "in" | "out";
 
@@ -55,7 +55,8 @@ export function AppShell() {
           <Route path="keys" element={<KeysPage />} />
           <Route path="stats" element={<StatsPage />} />
           <Route path="logs" element={<LogsPage />} />
-          <Route path="system" element={<SystemPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="system" element={<Navigate to="/settings" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

@@ -26,8 +26,8 @@ describe("error boundary", () => {
     const sidebar = screen.getAllByRole("navigation")[0];
     expect(sidebar.closest("aside")).not.toBeNull();
     expect(within(sidebar).getByRole("link", { name: /Stats/ })).toBeInTheDocument();
-    await user.click(within(sidebar).getByRole("link", { name: /System/ }));
-    expect(await screen.findByRole("heading", { name: "System" })).toBeInTheDocument();
+    await user.click(within(sidebar).getByRole("link", { name: /Settings/ }));
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByText("This page hit an error")).not.toBeInTheDocument();
   });
 });

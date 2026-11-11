@@ -529,13 +529,7 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 	disk := s.diskCtl.get()
 	commit, date := buildInfo()
 	ready, readiness := s.readiness(r.Context())
-	components := []map[string]string{
-		{"name": "mapthing", "version": Version},
-		{"name": "Go", "version": runtime.Version()},
-	}
-	for _, c := range s.processes() {
-		components = append(components, map[string]string{"name": c.Name, "version": c.State})
-	}
+	components := s.components()
 	var gen any
 	if g := s.generation(); g != "" {
 		gen = g
@@ -564,6 +558,43 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 		resp["elevation_sources"] = s.d.ElevationSources()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// Component is one piece of software in the running image and its version.
+type Component struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`          // "" when it could not be determined
+	Detail  string `json:"detail,omitempty"` // what it is for, or where the version came from
+}
+
+// components lists mapthing, Go and whatever the image carries (Deps.Versions).
+func (s *Server) components() []Component {
+	commit, date := buildInfo()
+	detail := "this server"
+	if commit != "" {
+		detail = "commit " + commit
+		if date != "" {
+			detail += ", built " + date
+		}
+	}
+	out := []Component{
+		{Name: "mapthing", Version: Version, Detail: detail},
+		{Name: "Go", Version: strings.TrimPrefix(runtime.Version(), "go"), Detail: "the language mapthing is built with"},
+	}
+	if s.d.Versions != nil {
+		out = append(out, s.d.Versions()...)
+	}
+	return out
+}
+
+// settings: GET /admin/api/settings → {settings:[…], versions:[…]}: the effective configuration,
+// each value with where it came from, secrets masked; and the software versions. Read-only.
+func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
+	if s.d.Settings == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "this server does not report its settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"settings": s.d.Settings(), "versions": s.components()})
 }
 
 func (s *Server) imageryName() string {

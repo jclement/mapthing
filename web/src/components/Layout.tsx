@@ -12,7 +12,7 @@ import {
   Monitor,
   Moon,
   ScrollText,
-  Server,
+  Settings,
   Sun,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -34,7 +34,7 @@ const NAV = [
   { to: "/keys", label: "API keys", icon: KeyRound },
   { to: "/stats", label: "Stats", icon: Gauge },
   { to: "/logs", label: "Logs", icon: ScrollText, phone: true },
-  { to: "/system", label: "System", icon: Server },
+  { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 function Logo() {

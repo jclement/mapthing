@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/auth"
+	"github.com/jclement/mapthing/internal/config"
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/keys"
 	"github.com/jclement/mapthing/internal/logs"
@@ -72,6 +73,12 @@ type Deps struct {
 	// for the installed regions). ok is false when it cannot be worked out now (no regions, or
 	// the catalog is not loaded). Optional.
 	BuildEstimate func(ctx context.Context) (needBytes int64, ok bool)
+	// Versions lists the software in the image (Valhalla, Planetiler, the renderer, GDAL…),
+	// after mapthing itself and Go, which the server adds. Optional.
+	Versions func() []Component
+	// Settings returns the effective configuration for the Settings page (config.Describe).
+	// nil → 503 on /admin/api/settings.
+	Settings func() []config.Setting
 	// Info is extra, static configuration shown by /admin/api/system (e.g. which parts this
 	// server serves and whether the renderer is off). Optional.
 	Info map[string]any
@@ -123,6 +130,7 @@ func (s *Server) routes() {
 	m.Handle("GET /admin/api/overview", admin(s.overview))
 	m.Handle("GET /admin/api/stats", admin(s.stats))
 	m.Handle("GET /admin/api/system", admin(s.system))
+	m.Handle("GET /admin/api/settings", admin(s.settings))
 	m.Handle("POST /admin/api/system/restart/{name}", admin(s.restartChild))
 	m.Handle("GET /admin/api/history", admin(s.history))
 
