@@ -431,7 +431,7 @@ func TestCustomRegionClipsFromParent(t *testing.T) {
 	if _, err := e.b.Run(context.Background(), rep2, Options{Regions: []catalog.Region{custom}}); err != nil {
 		t.Fatal(err)
 	}
-	if !rep2.has("clip up to date") {
+	if rep2.has("clipped from") || !rep2.has("keeping its clip") {
 		t.Error("clip redone")
 	}
 }

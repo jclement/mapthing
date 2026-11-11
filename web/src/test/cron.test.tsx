@@ -13,6 +13,11 @@ function Harness() {
 describe("previewCron", () => {
   const from = new Date("2026-11-08T12:00:00Z"); // a Sunday
 
+  it("refuses a date that never occurs, as the server does", () => {
+    expect(previewCron("0 0 30 2 *", 3, from).ok).toBe(false);
+    expect(previewCron("0 0 29 2 *", 1, from).ok).toBe(true); // leap days do occur
+  });
+
   it("describes and lists the next three runs in UTC", () => {
     const p = previewCron("0 3 * * 0", 3, from);
     expect(p.ok).toBe(true);

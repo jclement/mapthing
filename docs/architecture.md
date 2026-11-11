@@ -119,7 +119,9 @@ Admin (session cookie):
 | GET | `/admin/api/generations` | every generation directory with its state (live, previous, kept, building, incoming, invalid), manifest and size, and the disk they use together |
 | DELETE | `/admin/api/generations/{id}` | delete a generation directory for good. 204; 404 `no_generation`; 409 `live` (the one being served: activate another first) or `busy` (a build is writing it, or it is being activated). Unlike retention it also deletes a generation this server does not own. |
 | POST | `/admin/api/generations/{id}/activate` | validate `<data>/generations/{id}` and make it live: routing graph up as a standby, the atomic swap, then the routing switch (the standby is discarded if the swap fails), then retention. 200 `{id, status:"live", already_live, previous, removed[]}`; idempotent. Refusals leave the live generation serving: 404 `no_generation`, 409 `busy`, 422 `invalid_generation` (`error.problems[]`) or `routing_failed`, 500 if `current` cannot be moved. |
-| GET/PUT | `/admin/api/schedule` | refresh schedule (cron expression, default weekly Sunday 03:00 UTC; per-region enable) |
+| GET/PUT | `/admin/api/schedule` | the default refresh schedule (cron expression, weekly Sunday 03:00 UTC unless changed; build window; only-when-changed) for regions without a setting of their own |
+| PATCH | `/admin/api/regions/{id}` | a region's own refresh setting (`refresh_policy`: never, daily, weekly, monthly, a cron expression or the default; build window; only-when-changed) |
+| POST | `/admin/api/regions/check` | ask each region's source now whether it has newer data; builds nothing |
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
 | GET | `/admin/api/stats` | tiles/routes/elevation calls by key and by day, cache hit rates, disk per generation and region, RAM, subprocess state |
 | GET | `/admin/api/logs`, `/admin/api/logs/stream` (SSE), `/admin/api/logs/download` | the server's log: filtered pages, a live tail, and the filtered view as a file (see Logs) |
@@ -430,6 +432,99 @@ gravel/dirt.
   `wrap func(kind string, h http.Handler) http.Handler` applies auth and accounting; kinds are
   `route`, `matrix`, `isochrone`, `snap`, `valhalla`.
 
+## Refresh schedule
+
+`internal/scheduler` keeps the data fresh. Each region has a refresh setting (`regions`
+columns from migration 0003):
+
+| Mode | Refreshed |
+|---|---|
+| `default` | on the default schedule (`schedule` row: a cron expression, on or off). What every region uses until it is given a setting. |
+| `daily`, `weekly`, `monthly` | 03:00 UTC every day; Sundays; the 1st |
+| `cron` | its own 5-field expression (UTC) |
+| `never` | not at all: it keeps its downloaded extract and is still built into every generation |
+
+Two more settings go with a schedule, the region's own or, for `default` regions, the default's:
+
+- **Build window** (`"HH:MM-HH:MM"` UTC, may run through midnight): a refresh that comes due
+  outside it waits until it opens. A region without a window of its own uses the default's.
+- **Only when the source changed** (on by default): before building, look at whether the
+  source has anything newer.
+
+**What happens.** Once a minute (`Scheduler.Tick`) the scheduler works out which regions are
+due: a region's next refresh is the first time of its schedule after `refresh_handled_at`, the
+moment its refresh was last decided (when it was added, when its setting was changed, or the
+last tick that handled it). When any region is due and inside its window, and no build is
+queued or running:
+
+1. Each due region with "only when changed" is asked the question that matters: is there data
+   a build would newly put **into service**? (`build.Builder.SourceChanged`.) The comparison
+   is against the live generation, not the download cache, in this order:
+   - nothing downloaded, or a custom region not clipped yet: yes;
+   - the downloaded extract or clip is not the one in the live generation's manifest (by
+     MD5), the region is not in the live generation, or nothing is live: yes, without asking
+     the publisher. This is the case of a build that downloaded newer data and then failed:
+     the cache is current, the map is not, and it stays "something new" until a build succeeds;
+   - a custom region whose parent extracts on disk are newer than its clip: yes;
+   - the publisher has a newer extract than the one downloaded (Geofabrik's replication
+     sequence in `state.txt` against `downloads/<region>/meta.json`; a conditional `HEAD` for
+     an extract without an update feed; for a custom region, every extract it is clipped from).
+
+   The result is stored on the region (`checked_at`, `check_result`, `check_detail`).
+   Publisher answers are cached for a minute by URL, so regions that share an extract, and a
+   scheduled check and a "check now" close together, ask once.
+2. If no due region has anything new, history gets "scheduled refresh: nothing new (… unchanged
+   at the source); no build" and nothing is built.
+3. Otherwise the windows are looked at again with the time as it is now (asking the sources can
+   take minutes): a region whose window closed meanwhile is left out and stays due. One build
+   is queued with `{"refresh": true, "refresh_regions": [the due regions that changed, or that
+   refresh regardless]}`. The download stage re-fetches only those extracts (and the parents
+   custom regions among them are clipped from). Every other region keeps its data: an extract
+   region its file, a custom region its clip, even when an extract it is clipped from was
+   refreshed for another region (it is re-clipped at its own refresh). One sharing is by
+   design: an extract region and a custom region clipped from the same extract share that one
+   file, so refreshing either refreshes the extract for both.
+4. A region is marked handled (`refresh_handled_at`) only once its decision is durable: an
+   unchanged region at once, a region to refresh only after its job row exists. If the job
+   cannot be created nothing was decided and the regions are due again at the next tick. If
+   the process stops between the two, the job is still queued and the regions are merely
+   asked again afterwards (and, compared with the generation that job produces, found
+   unchanged). Each schedule time so produces one decision.
+
+A source that cannot be checked (Geofabrik unreachable) is neither built nor counted as
+handled: the region stays due and is tried again an hour later. A build that fails does not
+bring its regions back early; they wait for their next schedule time, and the failure is on
+Overview and Builds. At that time the data the failed build downloaded still counts as new
+(first bullet list above), so the update is not lost, whether or not the publisher has
+released anything since.
+
+**Cron expressions** are five fields, UTC only: a `TZ=` or `CRON_TZ=` prefix is refused, and so
+is an expression that never occurs (`0 0 30 2 *`), in a region's setting and in the default
+schedule alike. One that is in the database anyway is unschedulable, never overdue.
+
+**"Check sources now"** (`POST /admin/api/regions/check`) asks every refreshed region's source
+and records the answers without building. One check runs at a time and never alongside a
+scheduler tick; a call within a minute of the last answers with that check's results and the
+header `X-Mapthing-Check: recent`, without contacting the publisher.
+
+**What a region's setting does and does not decide.** A build always makes the basemap and the
+routing graph over **all** regions together: tiles and routes must cross region borders, and
+neither Planetiler nor Valhalla can update part of its output. So a region's setting decides
+when *its data* is downloaded again, and a build then follows. Regions that are not due cost
+their share of the basemap and graph build but no download, and the terrain (the slow stage) is
+reused whenever the set of regions is unchanged (Elevation, Reuse). `refresh_cost` on a region
+is its extract's size and the last build's duration without the download and terrain stages.
+
+A build started by hand ("Build now" with "Refresh downloads") refreshes every region that is
+not `never`, whatever its schedule.
+
+**Upgrading** from the single schedule: the schedule row becomes the default unchanged, a
+region that was switched off becomes `never`, the rest follow the default, and each region's
+clock starts when the new version first runs, so the next refresh is the next time of the old
+schedule. The old `regions.refresh` flag is kept in step for an older version reading the
+database. "Refresh downloads" on the schedule is gone: a scheduled refresh always looks for
+newer extracts of the regions that are due.
+
 ## Attribution and licences
 
 Code: MIT. Data: © OpenStreetMap contributors (ODbL); USGS 3DEP (public domain); NRCan (Open
@@ -448,8 +543,9 @@ registered by name with `runner.Register(name, f)`; one job runs at a time, the 
 `j.Params()` give the context and the JSON params it was enqueued with. Progress and log lines
 stream to the admin UI over `/admin/api/events` (SSE events `job`, `log`). A job error is
 recorded in `history`; `runner.Details` turns a structured error (such as `*build.StageError`)
-into history details. The build job is named `build`, params `{"refresh": bool}`; the
-scheduler enqueues it with `{"refresh": true}`.
+into history details. The build job is named `build`, params `{"refresh": bool,
+"rebuild_terrain": bool, "refresh_regions": [ids]}`; with `refresh_regions` only those regions'
+extracts are refreshed, which is how the scheduler enqueues it (Refresh schedule).
 
 **Mounting feature handlers** (`internal/server`). Routing and elevation expose a value with
 `Mount(mux *http.ServeMux, wrap func(kind string, h http.Handler) http.Handler)` and register
@@ -610,8 +706,11 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   (`build.Builder.busyMu`) before touching it, and `current` only moves to a claimed generation,
   so a delete cannot remove a directory that is being written, validated or made live, and an
   activation of one being deleted answers 409 `busy`. Updates of `.retention.json` are serialised. Activations and deletions by hand are recorded in history (`kind` `generation`).
-- `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,refresh_downloads,regions:[{id,enabled}]}` (cron 5-field, UTC; PUT fields optional, 400 `bad_cron`)
-  + *extra* `next_run,last_run,upcoming:[5 times],default_cron,timezone,history`.
+- `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,window,only_changed,refresh_downloads,regions:[{id,enabled}]}` (cron 5-field, UTC; `window` `"HH:MM-HH:MM"` UTC or `""`; PUT fields optional, 400 `bad_cron` / `bad_window`)
+  + *extra* `next_run` (the next time any region is due, moved into its build window),`last_run,upcoming:[5 times],default_cron,timezone,history` (the scheduler's recent decisions).
+  This is the **default** schedule (see Refresh schedule). `refresh_downloads` is accepted and always true. `regions[].enabled` is the older on/off switch: `false` sets a region to mode `never`, `true` puts a `never` region back on the default; a region whose state already matches is left alone.
+- Region (in `/admin/api/regions`) also carries `refresh_policy:{mode,cron?,window?,only_changed,effective:{cron|null,window,only_changed,inherited},next_due|null,next_build|null,due,waiting,last_checked_at|null,last_check?,last_check_detail?}` and `refresh_cost:{download_bytes,build_seconds|null}`.
+  `PATCH /admin/api/regions/{id}` `{refresh_policy:{mode,cron?,window?,only_changed?}}` → region (400 `bad_refresh`). `POST /admin/api/regions/check` → `{regions}` with the check results recorded.
 - `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}` (revoked keys left out; `?revoked=1` includes them with `revoked_at`).
   `POST` `{label,rpm?,rpd?,origins?}` (null = unlimited) → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` (same fields) `/admin/api/keys/{id}` → key; `DELETE` → 204 (revoked at once).
 - `GET /admin/api/stats?days=30` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state:"running"|"starting"|"restarting"|"stopped",pid|null,uptime_s,restarts,rss_bytes}]}`

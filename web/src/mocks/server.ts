@@ -15,6 +15,7 @@ import type {
   NewKey,
   NewRegion,
   Overview,
+  RefreshSetting,
   Region,
   RouteRequest,
   Schedule,
@@ -24,6 +25,7 @@ import type {
   Stats,
 } from "../api";
 import { bboxOf, haversine } from "../lib/geo";
+import { type OwnPolicy, resolvePolicy } from "../lib/refresh";
 import * as fx from "./fixtures";
 
 export interface MockOptions {
@@ -43,6 +45,17 @@ export interface MockOptions {
 interface State {
   authed: boolean;
   regions: Region[];
+  /** Each region's own refresh setting and scheduler state (the server keeps these in SQLite). */
+  refresh: Record<
+    string,
+    OwnPolicy & {
+      handledAt: number;
+      last_checked_at?: string;
+      last_check?: "changed" | "unchanged" | "error";
+      last_check_detail?: string;
+    }
+  >;
+  scheduleHistory: NonNullable<Schedule["history"]>;
   generations: Generation[];
   jobs: Job[];
   logs: Record<string, LogLine[]>;
@@ -74,6 +87,45 @@ export function resetMock(opts: MockOptions = {}) {
   S = {
     authed: !!opts.authed,
     regions,
+    refresh: Object.fromEntries(
+      regions.map((r, i) => [
+        r.id,
+        {
+          // one of each kind in the demo data: the default, a setting of its own, never
+          ...(i === 1
+            ? { mode: "daily" as const, window: "22:00-06:00", only_changed: true }
+            : r.id === "custom/permian-core"
+              ? { mode: "never" as const, only_changed: true }
+              : { mode: "default" as const, only_changed: true }),
+          handledAt: Date.now() - 3.1 * 86400000,
+          ...(i < 2
+            ? {
+                last_checked_at: new Date(Date.now() - (i ? 0.4 : 3.1) * 86400000).toISOString(),
+                last_check: i ? ("unchanged" as const) : ("changed" as const),
+                last_check_detail: i
+                  ? "data of 2026-11-10 is the latest (sequence 4331)"
+                  : "newer data published (2026-11-08; sequence 4329, downloaded 4322)",
+              }
+            : {}),
+        },
+      ]),
+    ),
+    scheduleHistory: empty
+      ? []
+      : [
+          {
+            id: 3,
+            at: new Date(Date.now() - 0.4 * 86400000).toISOString(),
+            ok: true,
+            message: "scheduled refresh: nothing new (Alberta unchanged at the source); no build",
+          },
+          {
+            id: 2,
+            at: new Date(Date.now() - 3.1 * 86400000).toISOString(),
+            ok: true,
+            message: "scheduled refresh queued for Texas; unchanged: Alberta",
+          },
+        ],
     generations: gens,
     jobs: history,
     logs: {},
@@ -88,6 +140,8 @@ export function resetMock(opts: MockOptions = {}) {
       cron: "0 3 * * 0",
       enabled: true,
       refresh_downloads: true,
+      window: "",
+      only_changed: true,
       regions: regions.map((r) => ({ id: r.id, enabled: r.id !== "custom/permian-core" })),
     },
     tickMs: opts.tickMs ?? 350,
@@ -511,7 +565,64 @@ on("POST", /^\/admin\/api\/catalog\/estimate$/, (_m, b) => {
     });
   return est;
 });
-on("GET", /^\/admin\/api\/regions$/, () => ({ regions: S.regions }));
+// A region as the API returns it: its refresh setting resolved against the default schedule.
+function regionOut(r: Region): Region {
+  const own = S.refresh[r.id] ?? {
+    mode: "default" as const,
+    only_changed: true,
+    handledAt: Date.now(),
+  };
+  const live = S.generations.find((g) => g.status === "live");
+  const build = live
+    ? Object.entries(live.manifest.timings)
+        .filter(([k]) => k !== "terrain" && k !== "download")
+        .reduce((n, [, v]) => n + (v ?? 0), 0)
+    : null;
+  return {
+    ...r,
+    refresh_policy: resolvePolicy(own, S.schedule, new Date(own.handledAt), new Date(), {
+      last_checked_at: ("last_checked_at" in own ? own.last_checked_at : undefined) ?? null,
+      last_check: "last_check" in own ? own.last_check : undefined,
+      last_check_detail: "last_check_detail" in own ? own.last_check_detail : undefined,
+    }),
+    refresh_cost: { download_bytes: r.extract_bytes, build_seconds: build || null },
+  };
+}
+on("GET", /^\/admin\/api\/regions$/, () => ({ regions: S.regions.map(regionOut) }));
+on("POST", /^\/admin\/api\/regions\/check$/, () => {
+  const now = new Date().toISOString();
+  for (const r of S.regions) {
+    const own = S.refresh[r.id];
+    if (!own || own.mode === "never") continue;
+    own.last_checked_at = now;
+    // Deterministic: the first region has news, the rest do not.
+    const changed = r.id === S.regions[0].id;
+    own.last_check = changed ? "changed" : "unchanged";
+    own.last_check_detail = changed ? "newer data published" : "the latest";
+  }
+  return { regions: S.regions.map(regionOut) };
+});
+on("PATCH", /^\/admin\/api\/regions\/(.+)$/, (m, b) => {
+  const id = decodeURIComponent(m[1]);
+  const r = S.regions.find((x) => x.id === id);
+  if (!r) return json(404, { error: { code: "not_found", message: "not found" } });
+  const p = (b as { refresh_policy?: RefreshSetting }).refresh_policy;
+  if (p) {
+    if (p.mode === "cron" && !/^(\S+\s+){4}\S+$/.test((p.cron ?? "").trim()))
+      return json(400, {
+        error: { code: "bad_refresh", message: "mode cron needs a 5-field cron expression (UTC)" },
+      });
+    S.refresh[id] = {
+      ...S.refresh[id],
+      mode: p.mode,
+      cron: p.mode === "cron" ? p.cron : undefined,
+      window: p.window ?? "",
+      only_changed: p.only_changed ?? true,
+      handledAt: Date.now(),
+    };
+  }
+  return regionOut(r);
+});
 on("POST", /^\/admin\/api\/regions$/, (_m, b) => {
   const nr = b as NewRegion;
   let r: Region;
@@ -555,7 +666,8 @@ on("POST", /^\/admin\/api\/regions$/, (_m, b) => {
   }
   S.regions.push(r);
   S.schedule.regions.push({ id: r.id, enabled: true });
-  return json(201, r);
+  S.refresh[r.id] = { mode: "default", only_changed: true, handledAt: Date.now() };
+  return json(201, regionOut(r));
 });
 on("DELETE", /^\/admin\/api\/regions\/(.+)$/, (m) => {
   const id = decodeURIComponent(m[1]);
@@ -648,10 +760,13 @@ on("DELETE", /^\/admin\/api\/generations\/([^/]+)$/, (m) => {
   S.generations = S.generations.filter((x) => x !== g);
   return json(204, undefined);
 });
-on("GET", /^\/admin\/api\/schedule$/, () => S.schedule);
+const scheduleOut = () => ({ ...S.schedule, history: S.scheduleHistory });
+on("GET", /^\/admin\/api\/schedule$/, () => scheduleOut());
 on("PUT", /^\/admin\/api\/schedule$/, (_m, b) => {
-  S.schedule = b as Schedule;
-  return S.schedule;
+  const { regions, history, ...rest } = b as Schedule;
+  void history;
+  S.schedule = { ...S.schedule, ...rest, regions: regions?.length ? regions : S.schedule.regions };
+  return scheduleOut();
 });
 on("GET", /^\/admin\/api\/keys$/, () => ({ keys: S.keys }));
 on("POST", /^\/admin\/api\/keys$/, (_m, b) => {

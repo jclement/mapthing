@@ -113,6 +113,40 @@ export interface Region {
   downloaded_at: string | null;
   elevation_sources: string[];
   parents?: CatalogParent[]; // custom regions: extracts clipped from
+  refresh_policy?: RefreshPolicy;
+  /** A refresh of this region: its own download, and a build (always over all regions). */
+  refresh_cost?: { download_bytes: number; build_seconds: number | null };
+}
+
+export type RefreshMode = "default" | "never" | "daily" | "weekly" | "monthly" | "cron";
+
+/** A region's refresh setting, what it resolves to, and where it stands. */
+export interface RefreshPolicy {
+  mode: RefreshMode;
+  cron?: string; // for mode "cron": 5 fields, UTC
+  window?: string; // "HH:MM-HH:MM" UTC; empty = the default schedule's
+  only_changed: boolean; // build only when the source has something newer
+  effective: {
+    cron: string | null; // null: never refreshed
+    window: string;
+    only_changed: boolean;
+    inherited: boolean; // from the default schedule
+  };
+  next_due: string | null; // the next schedule time
+  next_build: string | null; // when a refresh can start (inside the build window)
+  due: boolean;
+  waiting: boolean; // due, but outside the build window
+  last_checked_at: string | null;
+  last_check?: "changed" | "unchanged" | "error" | "";
+  last_check_detail?: string;
+}
+
+/** What PATCH /admin/api/regions/{id} takes as refresh_policy. */
+export interface RefreshSetting {
+  mode: RefreshMode;
+  cron?: string;
+  window?: string;
+  only_changed?: boolean;
 }
 
 export type NewRegion = { id: string } | { name: string; bbox: BBox; polygon?: LonLat[] };
@@ -230,11 +264,19 @@ export interface LogPage {
   store: { bytes: number; max_bytes: number; oldest?: string; file_error?: string };
 }
 
+/** The default schedule: what regions follow unless they have a setting of their own. */
 export interface Schedule {
   cron: string; // 5-field, UTC
   enabled: boolean;
-  refresh_downloads: boolean;
+  refresh_downloads: boolean; // accepted for older clients; no longer changes anything
+  /** "HH:MM-HH:MM" UTC, or "": when builds may start. */
+  window?: string;
+  /** Build only when a due region's source has something newer. */
+  only_changed?: boolean;
   regions: { id: string; enabled: boolean }[];
+  next_run?: string | null;
+  /** Recent decisions of the scheduler, newest first. */
+  history?: { id: number; at: string; ok: boolean; message: string; job_id?: number }[];
 }
 
 export interface KeyLimits {
@@ -504,6 +546,10 @@ export const api = {
     request<CustomEstimate>("POST", "/admin/api/catalog/estimate", a),
   removeRegion: (id: string) =>
     request<void>("DELETE", `/admin/api/regions/${encodeURIComponent(id)}`),
+  setRegionRefresh: (id: string, refresh_policy: RefreshSetting) =>
+    request<Region>("PATCH", `/admin/api/regions/${encodeURIComponent(id)}`, { refresh_policy }),
+  /** Look at every refreshed region's source now; builds nothing. */
+  checkRegions: () => request<{ regions: Region[] }>("POST", "/admin/api/regions/check"),
 
   build: (refresh_downloads: boolean, rebuild_terrain = false) =>
     request<Job>("POST", "/admin/api/build", { refresh_downloads, rebuild_terrain }),

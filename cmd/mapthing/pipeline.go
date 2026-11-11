@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,9 +43,17 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 		var p struct {
 			Refresh        bool `json:"refresh"`
 			RebuildTerrain bool `json:"rebuild_terrain"`
+			// RefreshRegions, when present, are the only regions whose extracts are looked
+			// at for something newer (the scheduler's due regions). Absent: every region
+			// that is refreshed at all.
+			RefreshRegions *[]string `json:"refresh_regions"`
 		}
 		_ = j.Decode(&p)
 		regions, skip, err := f.buildRegions(ctx, cat)
+		if err == nil && p.RefreshRegions != nil {
+			skip = skipAllBut(regions, *p.RefreshRegions)
+			j.Logf("refreshing %s; the other regions keep their downloaded extracts", strings.Join(*p.RefreshRegions, ", "))
+		}
 		if err != nil {
 			return &build.StageError{Stage: build.StageGuard, Err: err}
 		}
@@ -54,6 +63,9 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 		}
 		return err
 	})
+	if f.sched != nil {
+		f.sched.Checker = checkerFunc(f.checkSource(cat))
+	}
 	f.runner.Details = func(err error) (map[string]any, bool) {
 		var se *build.StageError
 		if errors.As(err, &se) {
@@ -137,6 +149,66 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 		return est, nil
 	}
 	return cat
+}
+
+// skipAllBut returns the SkipRefresh set for a build that refreshes only the named regions:
+// every other region, and every parent extract that only regions not being refreshed are
+// clipped from. A parent shared with a region that is being refreshed is refreshed.
+func skipAllBut(regions []catalog.Region, refresh []string) map[string]bool {
+	want := map[string]bool{}
+	for _, id := range refresh {
+		want[id] = true
+	}
+	keep := map[string]bool{} // ids whose extracts are refreshed
+	skip := map[string]bool{}
+	for _, r := range regions {
+		if want[r.ID] {
+			keep[r.ID] = true
+			if r.Custom != nil {
+				for _, p := range r.Custom.Parents {
+					keep[p.ID] = true
+				}
+			}
+		}
+	}
+	for _, r := range regions {
+		if !keep[r.ID] {
+			skip[r.ID] = true
+		}
+		if r.Custom != nil {
+			for _, p := range r.Custom.Parents {
+				if !keep[p.ID] {
+					skip[p.ID] = true
+				}
+			}
+		}
+	}
+	return skip
+}
+
+// checkSource is scheduler.Checker: has a region's source something newer than its download?
+func (f *features) checkSource(cat *catalog.Catalog) func(ctx context.Context, id string) (scheduler.SourceCheck, error) {
+	return func(ctx context.Context, id string) (scheduler.SourceCheck, error) {
+		if err := cat.Ensure(ctx); err != nil {
+			return scheduler.SourceCheck{}, fmt.Errorf("region catalog: %w", err)
+		}
+		rg, err := f.store.Region(ctx, id)
+		if err != nil {
+			return scheduler.SourceCheck{}, err
+		}
+		r, err := storeRegion(ctx, cat, rg)
+		if err != nil {
+			return scheduler.SourceCheck{}, err
+		}
+		st, err := f.builder.SourceChanged(ctx, r)
+		return scheduler.SourceCheck{Changed: st.Changed, Detail: st.Detail}, err
+	}
+}
+
+type checkerFunc func(ctx context.Context, id string) (scheduler.SourceCheck, error)
+
+func (c checkerFunc) CheckSource(ctx context.Context, id string) (scheduler.SourceCheck, error) {
+	return c(ctx, id)
 }
 
 // buildOptions are the options of a build this server runs (the job, and the disk estimate

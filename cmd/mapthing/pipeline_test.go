@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -188,5 +189,44 @@ func TestEveryEnvVarIsDescribed(t *testing.T) {
 		if !config.KnownVar(name) {
 			t.Errorf("%s (read in %s) is not on the Settings page: add it to internal/config/settings.go", name, where)
 		}
+	}
+}
+
+// A scheduled build refreshes only the regions that are due: every other extract, and every
+// parent extract nobody due is clipped from, is left as downloaded.
+func TestSkipAllBut(t *testing.T) {
+	tx := catalog.Region{ID: "us/texas"}
+	nm := catalog.Region{ID: "us/new-mexico"}
+	la := catalog.Region{ID: "us/louisiana"}
+	regions := []catalog.Region{
+		tx,
+		{ID: "us/alberta"},
+		{ID: "custom/permian", Custom: &catalog.Custom{Parents: []catalog.Region{tx, nm}}},
+		{ID: "custom/haynesville", Custom: &catalog.Custom{Parents: []catalog.Region{la, tx}}},
+	}
+	keys := func(m map[string]bool) string {
+		var out []string
+		for k := range m {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+	// Only the Permian box is due: its two parents are refreshed, nothing else. Texas itself
+	// is the same extract as the parent, so it is refreshed with it.
+	if got := keys(skipAllBut(regions, []string{"custom/permian"})); got != "custom/haynesville,us/alberta,us/louisiana" {
+		t.Errorf("permian due: skip %s", got)
+	}
+	// Only Alberta is due.
+	if got := keys(skipAllBut(regions, []string{"us/alberta"})); got != "custom/haynesville,custom/permian,us/louisiana,us/new-mexico,us/texas" {
+		t.Errorf("alberta due: skip %s", got)
+	}
+	// Nothing due (a rebuild from what is there): everything is skipped.
+	if got := skipAllBut(regions, nil); len(got) != 6 {
+		t.Errorf("nothing due: skip %s", keys(got))
+	}
+	// Everything due: nothing is skipped.
+	if got := skipAllBut(regions, []string{"us/texas", "us/alberta", "custom/permian", "custom/haynesville"}); len(got) != 0 {
+		t.Errorf("all due: skip %s", keys(got))
 	}
 }

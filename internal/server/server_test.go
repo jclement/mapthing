@@ -1029,7 +1029,9 @@ func TestScheduleAndRegions(t *testing.T) {
 		t.Fatalf("bad cron: %d", r.StatusCode)
 	}
 	r, b := e.do(c, "PUT", "/admin/api/schedule", map[string]any{"cron": "30 4 * * *", "enabled": true, "refresh_downloads": false, "next_run": "ignored"}, o)
-	if r.StatusCode != 200 || !strings.Contains(string(b), "T04:30:00Z") || !strings.Contains(string(b), `"refresh_downloads":false`) {
+	// refresh_downloads is accepted for older clients and no longer changes anything: a
+	// scheduled build always looks for newer extracts of the regions that are due.
+	if r.StatusCode != 200 || !strings.Contains(string(b), "T04:30:00Z") || !strings.Contains(string(b), `"refresh_downloads":true`) {
 		t.Fatalf("set schedule: %d %s", r.StatusCode, b)
 	}
 	r, b = e.do(c, "PUT", "/admin/api/schedule", map[string]any{"enabled": false}, o)

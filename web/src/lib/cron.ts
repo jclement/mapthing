@@ -21,6 +21,11 @@ export function previewCron(expr: string, count = 3, from: Date = new Date()): C
     const it = CronExpressionParser.parse(e, { tz: "UTC", currentDate: from });
     const next: Date[] = [];
     for (let i = 0; i < count; i++) next.push(it.next().toDate());
+    // Fields that are each valid can still name a date that never comes (30 February); the
+    // server refuses those, and so does this preview.
+    if (next[0].getTime() - from.getTime() > 5 * 366 * 86400000) {
+      return { ok: false, error: "That date never occurs." };
+    }
     const description = cronstrue.toString(e, { use24HourTimeFormat: true, verbose: false });
     return { ok: true, description: `${description} (UTC)`, next };
   } catch (err) {

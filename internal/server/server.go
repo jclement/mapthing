@@ -154,6 +154,7 @@ func (s *Server) routes() {
 	m.Handle("POST /admin/api/catalog/estimate", admin(s.estimateCustom))
 	m.Handle("GET /admin/api/regions", admin(s.listRegions))
 	m.Handle("POST /admin/api/regions", admin(s.addRegion))
+	m.Handle("POST /admin/api/regions/check", admin(s.checkRegions))
 	m.Handle("GET /admin/api/regions/{id...}", admin(s.getRegion))
 	m.Handle("PATCH /admin/api/regions/{id...}", admin(s.patchRegion))
 	m.Handle("DELETE /admin/api/regions/{id...}", admin(s.deleteRegion))

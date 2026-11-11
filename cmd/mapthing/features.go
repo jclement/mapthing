@@ -10,6 +10,7 @@ import (
 	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/routing"
+	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/server"
 	"github.com/jclement/mapthing/internal/store"
 	"github.com/jclement/mapthing/internal/supervisor"
@@ -22,6 +23,7 @@ type features struct {
 	cfg     config.Config
 	store   *store.Store
 	runner  *jobs.Runner
+	sched   *scheduler.Scheduler
 	sup     *supervisor.Supervisor
 	watcher *tiles.Watcher
 	tiles   *tiles.Server

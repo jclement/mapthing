@@ -87,7 +87,9 @@ The **Overview** page says what to do next at each step:
 3. **API keys** → **Create key**. The key is shown once, with ready-made URLs for MapLibre or
    Mapbox GL, raster tiles and the Google-compatible endpoints.
 
-After that the **Schedule** page keeps the data fresh (weekly by default).
+After that the **Schedule** page keeps the data fresh: weekly by default, and each region can
+have its own setting (daily, weekly, monthly, a cron expression, or never), a build window such
+as nights only, and "only when the source has something new".
 
 ## Checking it works
 

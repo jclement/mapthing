@@ -227,9 +227,25 @@ type extractResult struct {
 
 // ensureCustom clips a custom region from each of its parent extracts and merges the clips,
 // re-clipping only when a parent changed or the clip geometry changed.
+//
+// A region that is not being refreshed in this build (no refresh at all, or it is in
+// SkipRefresh) keeps the clip it has: a parent extract it shares with a region that is being
+// refreshed may be newer on disk, but this region's data only changes when its own refresh
+// comes round. Its parents are not even looked at.
 func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *DownloadMeta, error) {
 	if len(r.Custom.Parents) == 0 {
 		return "", nil, errors.New("custom region has no parent extracts")
+	}
+	dir := s.b.RegionDir(r.ID)
+	file := s.b.regionFile(r.ID)
+	clipHash := customClipHash(r)
+	if !s.opt.Refresh || s.opt.SkipRefresh[r.ID] {
+		if meta, err := readMeta(dir); err == nil && meta.ClipHash == clipHash {
+			if _, err := os.Stat(file); err == nil {
+				s.logf("%s: keeping its clip (data of %s)", r.ID, dateOnly(meta.SourceTimestamp))
+				return file, meta, nil
+			}
+		}
 	}
 	type parentFile struct {
 		id   string
@@ -251,17 +267,9 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 	}
 	parentSig := strings.Join(sig, ",")
 
-	dir := s.b.RegionDir(r.ID)
-	file := s.b.regionFile(r.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", nil, err
 	}
-	clip, _ := json.Marshal(struct {
-		B catalog.BBox
-		P [][][2]float64
-	}{r.BBox, r.Polygon})
-	h := sha256.Sum256(clip)
-	clipHash := hex.EncodeToString(h[:8])
 	if meta, err := readMeta(dir); err == nil && meta.ParentMD5 == parentSig && meta.ClipHash == clipHash {
 		if _, err := os.Stat(file); err == nil {
 			s.logf("%s: clip up to date", r.ID)
@@ -333,6 +341,31 @@ func (s *state) ensureCustom(ctx context.Context, r catalog.Region) (string, *Do
 	}
 	s.logf("%s: clipped from %s (%s)", r.ID, strings.Join(meta.Parents, " + "), humanBytes(size))
 	return file, meta, writeMeta(dir, meta)
+}
+
+// customClipHash identifies a custom region's clip geometry.
+func customClipHash(r catalog.Region) string {
+	clip, _ := json.Marshal(struct {
+		B catalog.BBox
+		P [][][2]float64
+	}{r.BBox, r.Polygon})
+	h := sha256.Sum256(clip)
+	return hex.EncodeToString(h[:8])
+}
+
+// parentSignature is "id:md5,…" of the extracts a clip was made from, sorted by id.
+func parentSignature(ids, md5s []string) string {
+	type pm struct{ id, md5 string }
+	ps := make([]pm, len(ids))
+	for i := range ids {
+		ps[i] = pm{ids[i], md5s[i]}
+	}
+	sort.Slice(ps, func(i, j int) bool { return ps[i].id < ps[j].id })
+	sig := make([]string, len(ps))
+	for i, p := range ps {
+		sig[i] = p.id + ":" + p.md5
+	}
+	return strings.Join(sig, ",")
 }
 
 // fetchState reads sequenceNumber and timestamp from an osmosis state.txt.
