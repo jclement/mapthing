@@ -385,3 +385,49 @@ func TestPolicy(t *testing.T) {
 		t.Error("off must be off, and the world must be the world")
 	}
 }
+
+// Source blocks are shared: a neighbouring tile reuses the blocks its
+// neighbour read, and after a restart they come from the disk cache.
+func TestNeighboursAndRestartsReuseSourceBlocks(t *testing.T) {
+	r := newRig(t, 64<<20)
+	r.hosts.Put3DEP(-98, 30, ondemandtest.Plane(1000), "v1")
+	ctx := context.Background()
+	// Four z13 tiles that all sit inside one 256 px source block.
+	x, y := tileAt(-97.55, 30.55, 13)
+	if _, _, err := r.svc.Tile(ctx, 13, x, y); err != nil {
+		t.Fatal(err)
+	}
+	first := r.hosts.Ranges.Load()
+	for _, d := range [][2]int{{1, 0}, {0, 1}, {1, 1}} {
+		if _, _, err := r.svc.Tile(ctx, 13, x+d[0], y+d[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if extra := r.hosts.Ranges.Load() - first; extra >= 3*(first-1) {
+		t.Fatalf("three neighbours made %d data requests; the first tile made %d (header included): blocks are not shared", extra, first)
+	}
+	// A new process on the same cache, with the finished tiles gone and the hosts
+	// unreachable: the tiles can only be rebuilt from the source blocks on disk.
+	r.cache.RemoveIf(ondemandtest.IsTileKey)
+	r.hosts.Down.Store(true)
+	svc2 := ondemand.New(ondemand.Options{Upstream: ondemand.NewUpstream(ondemand.UpstreamOptions{Attempts: 1}),
+		Store: ondemand.NewDiskStore(r.cache), URLs: r.hosts.URLs(), Now: r.clock, StatePath: ""})
+	if _, _, err := svc2.Tile(ctx, 13, x, y); err == nil {
+		t.Fatal("a process that never learned the files' versions answered with the hosts down")
+	}
+	// With the versions it would have kept across the restart, it needs nothing from the hosts.
+	r.hosts.Down.Store(false)
+	if !svc2.Cached(ctx, 13, x, y) { // learns the versions (HEAD only)
+		before := r.hosts.Ranges.Load()
+		png, cold, err := svc2.Tile(ctx, 13, x, y)
+		if err != nil || !cold || len(png) == 0 {
+			t.Fatalf("rebuild from cached blocks: cold=%v err=%v", cold, err)
+		}
+		if got := r.hosts.Ranges.Load() - before; got != 0 {
+			t.Fatalf("%d data requests to rebuild a tile whose header and blocks are on disk", got)
+		}
+		checkPlane(t, decode(t, png), 13, x, y, ondemandtest.Plane(1000), 0.2)
+	} else {
+		t.Fatal("the tile was removed from the cache but is reported cached")
+	}
+}

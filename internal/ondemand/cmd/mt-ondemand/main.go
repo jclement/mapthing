@@ -6,6 +6,7 @@
 //	mt-ondemand profile [-runs 3]
 //	mt-ondemand viewport [-zooms 10,12,14] [-areas …]   a screenful of tiles, as a browser asks
 //	mt-ondemand tile z/x/y [-out tile.png]
+//	mt-ondemand share DIR                       what the shared source-block cache saves (DIR: scratch)
 //	mt-ondemand shade z/x/y NXxNY out.png      a block of tiles as one hillshade, to look for seams
 //
 // It keeps nothing on disk and reads only the windows it needs.
@@ -83,6 +84,11 @@ func main() {
 		if err := shade(ctx, z, x, y, nx, ny, os.Args[4]); err != nil {
 			fatal(err)
 		}
+	case "share":
+		if len(os.Args) < 3 {
+			fatal(fmt.Errorf("usage: mt-ondemand share <empty scratch directory>"))
+		}
+		share(ctx, os.Args[2])
 	case "tile":
 		fs := flag.NewFlagSet("tile", flag.ExitOnError)
 		out := fs.String("out", "", "write the PNG here")
