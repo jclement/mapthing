@@ -197,7 +197,9 @@ export function OnDemandSettings({
         </span>
       }
       action={
-        <span className="hidden text-xs text-faint sm:inline">set here, not in the environment</span>
+        <span className="hidden text-xs text-faint sm:inline">
+          set here, not in the environment
+        </span>
       }
     >
       <div className="space-y-4 text-[13px]">

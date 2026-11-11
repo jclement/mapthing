@@ -208,7 +208,7 @@ func measure(ctx context.Context, n int, zooms, only string) {
 			if _, err := fmt.Sscanf(zs, "%d", &z); err != nil {
 				fatal(err)
 			}
-			rng := rand.New(rand.NewPCG(uint64(z), 42))
+			rng := rand.New(rand.NewPCG(uint64(z), 42)) //nolint:gosec // a repeatable sample of tiles, nothing secret
 			x0, y0, x1, y1 := elevation.TileRange(z, a.box[0], a.box[1], a.box[2], a.box[3])
 			seen := map[[2]int]bool{}
 			var tiles [][2]int
@@ -281,7 +281,7 @@ func viewports(ctx context.Context, zooms, only string, runs int) {
 			if _, err := fmt.Sscanf(zs, "%d", &z); err != nil {
 				fatal(err)
 			}
-			rng := rand.New(rand.NewPCG(uint64(z), 7))
+			rng := rand.New(rand.NewPCG(uint64(z), 7)) //nolint:gosec // a repeatable sample of tiles, nothing secret
 			x0, y0, x1, y1 := elevation.TileRange(z, a.box[0], a.box[1], a.box[2], a.box[3])
 			_, _ = ondemand.New(ondemand.Options{Upstream: up}).Render(ctx, z, x0, y0) // warm the connections
 			var total, first, mb, rq []float64

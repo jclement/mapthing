@@ -422,9 +422,8 @@ feed:
 	if fi != nil {
 		res.Bytes = fi.Size()
 	}
-	js, _ := json.MarshalIndent(res, "", "  ")
 	res.OnDemand = onDemand
-	js, _ = json.MarshalIndent(res, "", "  ")
+	js, _ := json.MarshalIndent(res, "", "  ")
 	if err := os.WriteFile(outPath+".json", js, 0o644); err != nil {
 		return nil, err
 	}

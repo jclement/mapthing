@@ -595,12 +595,12 @@ func (f *File) Decode(level int, raw []byte) ([]float32, error) {
 		}
 	}
 	if lv.predictor != 3 {
-		switch {
-		case f.sampleFmt == 3:
+		switch f.sampleFmt {
+		case 3:
 			for i := range out {
 				out[i] = math.Float32frombits(f.order.Uint32(buf[i*4:]))
 			}
-		case f.sampleFmt == 2:
+		case 2:
 			for i := range out {
 				out[i] = float32(int16(f.order.Uint16(buf[i*2:])))
 			}

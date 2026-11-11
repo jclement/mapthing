@@ -3,6 +3,7 @@ package elevation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -172,7 +173,7 @@ func TestFallbackErrorsAreAnsweredClearly(t *testing.T) {
 	for i := 0; i < 2000; i++ {
 		pts = append(pts, LonLat{-104 + float64(i)*0.05, 32 + float64(i%7)*0.05})
 	}
-	if _, err := terrain.Points(context.Background(), pts); err != ErrTooLarge {
+	if _, err := terrain.Points(context.Background(), pts); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("huge request: %v", err)
 	}
 	if len(fb.tiles) != 0 {

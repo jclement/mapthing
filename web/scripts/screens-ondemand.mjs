@@ -71,7 +71,10 @@ await shot("06-settings-clear", "/settings", {
 await shot("07-regions", "/regions");
 await shot("08-regions-terrain-dialog", "/regions", {
   before: async (page) => {
-    await page.getByRole("button", { name: /Terrain built/ }).first().click();
+    await page
+      .getByRole("button", { name: /Terrain built/ })
+      .first()
+      .click();
     await page.getByRole("radio", { name: /Read on demand/ }).click();
     await page.waitForTimeout(300);
   },
