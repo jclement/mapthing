@@ -12,10 +12,13 @@ export type BBox = [number, number, number, number]; // west, south, east, north
 export class ApiError extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string, message: string) {
+  /** Details some refusals carry (an invalid generation lists what is wrong with it). */
+  problems?: string[];
+  constructor(status: number, code: string, message: string, problems?: string[]) {
     super(message);
     this.status = status;
     this.code = code;
+    this.problems = problems;
   }
 }
 
@@ -42,12 +45,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!res.ok) {
     if (res.status === 401 && path !== "/admin/api/login") onUnauthorized?.();
-    const err = (data as { error?: { code?: string; message?: string } | string } | undefined)
-      ?.error;
+    const err = (
+      data as
+        | { error?: { code?: string; message?: string; problems?: string[] } | string }
+        | undefined
+    )?.error;
     const code = typeof err === "object" ? (err.code ?? "error") : "error";
     const msg =
       typeof err === "string" ? err : (err?.message ?? (text || `${res.status} ${res.statusText}`));
-    throw new ApiError(res.status, code, msg);
+    throw new ApiError(res.status, code, msg, typeof err === "object" ? err.problems : undefined);
   }
   return data as T;
 }
@@ -161,17 +167,67 @@ export interface JobDetail extends Job {
 }
 
 export interface Manifest {
-  regions: { id: string; name: string; data_date: string | null }[];
+  regions: { id: string; name: string; data_date: string | null; bbox?: BBox }[];
   sizes: { basemap: number; terrain: number; contours?: number; routing: number; total: number };
   timings: Partial<Record<StageName, number>>; // seconds
   checks: { name: string; ok: boolean; detail?: string }[];
 }
 
+/**
+ * live: being served. previous: kept for rollback. kept: another complete one. building: a
+ * build is writing it. incoming: copied in from another machine, never activated here.
+ * invalid: incomplete or damaged (see problems).
+ */
+export type GenerationStatus = "live" | "previous" | "kept" | "building" | "incoming" | "invalid";
+
 export interface Generation {
   id: string;
   created_at: string;
-  status: "live" | "kept";
+  status: GenerationStatus;
+  owned?: boolean; // built or activated here (retention only prunes these)
+  problems?: string[];
+  bytes?: number; // size on disk
   manifest: Manifest;
+  can_activate?: boolean;
+  can_delete?: boolean;
+}
+
+export interface GenerationList {
+  generations: Generation[];
+  disk?: {
+    bytes: number; // what they occupy: files shared by hard link counted once
+    sum_bytes: number; // their sizes added up
+    free_bytes: number;
+    total_bytes: number;
+  };
+}
+
+/** POST /admin/api/generations/{id}/activate */
+export interface Activation {
+  id: string;
+  status: "live";
+  already_live: boolean;
+  previous: string | null;
+  removed: string[];
+}
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/** One line of the server's log (GET /admin/api/logs and its stream). */
+export interface LogEntry {
+  id: string; // orders entries; a nanosecond timestamp as a decimal string
+  t: string;
+  source: string; // "mapthing", "build", or a child process ("renderer", "valhalla@8002", "xvfb")
+  level: LogLevel;
+  job?: string; // build job id, for source "build"
+  msg: string;
+}
+
+export interface LogPage {
+  entries: LogEntry[]; // oldest first
+  more: boolean; // older matching entries exist
+  sources: string[];
+  store: { bytes: number; max_bytes: number; oldest?: string; file_error?: string };
 }
 
 export interface Schedule {
@@ -235,6 +291,88 @@ export interface Stats {
   }[];
 }
 
+/** One process on the overview: this server, a supervised child, or a build's tools. */
+export interface ProcessInfo {
+  name: string;
+  state: "running" | "starting" | "restarting" | "stopped";
+  detail?: string;
+  pid: number | null;
+  uptime_s: number;
+  restarts: number;
+  rss_bytes: number; // the process and everything it started
+  healthy: boolean;
+  cpu_percent: number | null; // of one core; null until there are two readings
+  standby?: boolean; // a replacement warming up during a generation swap
+  role?: string;
+}
+
+export type TrafficKindName = "tiles" | "raster" | "route" | "elevation" | "style" | "pack";
+
+export interface TrafficWindow {
+  requests: number;
+  errors: number; // answered 5xx
+  rejected: number; // answered 401, 403 or 429
+  per_min: number;
+  p50_ms: number;
+  p95_ms: number;
+}
+
+export interface KindTraffic {
+  kind: TrafficKindName | string;
+  hour: TrafficWindow;
+  day: TrafficWindow;
+  series: number[]; // requests per minute, the last 60 minutes, oldest first
+}
+
+/** GET /admin/api/overview: the admin home page in one call. */
+export interface Overview {
+  version: string;
+  commit: string;
+  started_at: string;
+  ready: boolean;
+  readiness: { name: string; ok: boolean; detail?: string }[];
+  generation: {
+    id: string;
+    created_at?: string;
+    bytes: number;
+    regions: { id: string; name: string; data_date: string | null; bbox?: BBox }[];
+  } | null;
+  regions_installed: number;
+  processes: ProcessInfo[];
+  system: {
+    cpus: number;
+    load1: number; // -1 when unknown
+    memory_used_bytes: number;
+    memory_total_bytes: number;
+    platform: string;
+  };
+  traffic: { since: string; kinds: KindTraffic[] };
+  disk: {
+    total_bytes: number;
+    free_bytes: number;
+    data_bytes: number; // what mapthing keeps on the volume
+    parts: { name: string; bytes: number }[];
+    /** What the next build needs free (its disk guard). */
+    guard: { known: boolean; need_bytes?: number; ok?: boolean };
+  };
+  builds: {
+    schedule_enabled: boolean;
+    cron: string;
+    next_run: string | null;
+    active: Job | null;
+    last: {
+      id: string;
+      status: JobStatus;
+      trigger: string;
+      started_at?: string;
+      finished_at?: string;
+      duration_s?: number;
+      error?: string;
+      generation_id?: string;
+    } | null;
+  };
+}
+
 export interface SystemInfo {
   version: string;
   commit: string;
@@ -246,6 +384,9 @@ export interface SystemInfo {
   current_generation: string | null;
   attribution: { name: string; license: string; url?: string; note?: string }[];
   imagery_source: { name: string; attribution: string; url?: string } | null;
+  /** MAPTHING_PUBLIC_URL ("" when unset): the address clients use, for snippets. */
+  public_url?: string;
+  trusted_proxy?: boolean;
 }
 
 // ---------- types: keyed ----------
@@ -341,11 +482,15 @@ export const api = {
   removeRegion: (id: string) =>
     request<void>("DELETE", `/admin/api/regions/${encodeURIComponent(id)}`),
 
-  build: (refresh_downloads: boolean) =>
-    request<Job>("POST", "/admin/api/build", { refresh_downloads }),
+  build: (refresh_downloads: boolean, rebuild_terrain = false) =>
+    request<Job>("POST", "/admin/api/build", { refresh_downloads, rebuild_terrain }),
   jobs: () => request<{ jobs: Job[] }>("GET", "/admin/api/jobs"),
   job: (id: string) => request<JobDetail>("GET", `/admin/api/jobs/${encodeURIComponent(id)}`),
-  generations: () => request<{ generations: Generation[] }>("GET", "/admin/api/generations"),
+  generations: () => request<GenerationList>("GET", "/admin/api/generations"),
+  activateGeneration: (id: string) =>
+    request<Activation>("POST", `/admin/api/generations/${encodeURIComponent(id)}/activate`),
+  deleteGeneration: (id: string) =>
+    request<void>("DELETE", `/admin/api/generations/${encodeURIComponent(id)}`),
 
   schedule: () => request<Schedule>("GET", "/admin/api/schedule"),
   saveSchedule: (s: Schedule) => request<Schedule>("PUT", "/admin/api/schedule", s),
@@ -354,6 +499,10 @@ export const api = {
   createKey: (k: NewKey) => request<CreatedKey>("POST", "/admin/api/keys", k),
   revokeKey: (id: string) => request<void>("DELETE", `/admin/api/keys/${encodeURIComponent(id)}`),
 
+  /** `query` is the string lib/logs.ts apiQuery builds ("" or "?…"). */
+  logs: (query: string) => request<LogPage>("GET", `/admin/api/logs${query}`),
+
+  overview: () => request<Overview>("GET", "/admin/api/overview"),
   stats: () => request<Stats>("GET", "/admin/api/stats"),
   system: () => request<SystemInfo>("GET", "/admin/api/system"),
 
@@ -400,6 +549,47 @@ export function subscribeEvents(onEvent: (e: ServerEvent) => void): () => void {
     for (const [t, h] of listeners) es.removeEventListener(t, h as EventListener);
     es.close();
   };
+}
+
+/** Live log lines from /admin/api/logs/stream (same query as api.logs, plus after=<id>). */
+export function subscribeLogs(
+  query: string,
+  on: {
+    entry: (e: LogEntry) => void;
+    dropped?: (count: number) => void;
+    state?: (connected: boolean) => void;
+  },
+): () => void {
+  const es = new EventSource(`/admin/api/logs/stream${query}`, { withCredentials: true });
+  const entry = (ev: MessageEvent) => {
+    try {
+      on.entry(JSON.parse(ev.data) as LogEntry);
+    } catch {
+      /* ignore a malformed event */
+    }
+  };
+  const dropped = (ev: MessageEvent) => {
+    try {
+      on.dropped?.((JSON.parse(ev.data) as { count: number }).count);
+    } catch {
+      /* ignore */
+    }
+  };
+  es.addEventListener("entry", entry as EventListener);
+  es.addEventListener("dropped", dropped as EventListener);
+  es.onopen = () => on.state?.(true);
+  es.onerror = () => on.state?.(false);
+  return () => {
+    es.removeEventListener("entry", entry as EventListener);
+    es.removeEventListener("dropped", dropped as EventListener);
+    es.close();
+  };
+}
+
+/** Download link for the filtered log (`query` as for api.logs). */
+export function logsDownloadUrl(query: string, format: "text" | "jsonl" = "text"): string {
+  const sep = query ? "&" : "?";
+  return `/admin/api/logs/download${query}${format === "jsonl" ? `${sep}format=jsonl` : ""}`;
 }
 
 // ---------- URLs ----------

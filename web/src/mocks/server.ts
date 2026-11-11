@@ -8,10 +8,13 @@ import type {
   ElevationSample,
   Generation,
   Job,
+  KindTraffic,
+  LogEntry,
   LogLine,
   LonLat,
   NewKey,
   NewRegion,
+  Overview,
   Region,
   RouteRequest,
   Schedule,
@@ -26,6 +29,8 @@ import * as fx from "./fixtures";
 export interface MockOptions {
   /** Start with nothing installed (first-run experience). */
   empty?: boolean;
+  /** Add a generation copied in from another machine and a damaged one (the rarer states). */
+  oddGenerations?: boolean;
   /** Start already signed in. */
   authed?: boolean;
   /** Milliseconds per simulated build tick; 0 = never tick on a timer (tests drive builds
@@ -41,6 +46,7 @@ interface State {
   generations: Generation[];
   jobs: Job[];
   logs: Record<string, LogLine[]>;
+  logEntries: LogEntry[];
   keys: ApiKey[];
   schedule: Schedule;
   tickMs: number;
@@ -57,6 +63,7 @@ export function resetMock(opts: MockOptions = {}) {
   const empty = !!opts.empty;
   const regions = empty ? [] : fx.installedRegions();
   const gens = empty ? [] : fx.generations();
+  if (opts.oddGenerations) gens.push(...fx.oddGenerations());
   const history: Job[] = empty
     ? []
     : [
@@ -70,6 +77,12 @@ export function resetMock(opts: MockOptions = {}) {
     generations: gens,
     jobs: history,
     logs: {},
+    logEntries: empty
+      ? fx
+          .logEntries()
+          .filter((e) => e.source === "mapthing")
+          .slice(-6)
+      : fx.logEntries(),
     keys: empty ? [] : fx.apiKeys(),
     schedule: {
       cron: "0 3 * * 0",
@@ -274,7 +287,8 @@ function tick() {
       r.downloaded_at = new Date().toISOString();
       r.disk_bytes = r.disk_bytes || Math.max(25e6 * 4, r.extract_bytes * 5.5);
     }
-    for (const g of S.generations) g.status = "kept";
+    for (const g of S.generations)
+      if (g.status === "live" || g.status === "previous") g.status = "kept";
     const total = S.regions.reduce((s, r) => s + r.disk_bytes, 0);
     S.generations.unshift({
       id: gid,
@@ -311,7 +325,13 @@ function tick() {
         ],
       },
     });
-    S.generations = S.generations.slice(0, 2);
+    // retention: the live one and the newest other; copies from elsewhere are left alone
+    {
+      let kept = 0;
+      S.generations = S.generations.filter(
+        (g) => g.status === "incoming" || g.status === "invalid" || kept++ < 2,
+      );
+    }
     log(job, `generation ${gid} is live`);
     emit({ type: "job", data: clone(job) });
     emit({ type: "generation", data: { id: gid } });
@@ -552,7 +572,82 @@ on("GET", /^\/admin\/api\/jobs\/(.+)$/, (m) => {
   if (!j) return json(404, { error: { code: "not_found", message: "No such job" } });
   return { ...j, log: S.logs[j.id] ?? [] };
 });
-on("GET", /^\/admin\/api\/generations$/, () => ({ generations: S.generations }));
+// Statuses as the server derives them: one live, the newest other complete one is "previous".
+function settleGenerations() {
+  let previous = false;
+  for (const g of S.generations) {
+    if (g.status === "building" || g.status === "incoming" || g.status === "invalid") continue;
+    if (g.status === "live") continue;
+    g.status = previous ? "kept" : "previous";
+    previous = true;
+  }
+}
+on("GET", /^\/admin\/api\/generations$/, () => {
+  settleGenerations();
+  const building = S.jobs.some((j) => j.status === "running");
+  const gens = [...S.generations]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((g) => ({
+      ...g,
+      owned: g.owned ?? true,
+      bytes: g.manifest.sizes.total,
+      can_activate: !["live", "building", "invalid"].includes(g.status) && !building,
+      can_delete: g.status !== "live" && g.status !== "building",
+    }));
+  const sum = gens.reduce((n, g) => n + g.bytes, 0);
+  // Two generations of the same regions share their terrain.
+  const shared =
+    gens.length > 1 ? Math.min(...gens.slice(0, 2).map((g) => g.manifest.sizes.terrain)) : 0;
+  return {
+    generations: gens,
+    disk: { bytes: sum - shared, sum_bytes: sum, free_bytes: 28.6e9, total_bytes: 202e9 },
+  };
+});
+on("POST", /^\/admin\/api\/generations\/([^/]+)\/activate$/, (m) => {
+  const g = S.generations.find((x) => x.id === m[1]);
+  if (!g)
+    return json(404, {
+      error: { code: "no_generation", message: `There is no generation ${m[1]}` },
+    });
+  if (g.status === "invalid")
+    return json(422, {
+      error: {
+        code: "invalid_generation",
+        message: `generation ${g.id} is incomplete or invalid. The live generation is unchanged.`,
+        problems: g.problems ?? [],
+      },
+    });
+  const prev = S.generations.find((x) => x.status === "live");
+  if (prev === g)
+    return { id: g.id, status: "live", already_live: true, previous: null, removed: [] };
+  for (const x of S.generations)
+    if (x.status === "live" || x.status === "previous") x.status = "kept";
+  g.status = "live";
+  g.owned = true;
+  if (prev) {
+    // the generation that was live becomes the rollback slot
+    S.generations = [g, prev, ...S.generations.filter((x) => x !== g && x !== prev)];
+    prev.status = "previous";
+  }
+  emit({ type: "generation", data: { id: g.id } });
+  return { id: g.id, status: "live", already_live: false, previous: prev?.id ?? null, removed: [] };
+});
+on("DELETE", /^\/admin\/api\/generations\/([^/]+)$/, (m) => {
+  const g = S.generations.find((x) => x.id === m[1]);
+  if (!g)
+    return json(404, {
+      error: { code: "no_generation", message: `There is no generation ${m[1]}` },
+    });
+  if (g.status === "live")
+    return json(409, {
+      error: {
+        code: "live",
+        message: `generation ${g.id} is the one being served; activate another generation first`,
+      },
+    });
+  S.generations = S.generations.filter((x) => x !== g);
+  return json(204, undefined);
+});
 on("GET", /^\/admin\/api\/schedule$/, () => S.schedule);
 on("PUT", /^\/admin\/api\/schedule$/, (_m, b) => {
   S.schedule = b as Schedule;
@@ -582,6 +677,55 @@ on("DELETE", /^\/admin\/api\/keys\/(.+)$/, (m) => {
   S.keys = S.keys.filter((k) => k.id !== m[1]);
   return json(204, undefined);
 });
+// ---- logs ----
+const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 } as const;
+const idLess = (a: string, b: string) => (a.length !== b.length ? a.length < b.length : a < b);
+function logMatcher(q: URLSearchParams) {
+  const sources = (q.get("source") ?? "").split(",").filter(Boolean);
+  const level = q.get("level") as keyof typeof LEVEL_RANK | null;
+  const text = (q.get("q") ?? "").toLowerCase();
+  const job = q.get("job");
+  const since = q.get("since");
+  const until = q.get("until");
+  const before = q.get("before");
+  const after = q.get("after");
+  return (e: LogEntry) =>
+    (!sources.length || sources.includes(e.source)) &&
+    (!level || LEVEL_RANK[e.level] >= LEVEL_RANK[level]) &&
+    (!text || e.msg.toLowerCase().includes(text)) &&
+    (!job || e.job === job) &&
+    (!since || e.t >= since) &&
+    (!until || e.t < until) &&
+    (!before || idLess(e.id, before)) &&
+    (!after || idLess(after, e.id));
+}
+on("GET", /^\/admin\/api\/logs$/, (_m, _b, url) => {
+  const limit = Number(url.searchParams.get("limit")) || 500;
+  const all = S.logEntries.filter(logMatcher(url.searchParams));
+  const size = S.logEntries.reduce((n, e) => n + e.msg.length + 90, 0);
+  return {
+    entries: all.slice(-limit),
+    more: all.length > limit,
+    sources: [...new Set(S.logEntries.map((e) => e.source))].sort((a, b) =>
+      a === "mapthing" ? -1 : b === "mapthing" ? 1 : a.localeCompare(b),
+    ),
+    store: { bytes: size * 400, max_bytes: 50e6, oldest: S.logEntries[0]?.t },
+  };
+});
+
+/** Append a line to the mock log and send it to every open log stream (tests, and the ticker). */
+export function emitLog(e: Omit<LogEntry, "id" | "t"> & { t?: string }) {
+  const t = e.t ?? new Date().toISOString();
+  const last = S.logEntries[S.logEntries.length - 1]?.id ?? "0";
+  let id = `${Date.parse(t)}000000`;
+  if (!idLess(last, id)) id = (BigInt(last) + 1n).toString();
+  const entry: LogEntry = { ...e, id, t };
+  S.logEntries.push(entry);
+  for (const l of logListeners) l(entry);
+  return entry;
+}
+
+on("GET", /^\/admin\/api\/overview$/, () => overview());
 on("GET", /^\/admin\/api\/stats$/, () => stats());
 on("GET", /^\/admin\/api\/system$/, () => {
   const live = S.generations.find((g) => g.status === "live");
@@ -702,6 +846,197 @@ on("POST", /^\/api\/v1\/elevation\/profile$/, (_m, b) => {
   return { ...profileOf(path, interval_m ?? 30), bridges: bridges ?? "ground" };
 });
 
+const mockStarted = Date.now() - 3.1 * 86400000;
+
+function overview(): Overview {
+  settleGenerations();
+  const live = S.generations.find((g) => g.status === "live");
+  const up = !!live;
+  const active = S.jobs.find((j) => j.status === "running") ?? null;
+  const last = S.jobs.find((j) => j.status !== "running" && j.status !== "queued");
+  const minute = Math.floor(Date.now() / 60000);
+  // Deterministic within a minute, so polling does not make the numbers jump about.
+  const wave = (i: number, base: number, k: number) =>
+    Math.max(
+      0,
+      Math.round(base * (1 + 0.35 * Math.sin((minute - 59 + i) / k) + 0.15 * Math.sin(i * 1.7))),
+    );
+  const kind = (
+    name: string,
+    perMin: number,
+    p50: number,
+    p95: number,
+    errors = 0,
+    rejected = 0,
+  ): KindTraffic => {
+    const series = Array.from({ length: 60 }, (_, i) =>
+      up ? wave(i, perMin, 7 + name.length) : 0,
+    );
+    const hour = series.reduce((a, b) => a + b, 0);
+    return {
+      kind: name,
+      series,
+      hour: {
+        requests: hour,
+        errors: Math.round(errors / 20),
+        rejected: Math.round(rejected / 24),
+        per_min: Math.round((hour / 60) * 100) / 100,
+        p50_ms: up ? p50 : 0,
+        p95_ms: up ? p95 : 0,
+      },
+      day: {
+        requests: up ? Math.round(perMin * 60 * 24 * 0.62) : 0,
+        errors: up ? errors : 0,
+        rejected: up ? rejected : 0,
+        per_min: Math.round(perMin * 0.62 * 100) / 100,
+        p50_ms: up ? p50 * 1.05 : 0,
+        p95_ms: up ? p95 * 1.2 : 0,
+      },
+    };
+  };
+  const gensBytes = S.generations.reduce((n, g) => n + g.manifest.sizes.total, 0);
+  const downloads = S.regions.reduce((n, r) => n + r.extract_bytes, 0);
+  const parts = [
+    { name: "Generations", bytes: gensBytes },
+    { name: "Elevation cache", bytes: S.regions.length ? 7.4e9 : 0 },
+    { name: "Imagery cache", bytes: up ? 4.6e9 : 0 },
+    { name: "Downloaded extracts", bytes: downloads },
+    { name: "Build caches and scratch", bytes: S.jobs.length ? 4.1e9 : 0 },
+    { name: "Raster tile cache", bytes: up ? 1.8e9 : 0 },
+    { name: "Offline pack cache", bytes: up ? 0.3e9 : 0 },
+    { name: "Logs", bytes: 6.5e6 },
+    { name: "Database", bytes: 1.2e6 },
+  ].sort((a, b) => b.bytes - a.bytes);
+  const need = S.regions.length ? Math.max(4e9, downloads * 6 + 2e9) : 0;
+  const free = 28.6e9;
+  return {
+    version: "0.9.0",
+    commit: "7efee20a1b2c",
+    started_at: new Date(mockStarted).toISOString(),
+    ready: up,
+    readiness: [
+      {
+        name: "map data",
+        ok: up,
+        detail: up ? `live generation ${live.id}` : "no map data has been built yet",
+      },
+      { name: "renderer", ok: true, detail: "running" },
+      { name: "routing", ok: up },
+    ],
+    generation: live
+      ? {
+          id: live.id,
+          created_at: live.created_at,
+          bytes: live.manifest.sizes.total,
+          regions: live.manifest.regions.map((r) => ({
+            ...r,
+            bbox:
+              S.regions.find((x) => x.id === r.id)?.bbox ??
+              fx.catalog.find((c) => c.id === r.id)?.bbox,
+          })),
+        }
+      : null,
+    regions_installed: S.regions.length,
+    processes: [
+      {
+        name: "mapthing",
+        state: "running",
+        healthy: true,
+        pid: 1,
+        uptime_s: (Date.now() - mockStarted) / 1000,
+        restarts: 0,
+        rss_bytes: 412e6,
+        cpu_percent: 3.2,
+        role: "API, tiles, elevation, jobs, this page",
+      },
+      {
+        name: "renderer",
+        state: "running",
+        healthy: true,
+        pid: 2214,
+        uptime_s: 1.2 * 86400,
+        restarts: up ? 1 : 0,
+        rss_bytes: 640e6,
+        cpu_percent: up ? 41.5 : 0.1,
+        role: "raster tiles (MapLibre Native and its X server)",
+      },
+      {
+        name: "valhalla@8003",
+        state: up ? "running" : "stopped",
+        detail: up ? undefined : "waiting: no generation built yet",
+        healthy: up,
+        pid: up ? 2211 : null,
+        uptime_s: up ? 3.1 * 86400 : 0,
+        restarts: 0,
+        rss_bytes: up ? 1.9e9 : 0,
+        cpu_percent: up ? 12.0 : null,
+        role: "routing",
+      },
+      ...(active
+        ? [
+            {
+              name: "build tools",
+              state: "running" as const,
+              healthy: true,
+              pid: null,
+              uptime_s: 0,
+              restarts: 0,
+              rss_bytes: 9.8e9,
+              cpu_percent: 612,
+              role: "Planetiler, Valhalla and GDAL, while a build runs",
+            },
+          ]
+        : []),
+    ],
+    system: {
+      cpus: 8,
+      load1: active ? 6.4 : 0.42,
+      memory_used_bytes: active ? 31.3e9 : 21.3e9,
+      memory_total_bytes: 47e9,
+      platform: "linux/amd64",
+    },
+    traffic: {
+      since: new Date(mockStarted).toISOString(),
+      kinds: [
+        kind("tiles", 17, 1.4, 6.3, 0, 212),
+        kind("raster", 4.2, 38, 410, 3),
+        kind("route", 1.3, 85, 640, 1),
+        kind("elevation", 2.4, 3.1, 22),
+        kind("style", 0.6, 0.8, 2.6),
+        kind("pack", 0.03, 2100, 9400),
+      ],
+    },
+    disk: {
+      total_bytes: 202e9,
+      free_bytes: free,
+      data_bytes: parts.reduce((n, p) => n + p.bytes, 0),
+      parts,
+      guard: need ? { known: true, need_bytes: need, ok: free >= need } : { known: false },
+    },
+    builds: {
+      schedule_enabled: S.schedule.enabled,
+      cron: S.schedule.cron,
+      next_run: S.schedule.enabled ? new Date(Date.now() + 3.4 * 86400000).toISOString() : null,
+      active: active ? clone(active) : null,
+      last: last
+        ? {
+            id: last.id,
+            status: last.status,
+            trigger: last.trigger,
+            started_at: last.started_at,
+            finished_at: last.finished_at,
+            duration_s:
+              last.started_at && last.finished_at
+                ? (Date.parse(last.finished_at) - Date.parse(last.started_at)) / 1000
+                : undefined,
+            error: last.error,
+            generation_id: last.generation_id,
+          }
+        : null,
+    },
+  };
+}
+
 function stats(): Stats {
   const days = 30;
   const daily = Array.from({ length: days }, (_, i) => {
@@ -788,6 +1123,8 @@ async function handle(input: RequestInfo | URL, init?: RequestInit): Promise<Res
   return null;
 }
 
+const logListeners = new Set<(e: LogEntry) => void>();
+
 class MockEventSource {
   readyState = 1;
   url: string;
@@ -800,9 +1137,23 @@ class MockEventSource {
     const ev = new MessageEvent(e.type, { data: JSON.stringify(e.data) });
     for (const h of this.l.get(e.type) ?? []) h(ev);
   };
+  private logFn: ((e: LogEntry) => void) | null = null;
   constructor(url: string) {
     this.url = url;
-    listeners.add(this.fn);
+    const u = new URL(url, location.href);
+    if (u.pathname === "/admin/api/logs/stream") {
+      // The log stream: its own filter, and event "entry".
+      const match = logMatcher(u.searchParams);
+      this.logFn = (e) => {
+        if (!match(e)) return;
+        const ev = new MessageEvent("entry", { data: JSON.stringify(e) });
+        for (const h of this.l.get("entry") ?? []) h(ev);
+      };
+      logListeners.add(this.logFn);
+    } else {
+      listeners.add(this.fn);
+    }
+    setTimeout(() => this.onopen?.(new Event("open")), 0);
   }
   addEventListener(t: string, h: (e: MessageEvent) => void) {
     if (!this.l.has(t)) this.l.set(t, new Set());
@@ -814,6 +1165,7 @@ class MockEventSource {
   close() {
     this.readyState = 2;
     listeners.delete(this.fn);
+    if (this.logFn) logListeners.delete(this.logFn);
   }
 }
 
@@ -832,4 +1184,13 @@ export function installMock(opts: MockOptions = {}) {
 /** For tests: run the build simulation to completion synchronously. */
 export function finishBuilds() {
   for (let i = 0; i < 200 && S.jobs.some((j) => j.status === "running"); i++) tick();
+}
+
+/** For tests: damage a generation behind the UI's back, so the next activation is refused. */
+export function breakGeneration(id: string, problems: string[]) {
+  const g = S.generations.find((x) => x.id === id);
+  if (g) {
+    g.status = "invalid";
+    g.problems = problems;
+  }
 }

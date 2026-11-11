@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jclement/mapthing/internal/catalog"
+	"github.com/jclement/mapthing/internal/config"
 	"github.com/jclement/mapthing/internal/store"
 )
 
@@ -114,5 +115,31 @@ func TestCatalogJSON(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s in %s", want, s)
 		}
+	}
+}
+
+// The build job offers the live generation's terrain for reuse, unless told to rebuild it.
+func TestBuildOptionsReuseLiveTerrain(t *testing.T) {
+	data := t.TempDir()
+	f := &features{cfg: config.Config{DataDir: data}}
+	regions := []catalog.Region{{ID: "x"}}
+	skip := map[string]bool{"x": true}
+	if o := f.buildOptions(regions, skip, true, false, nil); o.ReuseTerrain != "" || !o.Refresh || len(o.Regions) != 1 || !o.SkipRefresh["x"] {
+		t.Fatalf("no generation yet: %+v", o)
+	}
+	gen := filepath.Join(data, "generations", "20261101T030000Z")
+	if err := os.MkdirAll(gen, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("generations", "20261101T030000Z"), filepath.Join(data, "current")); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(gen)
+	got, _ := filepath.EvalSymlinks(f.buildOptions(regions, nil, false, false, nil).ReuseTerrain)
+	if got != want {
+		t.Errorf("ReuseTerrain = %q, want the live generation %q", got, want)
+	}
+	if o := f.buildOptions(regions, nil, false, true, nil); o.ReuseTerrain != "" {
+		t.Errorf("rebuild_terrain still offers %q", o.ReuseTerrain)
 	}
 }

@@ -173,7 +173,7 @@ func TestActivateGenerationBlueGreen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sup := supervisor.New("")
+	sup := supervisor.New()
 	sup.Start(ctx)
 	var mu sync.Mutex
 	var swaps []string
@@ -479,5 +479,55 @@ func TestCopyTree(t *testing.T) {
 	}
 	if _, err := build.Validate(dst, "g", build.AllParts()); err != nil {
 		t.Fatalf("copy is not a valid generation: %v", err)
+	}
+}
+
+// The admin delete: what the pipeline refuses comes back as a 409 or 404 the UI can show, and
+// the inventory reports each directory's state.
+func TestDeleteGenerationAndInventory(t *testing.T) {
+	data := t.TempDir()
+	gens := filepath.Join(data, "generations")
+	f := &features{cfg: config.Config{DataDir: data, Serve: config.Serve{Tiles: true, Routing: true, Elevation: true}}, builder: build.New(data)}
+	f.watcher = &tiles.Watcher{DataDir: data}
+	ctx := context.Background()
+	for _, id := range []string{"g1", "g2", "g3"} {
+		writeGeneration(t, filepath.Join(gens, id), id, "graph "+id)
+	}
+	for _, id := range []string{"g1", "g2"} {
+		if _, err := f.activateGeneration(ctx, id); err != nil {
+			t.Fatalf("activate %s: %v", id, err)
+		}
+	}
+	states := map[string]string{}
+	inv, disk := f.generationInventory()
+	for _, g := range inv {
+		states[g.ID] = g.Status
+	}
+	if states["g2"] != "live" || states["g1"] != "previous" || states["g3"] != "incoming" || disk == 0 {
+		t.Fatalf("inventory %v (disk %d)", states, disk)
+	}
+	if ae := activateErr(t, f.deleteGeneration(ctx, "g2")); ae.Status != http.StatusConflict || ae.Code != "live" {
+		t.Fatalf("delete live: %+v", ae)
+	}
+	if ae := activateErr(t, f.deleteGeneration(ctx, "g9")); ae.Status != http.StatusNotFound || ae.Code != "no_generation" {
+		t.Fatalf("delete unknown: %+v", ae)
+	}
+	if ae := activateErr(t, f.deleteGeneration(ctx, "../g1")); ae.Status != http.StatusNotFound {
+		t.Fatalf("delete with a path: %+v", ae)
+	}
+	if current(data) != "g2" {
+		t.Fatalf("current is %q", current(data))
+	}
+	for _, id := range []string{"g1", "g3"} {
+		if err := f.deleteGeneration(ctx, id); err != nil {
+			t.Fatalf("delete %s: %v", id, err)
+		}
+		if _, err := os.Stat(filepath.Join(gens, id)); !os.IsNotExist(err) {
+			t.Fatalf("%s still there", id)
+		}
+	}
+	// Rolling back is no longer possible, and says so the usual way.
+	if ae := activateErr(t, func() error { _, err := f.activateGeneration(ctx, "g1"); return err }()); ae.Code != "no_generation" {
+		t.Fatalf("activate a deleted generation: %+v", ae)
 	}
 }

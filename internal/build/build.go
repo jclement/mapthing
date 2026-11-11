@@ -89,8 +89,21 @@ type Builder struct {
 	Need Parts
 
 	mu sync.Mutex
-	// building is the generation id of the build running now (under mu).
-	building string
+	// busyMu is the short coordination lock for which generation is in use: it guards
+	// building, activating and deleting, and a deletion's checks. A generation reserved by
+	// one of the three cannot be taken by another, so a delete can never remove a directory
+	// a build is writing or an activation is validating, preparing or has just made live
+	// (inventory.go). It is never held across slow work.
+	busyMu sync.Mutex
+	// building is the generation id of the build running now; activating the one an adoption
+	// is making live; deleting those a DeleteGeneration is removing.
+	building   string
+	activating string
+	deleting   map[string]bool
+	// retMu serialises every read-modify-write of generations/.retention.json (retention.go).
+	retMu sync.Mutex
+	// removeAll replaces os.RemoveAll for a manual delete (tests pause it).
+	removeAll func(string) error
 	// symlink replaces the current swap (tests inject a failure).
 	symlink func(target, link string) error
 
@@ -148,10 +161,10 @@ func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest
 		// So that if this process is killed, a later build knows the leftover directory is its
 		// own and may delete it (retention.go).
 		b.EnsureRetentionRecord()
-		b.building = genID
+		b.reserveBuild(genID)
 		_ = b.updateRetention(func(r *retentionRecord) { r.Building = append(r.Building, genID) })
 		defer func() {
-			b.building = ""
+			b.reserveBuild("")
 			_ = b.updateRetention(func(r *retentionRecord) { r.Building = without(r.Building, genID) })
 		}()
 	}

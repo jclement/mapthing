@@ -5,9 +5,12 @@ import { Layout } from "./components/Layout";
 import { Spinner } from "./components/ui";
 import { EventsProvider } from "./lib/events";
 import { BuildsPage } from "./pages/Builds";
+import { GenerationsPage } from "./pages/Generations";
 import { KeysPage } from "./pages/Keys";
 import { LoginPage } from "./pages/Login";
+import { LogsPage } from "./pages/Logs";
 import { MapPage } from "./pages/Map";
+import { OverviewPage } from "./pages/Overview";
 import { RegionsPage } from "./pages/Regions";
 import { SchedulePage } from "./pages/Schedule";
 import { StatsPage } from "./pages/Stats";
@@ -43,12 +46,15 @@ export function AppShell() {
     <EventsProvider>
       <Routes>
         <Route element={<Layout onLogout={logout} />}>
-          <Route index element={<MapPage />} />
+          <Route index element={<OverviewPage />} />
+          <Route path="map" element={<MapPage />} />
           <Route path="regions" element={<RegionsPage />} />
           <Route path="builds" element={<BuildsPage />} />
+          <Route path="generations" element={<GenerationsPage />} />
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="keys" element={<KeysPage />} />
           <Route path="stats" element={<StatsPage />} />
+          <Route path="logs" element={<LogsPage />} />
           <Route path="system" element={<SystemPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

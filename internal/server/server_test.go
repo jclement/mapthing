@@ -42,6 +42,7 @@ type env struct {
 	st    *store.Store
 	stats *stats.Stats
 	jobs  *jobs.Runner
+	srv   *Server
 	dir   string
 	tiles *tiles.Server
 }
@@ -160,7 +161,7 @@ func newEnv(t *testing.T, withGeneration bool, opts ...func(*Deps)) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sup := supervisor.New("")
+	sup := supervisor.New()
 	deps := Deps{DataDir: dir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner, Scheduler: sched,
 		Supervisor: sup, Tiles: ts, Assets: testAssets, UI: fstest.MapFS{"index.html": {Data: []byte("<html>ui</html>")}, "assets/app-123.js": {Data: []byte("js")}}}
 	for _, o := range opts {
@@ -172,7 +173,7 @@ func newEnv(t *testing.T, withGeneration bool, opts ...func(*Deps)) *env {
 	}
 	hs := httptest.NewServer(srv.Handler())
 	t.Cleanup(hs.Close)
-	return &env{t: t, ts: hs, st: st, stats: ss, jobs: runner, dir: dir, tiles: ts}
+	return &env{t: t, ts: hs, st: st, stats: ss, jobs: runner, srv: srv, dir: dir, tiles: ts}
 }
 
 // client returns an HTTP client with a cookie jar.

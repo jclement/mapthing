@@ -38,15 +38,23 @@ func (b *Builder) need() Parts {
 }
 
 // loadRetention reads the record, creating it when the data directory has none.
-func (b *Builder) loadRetention() *retentionRecord { return b.loadRetentionSeed(false) }
+func (b *Builder) loadRetention() *retentionRecord {
+	b.retMu.Lock()
+	defer b.retMu.Unlock()
+	return b.loadRetentionSeed(false)
+}
 
 // EnsureRetentionRecord creates the record for a data directory from before it existed (a
 // server calls it at start). Every complete generation there was built by that server, since
 // nothing could be copied in then, so they are taken as owned, once. Without this an upgraded
 // server would never prune the generations it already had.
-func (b *Builder) EnsureRetentionRecord() { b.loadRetentionSeed(true) }
+func (b *Builder) EnsureRetentionRecord() {
+	b.retMu.Lock()
+	defer b.retMu.Unlock()
+	b.loadRetentionSeed(true)
+}
 
-// loadRetentionSeed reads the record. When there is none it starts one: with every complete
+// loadRetentionSeed reads the record (the caller holds retMu). When there is none it starts one: with every complete
 // generation (all, for a server starting or a build, which is when an existing data directory
 // is first met), or with only the live generation (an adoption, where other directories may be
 // copies waiting their turn and must not become owned by accident).
@@ -74,6 +82,7 @@ func (b *Builder) loadRetentionSeed(all bool) *retentionRecord {
 	return &r
 }
 
+// saveRetention writes the record (the caller holds retMu).
 func (b *Builder) saveRetention(r *retentionRecord) error {
 	if err := os.MkdirAll(b.generationsDir(), 0o755); err != nil {
 		return err
@@ -93,9 +102,12 @@ func (b *Builder) saveRetention(r *retentionRecord) error {
 	return os.Rename(tmp, b.retentionPath())
 }
 
-// updateRetention applies f to the record and saves it.
+// updateRetention applies f to the record and saves it, as one step: a build, an activation
+// and a manual delete can all be updating it at once.
 func (b *Builder) updateRetention(f func(*retentionRecord)) error {
-	r := b.loadRetention()
+	b.retMu.Lock()
+	defer b.retMu.Unlock()
+	r := b.loadRetentionSeed(false)
 	f(r)
 	return b.saveRetention(r)
 }
@@ -124,7 +136,10 @@ func (b *Builder) own(id string) error {
 //   - The directory of a build of this data directory that never finished (building is the
 //     one running now, if any) is deleted.
 func (b *Builder) pruneGenerations(building string) ([]string, error) {
-	rec := b.loadRetention()
+	// One read-modify-write of the record, start to finish.
+	b.retMu.Lock()
+	defer b.retMu.Unlock()
+	rec := b.loadRetentionSeed(false)
 	cur := b.CurrentGeneration()
 	liveDir, _ := filepath.EvalSymlinks(b.currentLink())
 	kept := 0

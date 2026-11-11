@@ -79,6 +79,32 @@ func (f *features) activateGeneration(ctx context.Context, id string) (server.Ac
 	return out, nil
 }
 
+// generationInventory is server.Deps.GenerationInventory.
+func (f *features) generationInventory() ([]server.GenerationState, int64) {
+	gens, disk := f.builder.Inventory()
+	out := make([]server.GenerationState, 0, len(gens))
+	for _, g := range gens {
+		out = append(out, server.GenerationState{ID: g.ID, Status: g.Status, Owned: g.Owned, Valid: g.Valid, Problems: g.Problems, Bytes: g.Bytes})
+	}
+	return out, disk
+}
+
+// deleteGeneration is server.Deps.DeleteGeneration.
+func (f *features) deleteGeneration(_ context.Context, id string) error {
+	err := f.builder.DeleteGeneration(id)
+	switch {
+	case errors.Is(err, build.ErrNoGeneration):
+		return &server.ActivateError{Status: http.StatusNotFound, Code: "no_generation", Message: err.Error()}
+	case errors.Is(err, build.ErrGenerationLive):
+		return &server.ActivateError{Status: http.StatusConflict, Code: "live",
+			Message: "generation " + id + " is the one being served; activate another generation first"}
+	case errors.Is(err, build.ErrGenerationBusy):
+		return &server.ActivateError{Status: http.StatusConflict, Code: "busy",
+			Message: "generation " + id + " is being built or activated; wait for that to finish"}
+	}
+	return err
+}
+
 // adopt is `mapthing adopt [-data DIR] <generation directory | generation id>`.
 //
 // Given a directory outside <data>/generations it validates it, moves it in (a rename on the

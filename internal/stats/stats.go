@@ -32,6 +32,9 @@ type Stats struct {
 	cache map[store.CacheKey][2]int64
 	used  map[int64]time.Time
 
+	// Traffic is the per-minute request and latency record behind the admin overview.
+	Traffic *Traffic
+
 	// lifetime totals since start (for the UI), never reset by flush
 	total     map[string]int64
 	cacheLife map[string][2]int64
@@ -40,7 +43,7 @@ type Stats struct {
 // New returns a Stats bound to st.
 func New(st *store.Store) *Stats {
 	return &Stats{
-		st: st, now: time.Now, started: time.Now(),
+		st: st, now: time.Now, started: time.Now(), Traffic: NewTraffic(),
 		usage: map[store.UsageKey]int64{}, cache: map[store.CacheKey][2]int64{}, used: map[int64]time.Time{},
 		total: map[string]int64{}, cacheLife: map[string][2]int64{},
 	}

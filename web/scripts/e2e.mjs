@@ -282,7 +282,7 @@ async function buildFlow() {
   });
 
   await step("map: style and basemap tiles", async () => {
-    await page.goto(`${base}/admin/`, { waitUntil: "networkidle" });
+    await page.goto(`${base}/admin/map`, { waitUntil: "networkidle" });
     await page.locator(".maplibregl-canvas").waitFor({ timeout: 15000 });
     await page.waitForTimeout(3000);
     await shot("14-map-live");

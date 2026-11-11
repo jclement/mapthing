@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -72,7 +71,6 @@ type proc struct {
 	tail     []string
 	cmd      *exec.Cmd
 	restart  chan struct{}
-	logPath  string
 	standby  bool
 	cancel   context.CancelFunc
 	done     chan struct{}
@@ -80,18 +78,29 @@ type proc struct {
 
 // Supervisor manages children.
 type Supervisor struct {
-	logDir string
-	mu     sync.Mutex
-	procs  map[string]*proc
-	order  []string
-	ctx    context.Context
+	// Output, if set, receives every line a child writes (stdout and stderr), and a line from
+	// the supervisor itself when a child exits (level "error") or is stopped. level is "" for
+	// the child's own lines: the receiver works it out. Set it before Start.
+	Output func(child, level, line string)
+
+	mu    sync.Mutex
+	procs map[string]*proc
+	order []string
+	ctx   context.Context
 	// lookPath is exec.LookPath, replaceable in tests.
 	lookPath func(string) (string, error)
 }
 
-// New returns a supervisor writing child logs under logDir (created if needed; "" = no files).
-func New(logDir string) *Supervisor {
-	return &Supervisor{logDir: logDir, procs: map[string]*proc{}, lookPath: exec.LookPath}
+// New returns a supervisor. Child output goes to Output (the server's log) and each child's
+// last lines are kept for Status.
+func New() *Supervisor {
+	return &Supervisor{procs: map[string]*proc{}, lookPath: exec.LookPath}
+}
+
+func (s *Supervisor) emit(child, level, line string) {
+	if s.Output != nil {
+		s.Output(child, level, line)
+	}
 }
 
 // Add registers a child. Call before Start.
@@ -100,9 +109,6 @@ func (s *Supervisor) Add(c Child) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := &proc{spec: c, state: StateStopped, restart: make(chan struct{}, 1), standby: c.Standby, done: make(chan struct{})}
-	if s.logDir != "" {
-		p.logPath = filepath.Join(s.logDir, c.Name+".log")
-	}
 	s.procs[c.Name] = p
 	s.order = append(s.order, c.Name)
 	if s.ctx != nil {
@@ -186,11 +192,6 @@ func (s *Supervisor) Start(ctx context.Context) {
 	for _, n := range s.order {
 		procs = append(procs, s.procs[n])
 	}
-	s.mu.Unlock()
-	if s.logDir != "" {
-		_ = os.MkdirAll(s.logDir, 0o755)
-	}
-	s.mu.Lock()
 	for _, p := range procs {
 		s.launch(p)
 	}
@@ -318,7 +319,11 @@ func (s *Supervisor) manage(ctx context.Context, p *proc) {
 		p.set(StateBackoff, fmt.Sprintf("%s; restarting in %s", msg, backoff))
 		p.mu.Lock()
 		p.restarts++
+		n := p.restarts
 		p.mu.Unlock()
+		// In the child's own log, so its last lines and the reason it went sit together.
+		s.emit(p.spec.Name, "error", fmt.Sprintf("%s exited after %s (%s); restart %d in %s",
+			p.spec.Name, time.Since(start).Round(time.Second), msg, n, backoff))
 		if !s.wait(ctx, p, backoff) {
 			return
 		}
@@ -354,11 +359,6 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 
-	var logFile *os.File
-	if p.logPath != "" {
-		rotate(p.logPath, 10<<20)
-		logFile, _ = os.OpenFile(p.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -367,9 +367,7 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 		for sc.Scan() {
 			line := sc.Text()
 			p.addLine(line)
-			if logFile != nil {
-				_, _ = fmt.Fprintf(logFile, "%s %s\n", time.Now().UTC().Format(time.RFC3339), line)
-			}
+			s.emit(p.spec.Name, "", line)
 		}
 		_, _ = io.Copy(io.Discard, pr)
 	}()
@@ -377,9 +375,7 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 	if err := cmd.Start(); err != nil {
 		_ = pw.Close()
 		<-done
-		if logFile != nil {
-			_ = logFile.Close()
-		}
+		s.emit(p.spec.Name, "error", fmt.Sprintf("%s could not start: %v", p.spec.Name, err))
 		return false, err
 	}
 	now := time.Now().UTC()
@@ -387,6 +383,7 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 	p.cmd, p.pid, p.started = cmd, cmd.Process.Pid, &now
 	p.mu.Unlock()
 	p.set(StateRunning, "")
+	s.emit(p.spec.Name, "info", fmt.Sprintf("%s started (pid %d)", p.spec.Name, cmd.Process.Pid))
 
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
@@ -404,9 +401,6 @@ func (s *Supervisor) runOnce(ctx context.Context, p *proc, bin string) (restarte
 	finish := func(werr error) (bool, error) {
 		_ = pw.Close()
 		<-done
-		if logFile != nil {
-			_ = logFile.Close()
-		}
 		p.mu.Lock()
 		p.cmd, p.pid = nil, 0
 		p.mu.Unlock()
@@ -475,11 +469,4 @@ func probeURL(ctx context.Context, u string) bool {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
-}
-
-// rotate moves path to path.1 when it exceeds max bytes.
-func rotate(path string, max int64) {
-	if fi, err := os.Stat(path); err == nil && fi.Size() > max {
-		_ = os.Rename(path, path+".1")
-	}
 }

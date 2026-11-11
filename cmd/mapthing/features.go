@@ -44,6 +44,8 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 	f.wirePipeline(ctx, d, restart, func(b catalog.BBox) []string { return elevation.CoverageIDs(b) })
 
 	d.ActivateGeneration = f.activateGeneration // adopt.go
+	d.GenerationInventory = f.generationInventory
+	d.DeleteGeneration = f.deleteGeneration
 
 	// Routing (wired with the pipeline so the smoke test can route). A server that does not
 	// serve routing (MAPTHING_SERVE) starts no Valhalla and mounts no routing API.

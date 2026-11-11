@@ -51,6 +51,28 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 	return context.WithValue(ctx, ctxKey{}, p)
 }
 
+// RequestInfo is what the keyed-endpoint wrapper learns about a request, for the outer
+// request middleware (logging and traffic timing), which creates it with WithRequestInfo.
+type RequestInfo struct {
+	Kind  string // usage kind the endpoint is counted under ("" = not a keyed endpoint)
+	KeyID int64  // API key that authenticated it (0 = none, or the admin session)
+}
+
+type infoKey struct{}
+
+// WithRequestInfo returns ctx carrying a RequestInfo for Wrap to fill in.
+func WithRequestInfo(ctx context.Context) (context.Context, *RequestInfo) {
+	ri := &RequestInfo{}
+	return context.WithValue(ctx, infoKey{}, ri), ri
+}
+
+func requestInfo(ctx context.Context) *RequestInfo {
+	if ri, ok := ctx.Value(infoKey{}).(*RequestInfo); ok {
+		return ri
+	}
+	return &RequestInfo{} // nobody is listening
+}
+
 // Auth is the authentication layer.
 type Auth struct {
 	user, pass [32]byte // SHA-256 of the configured credential, compared in constant time
@@ -58,6 +80,9 @@ type Auth struct {
 	keys       *keys.Service
 	stats      *stats.Stats
 	publicURL  string // optional, to accept its origin for CSRF checks
+	// trustProxy: the server is only reachable through a reverse proxy or tunnel, so the
+	// client address is the one the proxy reports (MAPTHING_TRUSTED_PROXY).
+	trustProxy bool
 
 	logins *loginLimiter
 
@@ -74,6 +99,45 @@ func (a *Auth) SetInternalToken(tok string) {
 	a.internalToken, a.hasInternal = sha256.Sum256([]byte(tok)), true
 }
 
+// SetTrustProxy says whether the client address comes from the proxy's headers
+// (CF-Connecting-IP, else the first X-Forwarded-For entry) instead of the connection. Turn it
+// on only when every request arrives through a proxy that sets them: a client that can reach
+// the server directly could otherwise claim any address.
+func (a *Auth) SetTrustProxy(on bool) { a.trustProxy = on }
+
+// ClientIP is the address a request came from, for login throttling, per-client limits and
+// logs: the connection's peer, or behind a trusted proxy the address the proxy reports.
+func (a *Auth) ClientIP(r *http.Request) string {
+	if a.trustProxy {
+		if ip := parseIP(r.Header.Get("CF-Connecting-IP")); ip != "" {
+			return ip
+		}
+		first, _, _ := strings.Cut(r.Header.Get("X-Forwarded-For"), ",")
+		if ip := parseIP(first); ip != "" {
+			return ip
+		}
+	}
+	return peerIP(r)
+}
+
+// parseIP returns s as a canonical IP address, or "" when it is not one (a header may hold
+// anything; an address is also sometimes given with a port or in brackets).
+func parseIP(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if ip := net.ParseIP(strings.Trim(s, "[]")); ip != nil {
+		return ip.String()
+	}
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
+}
+
 // InternalHeader carries the internal token.
 const InternalHeader = "X-Mapthing-Internal"
 
@@ -85,7 +149,9 @@ func (a *Auth) isInternal(r *http.Request) bool {
 	if !a.hasInternal || h == "" {
 		return false
 	}
-	ip := net.ParseIP(clientIP(r))
+	// The connection's own peer, never a forwarded address: the renderer talks to this
+	// process directly, and a header naming 127.0.0.1 proves nothing.
+	ip := net.ParseIP(peerIP(r))
 	if ip == nil || !ip.IsLoopback() {
 		return false
 	}
@@ -134,7 +200,7 @@ func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, http.StatusForbidden, "csrf", "cross-origin request refused")
 		return
 	}
-	ip := clientIP(r)
+	ip := a.ClientIP(r)
 	if wait := a.logins.blocked(ip); wait > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		WriteError(w, r, http.StatusTooManyRequests, "too_many_attempts", "too many failed logins; try again later")
@@ -169,7 +235,7 @@ func (a *Auth) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	_ = a.st.PurgeSessions(r.Context())
 	http.SetCookie(w, &http.Cookie{
 		Name: CookieName, Value: tok, Path: "/", Expires: exp, MaxAge: int(SessionTTL.Seconds()),
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: a.isHTTPS(r),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"user": body.Username, "expires_at": exp.UTC()})
 }
@@ -179,7 +245,7 @@ func (a *Auth) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(CookieName); err == nil && c.Value != "" {
 		_ = a.st.DeleteSession(r.Context(), tokenHash(c.Value))
 	}
-	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r)})
+	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: a.isHTTPS(r)})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -272,7 +338,10 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			return
 		}
 		cors(w, r)
+		ri := requestInfo(r.Context())
+		ri.Kind = kind
 		if a.isInternal(r) {
+			ri.Kind = KindInternal
 			a.stats.Count(0, KindInternal)
 			h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{Internal: true})))
 			return
@@ -305,6 +374,7 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			WriteError(w, r, http.StatusTooManyRequests, "rate_limited", err.Error())
 			return
 		}
+		ri.KeyID = k.ID
 		a.stats.Count(k.ID, kind)
 		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{KeyID: k.ID, Secret: secret})))
 	})
@@ -324,11 +394,33 @@ func cors(w http.ResponseWriter, r *http.Request) {
 	hd.Set("Access-Control-Max-Age", "86400")
 }
 
-func isHTTPS(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+// isHTTPS reports whether the browser reached this request over HTTPS, so the session cookie
+// can be marked Secure: a TLS connection, a proxy saying so (X-Forwarded-Proto, or
+// Cloudflare's CF-Visitor), or the request being for the host of an https MAPTHING_PUBLIC_URL.
+// Plain HTTP on the box itself (http://127.0.0.1:8080) keeps working: its cookie is not Secure.
+func (a *Auth) isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	if strings.EqualFold(strings.TrimSpace(proto), "https") {
+		return true
+	}
+	if strings.Contains(r.Header.Get("CF-Visitor"), `"scheme":"https"`) {
+		return true
+	}
+	if pu, err := url.Parse(a.publicURL); err == nil && pu.Scheme == "https" && pu.Host != "" {
+		host := r.Host
+		if fh, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Host"), ","); strings.TrimSpace(fh) != "" {
+			host = strings.TrimSpace(fh)
+		}
+		return strings.EqualFold(host, pu.Host)
+	}
+	return false
 }
 
-func clientIP(r *http.Request) string {
+// peerIP is the address of the connection itself.
+func peerIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

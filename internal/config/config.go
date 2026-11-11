@@ -17,6 +17,11 @@ type Config struct {
 	AdminPassword string // ADMIN_PASSWORD (required)
 	PublicURL     string // MAPTHING_PUBLIC_URL, used in styles/TileJSON; default derived from request
 
+	// TrustedProxy: MAPTHING_TRUSTED_PROXY=on. Every request arrives through a reverse proxy
+	// or tunnel, so the client address is taken from CF-Connecting-IP, else the first
+	// X-Forwarded-For entry. Off by default: a directly reachable server must not believe them.
+	TrustedProxy bool
+
 	ValhallaURL string   // MAPTHING_VALHALLA_URL, default http://127.0.0.1:8002
 	ValhallaCmd []string // MAPTHING_VALHALLA_CMD, default "valhalla_service {config} 1" ({config} = per-instance config)
 	RendererURL string   // MAPTHING_RENDERER_URL, default http://127.0.0.1:8081
@@ -32,6 +37,7 @@ type Config struct {
 	ImageryCacheMB int64  // MAPTHING_IMAGERY_CACHE_MB, default 4096
 	PackCacheMB    int64  // MAPTHING_PACK_CACHE_MB, default 4096
 	PackMaxTiles   uint64 // MAPTHING_PACK_MAX_TILES, default 2000000
+	LogMaxMB       int64  // MAPTHING_LOG_MAX_MB, default 50: total size of the log files in <data>/logs
 
 	// InternalToken authenticates the local renderer's requests (MAPTHING_INTERNAL_TOKEN;
 	// generated at startup when unset and passed to the renderer child).
@@ -64,6 +70,13 @@ func FromEnv() (Config, error) {
 	default:
 		errs = append(errs, fmt.Errorf("MAPTHING_RENDERER must be on or off, not %q", v))
 	}
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("MAPTHING_TRUSTED_PROXY"))); v {
+	case "", "off", "0", "false", "no":
+	case "on", "1", "true", "yes":
+		c.TrustedProxy = true
+	default:
+		errs = append(errs, fmt.Errorf("MAPTHING_TRUSTED_PROXY must be on or off, not %q", v))
+	}
 	var err error
 	if c.Serve, err = ParseServe(os.Getenv("MAPTHING_SERVE")); err != nil {
 		errs = append(errs, err)
@@ -87,6 +100,9 @@ func FromEnv() (Config, error) {
 	c.ImageryCacheMB = num("MAPTHING_IMAGERY_CACHE_MB", 4096)
 	c.PackCacheMB = num("MAPTHING_PACK_CACHE_MB", 4096)
 	c.PackMaxTiles = uint64(num("MAPTHING_PACK_MAX_TILES", 2_000_000))
+	if c.LogMaxMB = num("MAPTHING_LOG_MAX_MB", 50); c.LogMaxMB == 0 {
+		errs = append(errs, errors.New("MAPTHING_LOG_MAX_MB must be at least 1"))
+	}
 	if c.AdminUser == "" || c.AdminPassword == "" {
 		errs = append(errs, errors.New("ADMIN_USER and ADMIN_PASSWORD must be set"))
 	}

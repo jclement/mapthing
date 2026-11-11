@@ -302,6 +302,12 @@ func (b *Builder) Adopt(ctx context.Context, id string, opt AdoptOptions) (*Adop
 		return nil, ErrBusy
 	}
 	defer b.mu.Unlock()
+	// From here to the end nobody may delete this generation: it is about to be validated,
+	// have its routing graph started, and become live. One that is being deleted is refused.
+	if !b.reserveActivation(id) {
+		return nil, ErrBusy
+	}
+	defer b.releaseActivation()
 	genDir := filepath.Join(b.generationsDir(), id)
 	fi, err := os.Lstat(genDir)
 	if err != nil {

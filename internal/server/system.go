@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io/fs"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,6 +28,15 @@ type diskStats struct {
 	mu      sync.Mutex
 	at      time.Time
 	last    diskReport
+	extras  map[string]int64 // other directories, measured with the report
+}
+
+// extra returns the size of <data>/<name>, measured when the report last was.
+func (d *diskStats) extra(name string) int64 {
+	d.get()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.extras[name]
 }
 
 type diskReport struct {
@@ -81,8 +91,19 @@ func (d *diskStats) get() diskReport {
 		r.TotalBytes = st.Blocks * uint64(st.Bsize)
 		r.FreeBytes = st.Bavail * uint64(st.Bsize)
 	}
+	d.extras = map[string]int64{}
+	for _, name := range []string{"cache", "work"} {
+		d.extras[name] = dirSize(filepath.Join(d.dataDir, name))
+	}
 	d.at, d.last = time.Now(), r
 	return r
+}
+
+// reset makes the next get measure again (after something large was deleted).
+func (d *diskStats) reset() {
+	d.mu.Lock()
+	d.at = time.Time{}
+	d.mu.Unlock()
 }
 
 func dirSize(root string) int64 {
@@ -199,8 +220,23 @@ type processJSON struct {
 	PID      *int   `json:"pid"`
 	UptimeS  int64  `json:"uptime_s"`
 	Restarts int    `json:"restarts"`
-	RSSBytes int64  `json:"rss_bytes"`
+	RSSBytes int64  `json:"rss_bytes"` // the process and everything it started
 	Healthy  bool   `json:"healthy"`
+	// CPUPercent is of one core, since the previous reading; null until there are two.
+	CPUPercent *float64 `json:"cpu_percent"`
+	Standby    bool     `json:"standby,omitempty"` // a replacement warming up (not counted for readiness)
+	Role       string   `json:"role,omitempty"`    // what it is for, in a few words
+}
+
+// processRole says what a supervised child does, for the UI.
+func processRole(name string) string {
+	switch {
+	case name == "renderer":
+		return "raster tiles (MapLibre Native and its X server)"
+	case strings.HasPrefix(name, "valhalla"):
+		return "routing"
+	}
+	return ""
 }
 
 func (s *Server) processes() []processJSON {
@@ -208,8 +244,9 @@ func (s *Server) processes() []processJSON {
 	if s.d.Supervisor == nil {
 		return out
 	}
+	groups := s.procs.groups()
 	for _, c := range s.d.Supervisor.Statuses() {
-		p := processJSON{Name: c.Name, Restarts: c.Restarts, Detail: c.Message, Healthy: c.Healthy}
+		p := processJSON{Name: c.Name, Restarts: c.Restarts, Detail: c.Message, Healthy: c.Healthy, Standby: c.Standby, Role: processRole(c.Name)}
 		switch c.State {
 		case supervisor.StateRunning, supervisor.StateUnhealthy:
 			p.State = "running"
@@ -229,6 +266,14 @@ func (s *Server) processes() []processJSON {
 			pid := c.PID
 			p.PID = &pid
 			p.RSSBytes = pidRSS(pid)
+			// A child leads its own process group: count what it started too.
+			if u, ok := groups[pid]; ok {
+				p.RSSBytes = u.RSSBytes
+				if u.CPUPercent >= 0 {
+					v := math.Round(u.CPUPercent*10) / 10
+					p.CPUPercent = &v
+				}
+			}
 			if c.StartedAt != nil {
 				p.UptimeS = int64(time.Since(*c.StartedAt).Seconds())
 			}

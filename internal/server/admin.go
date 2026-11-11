@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/jobs"
+	"github.com/jclement/mapthing/internal/logs"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/store"
 	"github.com/jclement/mapthing/internal/tiles"
@@ -350,6 +352,33 @@ func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 
 // ---------- jobs and builds ----------
 
+// redact masks secrets in text on its way out. Jobs redact what they store (jobs.Runner.Redact),
+// but rows written by an older version, or by a runner without a redactor, are still raw.
+func (s *Server) redact(text string) string {
+	if text == "" {
+		return text
+	}
+	if s.d.Logs != nil {
+		return s.d.Logs.Redact(text)
+	}
+	return logs.Redact(text)
+}
+
+// jobView is jobs.View with the error and stage details masked.
+func (s *Server) jobView(row store.JobRow) jobs.JobJSON {
+	v := jobs.View(row)
+	v.Error = s.redact(v.Error)
+	if len(v.Stages) > 0 {
+		st := make([]store.StageRow, len(v.Stages))
+		copy(st, v.Stages)
+		for i := range st {
+			st[i].Detail = s.redact(st[i].Detail)
+		}
+		v.Stages = st
+	}
+	return v
+}
+
 func (s *Server) jobRow(ctx context.Context, row *store.JobRow) store.JobRow {
 	if cur, ok := s.d.Jobs.Current(); ok && cur.ID == row.ID {
 		return cur
@@ -368,7 +397,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]jobs.JobJSON, 0, len(js))
 	for _, j := range js {
-		out = append(out, jobs.View(s.jobRow(r.Context(), j)))
+		out = append(out, s.jobView(s.jobRow(r.Context(), j)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
 }
@@ -392,12 +421,13 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	}
 	lines := make([]jobs.LogJSON, 0, len(logs))
 	for _, l := range logs {
+		l.Line = s.redact(l.Line)
 		lines = append(lines, jobs.LogView(l))
 	}
 	writeJSON(w, http.StatusOK, struct {
 		jobs.JobJSON
 		Log []jobs.LogJSON `json:"log"`
-	}{jobs.View(s.jobRow(r.Context(), j)), lines})
+	}{s.jobView(s.jobRow(r.Context(), j)), lines})
 }
 
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
@@ -419,16 +449,19 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) eventSnapshot() []jobs.Event {
 	var ev []jobs.Event
 	if cur, ok := s.d.Jobs.Current(); ok {
-		ev = append(ev, jobs.Event{Type: "job", Data: jobs.View(cur)})
+		ev = append(ev, jobs.Event{Type: "job", Data: s.jobView(cur)})
 	}
 	return ev
 }
 
-// startBuild: POST /admin/api/build {refresh_downloads} → 202 job (409 if one is queued/running).
+// startBuild: POST /admin/api/build {refresh_downloads, rebuild_terrain} → 202 job (409 if one
+// is queued/running). rebuild_terrain builds the elevation tiles again even when the live
+// generation's could be reused.
 func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		RefreshDownloads bool `json:"refresh_downloads"`
 		Refresh          bool `json:"refresh"`
+		RebuildTerrain   bool `json:"rebuild_terrain"`
 	}
 	if r.ContentLength != 0 && !readJSON(w, r, &b) {
 		return
@@ -437,7 +470,7 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "the build pipeline is not available in this binary")
 		return
 	}
-	row, err := s.d.Jobs.Enqueue(r.Context(), scheduler.BuildJob, map[string]any{"refresh": b.RefreshDownloads || b.Refresh}, jobs.EnqueueOptions{Trigger: "manual", Unique: true})
+	row, err := s.d.Jobs.Enqueue(r.Context(), scheduler.BuildJob, map[string]any{"refresh": b.RefreshDownloads || b.Refresh, "rebuild_terrain": b.RebuildTerrain}, jobs.EnqueueOptions{Trigger: "manual", Unique: true})
 	if errors.Is(err, jobs.ErrBusy) {
 		writeError(w, r, http.StatusConflict, "busy", err.Error())
 		return
@@ -446,7 +479,7 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, jobs.View(*row))
+	writeJSON(w, http.StatusAccepted, s.jobView(*row))
 }
 
 // ---------- generations ----------
@@ -542,17 +575,50 @@ func normaliseManifest(genDir string) manifestJSON {
 	return out
 }
 
-type generationJSON struct {
-	ID        string       `json:"id"`
-	CreatedAt time.Time    `json:"created_at"`
-	Status    string       `json:"status"` // live | kept
-	Manifest  manifestJSON `json:"manifest"`
+// GenerationState is what the pipeline knows about one generation directory (see
+// Deps.GenerationInventory).
+type GenerationState struct {
+	ID       string
+	Status   string // live | previous | kept | building | incoming | invalid
+	Owned    bool
+	Valid    bool
+	Problems []string
+	Bytes    int64
 }
 
-// generations: GET /admin/api/generations → {generations:[…]} (those on disk), newest first.
+type generationJSON struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	// live: being served. previous: the one kept for rollback. kept: another complete one.
+	// building: a build is writing it. incoming: copied in, never activated here. invalid:
+	// incomplete or damaged (problems says why).
+	Status   string       `json:"status"`
+	Owned    bool         `json:"owned"`
+	Problems []string     `json:"problems,omitempty"`
+	Bytes    int64        `json:"bytes"` // size on disk
+	Manifest manifestJSON `json:"manifest"`
+	// What the server will accept for it right now.
+	CanActivate bool `json:"can_activate"`
+	CanDelete   bool `json:"can_delete"`
+}
+
+// generations: GET /admin/api/generations → {generations:[…], disk:{…}}: every generation
+// directory, newest first.
 func (s *Server) generations(w http.ResponseWriter, r *http.Request) {
 	live, _, _ := tiles.CurrentGeneration(s.d.DataDir)
+	states := map[string]GenerationState{}
+	var diskBytes int64
+	inventory := s.d.GenerationInventory != nil
+	if inventory {
+		var list []GenerationState
+		list, diskBytes = s.d.GenerationInventory()
+		for _, g := range list {
+			states[g.ID] = g
+		}
+	}
+	busy := s.d.Jobs != nil && s.d.Jobs.Busy(r.Context(), scheduler.BuildJob)
 	out := []generationJSON{}
+	var sum int64
 	ents, _ := os.ReadDir(filepath.Join(s.d.DataDir, "generations"))
 	for _, e := range ents {
 		if !e.IsDir() && e.Type()&os.ModeSymlink == 0 {
@@ -565,19 +631,68 @@ func (s *Server) generations(w http.ResponseWriter, r *http.Request) {
 		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 			continue
 		}
-		g := generationJSON{ID: e.Name(), Status: "kept", Manifest: normaliseManifest(dir)}
+		g := generationJSON{ID: e.Name(), Status: "kept", Owned: true, Manifest: normaliseManifest(dir)}
 		if m, _ := readManifest(dir); !m.CreatedAt.IsZero() {
 			g.CreatedAt = m.CreatedAt.UTC()
 		} else if fi, err := e.Info(); err == nil {
 			g.CreatedAt = fi.ModTime().UTC()
 		}
+		g.Bytes = g.Manifest.Sizes["total"]
+		valid := true
+		if st, ok := states[e.Name()]; ok {
+			g.Status, g.Owned, g.Problems, valid = st.Status, st.Owned, st.Problems, st.Valid
+		} else if inventory {
+			// Not a real directory (a symbolic link): never activated or pruned.
+			g.Status, g.Owned, valid = "invalid", false, false
+			g.Problems = []string{"a symbolic link, not a generation directory"}
+		}
 		if e.Name() == live {
 			g.Status = "live"
 		}
+		g.CanActivate = valid && g.Status != "live" && g.Status != "building" && !busy && s.d.ActivateGeneration != nil
+		g.CanDelete = g.Status != "live" && g.Status != "building" && s.d.DeleteGeneration != nil
+		sum += g.Bytes
 		out = append(out, g)
 	}
+	if !inventory {
+		diskBytes = sum
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	writeJSON(w, http.StatusOK, map[string]any{"generations": out})
+	disk := s.diskCtl.get()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"generations": out,
+		"disk": map[string]any{
+			// bytes: what the generations occupy, a file shared by hard link (reused terrain)
+			// counted once. sum_bytes: the sizes above added up.
+			"bytes": diskBytes, "sum_bytes": sum,
+			"free_bytes": disk.FreeBytes, "total_bytes": disk.TotalBytes,
+		},
+	})
+}
+
+// deleteGeneration: DELETE /admin/api/generations/{id} → 204. 404 no_generation; 409 live
+// (the one being served) or busy (a build is writing it, or it is being activated).
+func (s *Server) deleteGeneration(w http.ResponseWriter, r *http.Request) {
+	if s.d.DeleteGeneration == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "this server cannot delete generations")
+		return
+	}
+	id := r.PathValue("id")
+	err := s.d.DeleteGeneration(r.Context(), id)
+	var ae *ActivateError
+	if errors.As(err, &ae) {
+		writeError(w, r, ae.Status, ae.Code, ae.Message)
+		return
+	}
+	if err != nil {
+		slog.Error("delete generation", "generation", id, "err", err)
+		writeError(w, r, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	slog.Info("generation deleted", "generation", id)
+	_ = s.d.Store.AddHistory(r.Context(), store.HistoryEntry{Kind: "generation", OK: true, Message: "generation " + id + " deleted by hand", Generation: id})
+	s.diskCtl.reset()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Activation is the result of making a generation live.
@@ -626,6 +741,15 @@ func (s *Server) activateGeneration(w http.ResponseWriter, r *http.Request) {
 	if res.Removed == nil {
 		res.Removed = []string{}
 	}
+	if !res.AlreadyLive {
+		msg := "generation " + res.ID + " made live by hand"
+		if res.Previous != nil {
+			msg += " (was " + *res.Previous + ")"
+		}
+		slog.Info("generation activated", "generation", res.ID, "removed", res.Removed)
+		_ = s.d.Store.AddHistory(r.Context(), store.HistoryEntry{Kind: "generation", OK: true, Message: msg, Generation: res.ID})
+		s.diskCtl.reset()
+	}
 	res.Status = "live"
 	writeJSON(w, http.StatusOK, res)
 }
@@ -637,7 +761,34 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
+	for i := range h {
+		h[i].Message = s.redact(h[i].Message)
+		if len(h[i].Details) > 0 {
+			// Details are JSON: mask the strings inside rather than the encoded text.
+			var d any
+			if json.Unmarshal(h[i].Details, &d) == nil {
+				h[i].Details, _ = json.Marshal(redactJSON(d, s.redact))
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"history": h})
+}
+
+// redactJSON applies redact to every string in a decoded JSON value.
+func redactJSON(v any, redact func(string) string) any {
+	switch x := v.(type) {
+	case string:
+		return redact(x)
+	case []any:
+		for i, e := range x {
+			x[i] = redactJSON(e, redact)
+		}
+	case map[string]any:
+		for k, e := range x {
+			x[k] = redactJSON(e, redact)
+		}
+	}
+	return v
 }
 
 // ---------- schedule ----------

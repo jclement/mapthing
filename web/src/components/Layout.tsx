@@ -1,16 +1,21 @@
 import {
   Activity,
+  Boxes,
   CalendarClock,
   Gauge,
   KeyRound,
   Layers,
+  LayoutDashboard,
   LogOut,
   Map as MapIcon,
+  Menu,
   Monitor,
   Moon,
+  ScrollText,
   Server,
   Sun,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useEvents } from "../lib/events";
 import { percent } from "../lib/format";
@@ -18,13 +23,17 @@ import { useTheme } from "../lib/theme";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { cx } from "./ui";
 
+// `phone`: shown in the phone's bottom bar; the rest are behind its "More" button.
 const NAV = [
-  { to: "/", label: "Map", icon: MapIcon, end: true },
+  { to: "/", label: "Overview", icon: LayoutDashboard, end: true, phone: true },
+  { to: "/map", label: "Map", icon: MapIcon, phone: true },
   { to: "/regions", label: "Regions", icon: Layers },
-  { to: "/builds", label: "Builds", icon: Activity },
+  { to: "/builds", label: "Builds", icon: Activity, phone: true },
+  { to: "/generations", label: "Generations", icon: Boxes },
   { to: "/schedule", label: "Schedule", icon: CalendarClock },
   { to: "/keys", label: "API keys", icon: KeyRound },
   { to: "/stats", label: "Stats", icon: Gauge },
+  { to: "/logs", label: "Logs", icon: ScrollText, phone: true },
   { to: "/system", label: "System", icon: Server },
 ];
 
@@ -42,7 +51,11 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const { pref, set } = useTheme();
   const { active } = useEvents();
   const loc = useLocation();
-  const fullBleed = loc.pathname === "/";
+  const fullBleed = loc.pathname === "/map";
+  const [more, setMore] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: close the sheet on navigation
+  useEffect(() => setMore(false), [loc.pathname]);
+  const inMore = NAV.some((n) => !n.phone && loc.pathname.startsWith(n.to));
   const nextTheme = pref === "system" ? "light" : pref === "light" ? "dark" : "system";
   const ThemeIcon = pref === "system" ? Monitor : pref === "light" ? Sun : Moon;
 
@@ -161,9 +174,40 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
         </ErrorBoundary>
       </main>
 
-      {/* Mobile bottom nav */}
-      <nav className="flex shrink-0 justify-around border-t border-line bg-panel pb-[env(safe-area-inset-bottom)] md:hidden">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
+      {/* Phone: the rest of the pages, above the bottom bar */}
+      {more && (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMore(false)} />
+          <nav
+            aria-label="More pages"
+            className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-line bg-panel p-3 pb-[calc(env(safe-area-inset-bottom)+4rem)] shadow-float"
+          >
+            <div className="grid grid-cols-3 gap-2">
+              {NAV.filter((n) => !n.phone).map(({ to, label, icon: Icon }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  className={({ isActive }) =>
+                    cx(
+                      "flex flex-col items-center gap-1 rounded-xl border px-2 py-3 text-xs font-medium",
+                      isActive
+                        ? "border-accent/30 bg-accent-soft text-accent-strong"
+                        : "border-line text-muted",
+                    )
+                  }
+                >
+                  <Icon className="size-5" />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
+          </nav>
+        </div>
+      )}
+
+      {/* Phone bottom bar */}
+      <nav className="relative z-50 flex shrink-0 justify-around border-t border-line bg-panel pb-[env(safe-area-inset-bottom)] md:hidden">
+        {NAV.filter((n) => n.phone).map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
@@ -172,14 +216,27 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
             className={({ isActive }) =>
               cx(
                 "flex flex-1 flex-col items-center gap-0.5 py-1.5 text-[10px]",
-                isActive ? "text-accent" : "text-faint",
+                isActive && !more ? "text-accent" : "text-faint",
               )
             }
           >
             <Icon className="size-[18px]" />
-            <span className="truncate">{label.replace("API keys", "Keys")}</span>
+            <span className="truncate">{label}</span>
           </NavLink>
         ))}
+        <button
+          type="button"
+          aria-label="More pages"
+          aria-expanded={more}
+          onClick={() => setMore((m) => !m)}
+          className={cx(
+            "flex flex-1 flex-col items-center gap-0.5 py-1.5 text-[10px]",
+            more || inMore ? "text-accent" : "text-faint",
+          )}
+        >
+          <Menu className="size-[18px]" />
+          <span>More</span>
+        </button>
       </nav>
     </div>
   );

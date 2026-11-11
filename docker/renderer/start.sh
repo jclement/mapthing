@@ -11,8 +11,19 @@ DISP=${RENDERER_DISPLAY:-99}
 export LIBGL_ALWAYS_SOFTWARE=1 DISPLAY=":$DISP"
 
 rm -f "/tmp/.X$DISP-lock" "/tmp/.X11-unix/X$DISP"
-Xvfb ":$DISP" -screen 0 1024x768x24 -nolisten tcp -noreset >/dev/null 2>&1 &
-XPID=$!
+# What the X server prints goes to stderr with an "[xvfb] " prefix; mapthing files those lines
+# under their own log source. A fifo keeps $! the X server's pid (a pipeline's would be sed's).
+XLOG="${TMPDIR:-/tmp}/xvfb-$DISP.$$.fifo"
+rm -f "$XLOG"
+if mkfifo "$XLOG" 2>/dev/null; then
+  sed 's/^/[xvfb] /' <"$XLOG" >&2 &
+  Xvfb ":$DISP" -screen 0 1024x768x24 -nolisten tcp -noreset >"$XLOG" 2>&1 &
+  XPID=$!
+  rm -f "$XLOG"
+else
+  Xvfb ":$DISP" -screen 0 1024x768x24 -nolisten tcp -noreset >/dev/null 2>&1 &
+  XPID=$!
+fi
 i=0
 while [ ! -S "/tmp/.X11-unix/X$DISP" ]; do
   i=$((i + 1))

@@ -18,6 +18,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/jclement/mapthing/internal/config"
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/keys"
+	"github.com/jclement/mapthing/internal/logs"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/server"
 	"github.com/jclement/mapthing/internal/stats"
@@ -91,11 +94,17 @@ func healthcheck() int {
 }
 
 func serve() error {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel()})))
 	cfg, err := config.FromEnv()
 	if err != nil {
 		return err
 	}
+	// One log for everything (internal/logs): this process's slog output, the children's output
+	// and build output. It redacts, keeps a bounded history under <data>/logs for the admin Logs
+	// page, and still prints every line to stderr, so `docker logs` shows it all.
+	sink := logs.New(logs.Options{Dir: filepath.Join(cfg.DataDir, "logs"), MaxBytes: cfg.LogMaxMB * 1_000_000, Console: os.Stderr, MinLevel: minLogLevel()})
+	defer sink.Close()
+	sink.AddSecret(cfg.AdminPassword)
+	slog.SetDefault(slog.New(sink.Handler(logLevel())))
 	if cfg.InternalToken == "" {
 		var b [24]byte
 		if _, err := rand.Read(b[:]); err != nil {
@@ -103,6 +112,7 @@ func serve() error {
 		}
 		cfg.InternalToken = hex.EncodeToString(b[:])
 	}
+	sink.AddSecret(cfg.InternalToken)
 	for _, d := range []string{cfg.DataDir, filepath.Join(cfg.DataDir, "logs"), filepath.Join(cfg.DataDir, "generations")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
@@ -121,14 +131,30 @@ func serve() error {
 	ss := stats.New(st)
 	au := auth.New(cfg.AdminUser, cfg.AdminPassword, st, ks, ss, cfg.PublicURL)
 	au.SetInternalToken(cfg.InternalToken)
+	au.SetTrustProxy(cfg.TrustedProxy)
 	runner := jobs.NewRunner(st)
+	runner.Redact = sink.Redact
+	runner.Log = func(id int64, _ string, at time.Time, line string) {
+		sink.Add(logs.Entry{Time: at, Source: logs.SourceBuild, Job: strconv.FormatInt(id, 10), Msg: line})
+	}
 	sched := scheduler.New(st, runner)
 
 	_, port, _ := net.SplitHostPort(cfg.Listen)
 	if port == "" {
 		port = "8080"
 	}
-	sup := supervisor.New(filepath.Join(cfg.DataDir, "logs"))
+	sup := supervisor.New()
+	sup.Output = func(child, level, line string) {
+		// The renderer's start script prefixes what its X server prints (docker/renderer/start.sh).
+		// xkbcomp's keysym warnings at every start are not ours to fix: plain info.
+		if rest, ok := strings.CutPrefix(line, "[xvfb] "); ok {
+			child, line, level = "xvfb", rest, logs.LevelInfo
+		}
+		if level == "" {
+			level, line = logs.ChildLine(line)
+		}
+		sink.Log(child, level, "", line)
+	}
 	// valhalla is started per generation, blue/green, by features (cmd/mapthing/valhalla.go).
 	// MAPTHING_RENDERER=off: no renderer child at all, so no Xvfb or MapLibre Native in memory,
 	// and readiness has no renderer to wait for.
@@ -175,8 +201,9 @@ func serve() error {
 
 	deps := server.Deps{
 		DataDir: cfg.DataDir, Store: st, Auth: au, Keys: ks, Stats: ss, Jobs: runner,
-		Scheduler: sched, Supervisor: sup, Tiles: ts, Assets: assets.FS(), UI: web.Dist(),
-		Info: map[string]any{"serve": cfg.Serve.List(), "renderer": map[bool]string{false: "on", true: "off"}[cfg.RendererOff]},
+		Scheduler: sched, Supervisor: sup, Tiles: ts, Assets: assets.FS(), UI: web.Dist(), Logs: sink,
+		Info: map[string]any{"serve": cfg.Serve.List(), "renderer": map[bool]string{false: "on", true: "off"}[cfg.RendererOff],
+			"public_url": cfg.PublicURL, "trusted_proxy": cfg.TrustedProxy},
 	}
 	f = &features{cfg: cfg, store: st, runner: runner, sup: sup, watcher: watcher, tiles: ts}
 	if err := f.wire(ctx, &deps); err != nil {
@@ -204,7 +231,7 @@ func serve() error {
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("mapthing listening", "addr", cfg.Listen, "data", cfg.DataDir, "version", server.Version, "generation", ts.Generation(),
-			"serve", cfg.Serve.List(), "renderer", !cfg.RendererOff)
+			"serve", cfg.Serve.List(), "renderer", !cfg.RendererOff, "public_url", cfg.PublicURL, "trusted_proxy", cfg.TrustedProxy)
 		errc <- srv.ListenAndServe()
 	}()
 	select {
@@ -221,6 +248,14 @@ func serve() error {
 	stop() // cancels jobs, scheduler, supervisor children, stats (final flush)
 	time.Sleep(500 * time.Millisecond)
 	return nil
+}
+
+// minLogLevel is the least severe level the log keeps: debug only with MAPTHING_DEBUG.
+func minLogLevel() string {
+	if os.Getenv("MAPTHING_DEBUG") != "" {
+		return logs.LevelDebug
+	}
+	return logs.LevelInfo
 }
 
 func logLevel() slog.Level {

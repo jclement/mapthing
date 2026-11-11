@@ -56,7 +56,8 @@ renderer or without a basemap (`MAPTHING_RENDERER`, `MAPTHING_SERVE`). See
                               retention never touches any other directory
   current -> generations/<gen-id>   atomic symlink swap
   imagery-cache/              cached satellite imagery tiles (bounded LRU)
-  logs/
+  logs/                       the server's log: log-current.jsonl and rotated log-<id>.jsonl
+                              segments, bounded in total by MAPTHING_LOG_MAX_MB (see Logs)
 ```
 
 A **region** is something you download (a Geofabrik extract such as `us/texas` or
@@ -115,11 +116,14 @@ Admin (session cookie):
 | GET/POST/DELETE | `/admin/api/regions[/{id}]` | installed regions; POST `{id}` or `{name, bbox|polygon}` |
 | POST | `/admin/api/build` | start a build now (refresh downloads optional) |
 | GET | `/admin/api/jobs[/{id}]`, `/admin/api/events` (SSE) | job progress, log tail |
-| GET | `/admin/api/generations` | live and kept generations, manifests (including ones copied in from another machine) |
+| GET | `/admin/api/generations` | every generation directory with its state (live, previous, kept, building, incoming, invalid), manifest and size, and the disk they use together |
+| DELETE | `/admin/api/generations/{id}` | delete a generation directory for good. 204; 404 `no_generation`; 409 `live` (the one being served: activate another first) or `busy` (a build is writing it, or it is being activated). Unlike retention it also deletes a generation this server does not own. |
 | POST | `/admin/api/generations/{id}/activate` | validate `<data>/generations/{id}` and make it live: routing graph up as a standby, the atomic swap, then the routing switch (the standby is discarded if the swap fails), then retention. 200 `{id, status:"live", already_live, previous, removed[]}`; idempotent. Refusals leave the live generation serving: 404 `no_generation`, 409 `busy`, 422 `invalid_generation` (`error.problems[]`) or `routing_failed`, 500 if `current` cannot be moved. |
 | GET/PUT | `/admin/api/schedule` | refresh schedule (cron expression, default weekly Sunday 03:00 UTC; per-region enable) |
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
 | GET | `/admin/api/stats` | tiles/routes/elevation calls by key and by day, cache hit rates, disk per generation and region, RAM, subprocess state |
+| GET | `/admin/api/logs`, `/admin/api/logs/stream` (SSE), `/admin/api/logs/download` | the server's log: filtered pages, a live tail, and the filtered view as a file (see Logs) |
+| GET | `/admin/api/overview` | the admin home page in one call: what is live, process health, traffic and latency by kind, memory, CPU, disk against the build guard, next and last build |
 | GET | `/admin/api/system` | versions, disk free, attribution, and the slim-mode settings (`renderer`: `on`/`off`, `serve`: the served parts) |
 
 ## Go layout
@@ -136,6 +140,7 @@ internal/jobs         job runner, progress, logs, SSE fan-out
 internal/build        generation builds (download, merge, planetiler, valhalla, elevation, verify, swap)
 internal/scheduler    cron → build jobs
 internal/supervisor   child processes (valhalla_service, renderer)
+internal/logs         the one log: capture, redaction, ring buffer, rotating files, queries, live tail
 internal/pmtiles      the one PMTiles v3 implementation: reader (leaf cache), writer (any order,
                       dedupe, in-place Create/Commit or spooled Finish to an io.Writer), extract
 internal/tiles        z/x/y serving, TileJSON, styles, packs, imagery proxy, raster proxy
@@ -146,6 +151,87 @@ internal/server       HTTP routes, embedding web/dist
 web/                  admin UI (React + Vite + Tailwind + MapLibre GL JS), built into web/dist
 docker/               Dockerfile, renderer sidecar, style assets, fonts
 ```
+
+## Logs
+
+Everything the container prints goes through one sink (`internal/logs`), wired in
+`cmd/mapthing/main.go`:
+
+| Source | What |
+|---|---|
+| `mapthing` | the server's own `slog` output (the sink's `slog.Handler` is the default logger) |
+| `renderer`, `valhalla@<port>` | each supervised child's stdout and stderr (`supervisor.Supervisor.Output`), plus a line from the supervisor when the child starts, cannot start, or exits (level `error`, with the reason and the restart delay) |
+| `xvfb` | the renderer's X server; `docker/renderer/start.sh` prefixes its lines with `[xvfb] ` |
+| `build` | build-job output (`jobs.Runner.Log`), tagged with the job id |
+
+Each entry is `{id, t, source, level, job?, msg}`. `id` orders entries and is unique across
+restarts (the time in nanoseconds, nudged forward on a tie; a string in JSON). `level` is
+`debug`, `info`, `warn` or `error`: the server's own lines carry theirs, a child's JSON log line
+(`{"level":…,"msg":…}`) is unpacked, and other lines are classified by the conventions the tools
+use (`[ERROR]`, ` WAR `, `Error:` …; unknown is `info`). Valhalla's per-request chatter (five
+lines for every health probe) is `debug`. Debug lines are dropped unless `MAPTHING_DEBUG` is set.
+Terminal colour codes are stripped.
+
+**Redaction** happens once, on the way in, so no secret reaches memory, the files, the console
+or the UI. `logs.Redact` masks (as `[redacted]`):
+
+- the whole value of `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie` (any
+  scheme, Digest fields, every cookie), in header, `key=value`, JSON and Go map forms; a quoted
+  or bracketed value ends at its closing quote or bracket, any other at the end of the line;
+- `X-Goog-Api-Key`, `X-Mapthing-Internal` and `X-Api-Key` values;
+- bearer tokens anywhere;
+- query parameters `key`, `sig` and any whose name contains `password`, `secret`, `token`,
+  `api_key`, `access_key`, `credential` or `signature`;
+- `name=value` and `"name": "value"` pairs with such a name (`ADMIN_PASSWORD=…`, `TUNNEL_TOKEN=…`);
+- credentials in URLs (`scheme://user:pass@host`);
+- mapthing keys (`mt_…`, also when cut short), Google API keys (`AIza…`) and JWT-shaped blobs
+  wherever they appear;
+- all of the above behind percent-encoding (`%6bey=…`, an encoded header dump, up to three
+  layers): when decoding a line reveals a secret, the line is kept decoded and masked.
+
+The admin password and the internal token are also registered as literals (`Sink.AddSecret`) and
+removed whatever surrounds them, percent-encoded or not. Redaction runs on the whole line (up
+to 1 MiB) before the line is cut to the 16 KiB that is kept, so a secret lying across the cut is
+not shown in part. It errs on the side of masking. Request logging records the path without
+its query string.
+
+Build output has other readers than the log: the job log in SQLite, the `job` and `log` events
+on `/admin/api/events`, the job's `error`, and the failure details in history. The job runner
+applies the same redactor before any of them (`jobs.Runner.Redact`), and the admin API masks
+job errors, job log lines and history again on the way out, for rows an older version stored.
+
+**Storage.** The last 5 000 entries stay in memory. Every entry is also appended to
+`<data>/logs/log-current.jsonl` (one JSON object per line). At a tenth of
+`MAPTHING_LOG_MAX_MB` (default 50, in MB of 10^6 bytes) the file is renamed `log-<last id>.jsonl`
+and the oldest segments are deleted so the total stays under the bound. Every line is still
+printed to stderr as `time LEVEL [source #job] message`, so `docker logs` shows everything the
+Logs page does. If the directory cannot be written the server runs on, memory only, and the
+Logs page says so. (Older versions wrote `<data>/logs/<child>.log`; those files are no longer
+written or read and can be deleted.)
+
+**API** (admin session). The three endpoints share one filter in the query string: `source=a,b`,
+`level` (that level and above), `q` (case-insensitive text), `job`, `since` and `until`
+(RFC 3339), `before` and `after` (entry ids).
+
+- `GET /admin/api/logs?…&limit=500` → `{entries (oldest first), more, sources, store:{bytes,
+  max_bytes, oldest, file_error?}}`: the newest `limit` (≤ 5 000) matches. Page back with
+  `before=<oldest id shown>`. It answers from memory when that holds enough and reads the files
+  otherwise, so it reaches as far back as they go (`store.oldest`).
+- `GET /admin/api/logs/stream?…&after=<id>` (SSE): event `entry` per matching line as it is
+  written, after first replaying the matches newer than `after`, so a page that loaded history
+  and then connects misses nothing. A reader that falls behind loses lines rather than slowing
+  the writer, and is told with event `dropped` `{count}`. Every write has a 20 s deadline: a
+  client that stops reading is disconnected and unsubscribed. At most 16 streams are open at
+  once (503 `too_many_streams` beyond that).
+- `GET /admin/api/logs/download?…[&format=jsonl]` → every match, oldest first, as a text file
+  (the console format) or JSON lines. It covers what existed when it started, reads the files
+  through handles opened at that moment (so it never holds up rotation, however slow the
+  client), and is cut off if the client stops reading.
+
+The admin **Logs** page (`/admin/logs`) is a client of these: live tail with pause and
+follow, source chips, level, text search, time range, download. Its URL carries the filter, so
+`/admin/logs?job=12` shows one build and `/admin/logs?source=renderer` one process; a failed
+build's history row links to the first.
 
 ## Elevation
 
@@ -184,6 +270,17 @@ and `RegisterElevationCheck(ctx, terrainPath, pts)` (verify). It needs the GDAL 
   rest of the pyramid (down to z0) is averaged from those tiles. Averaging is always done on
   elevations, never on encoded RGB. Only tiles touching a region (its polygon if it has one,
   else its bbox) are written.
+- **Reuse.** A build on a server (manual or scheduled) offers the live generation's terrain to
+  the new one (`build.Options.ReuseTerrain`, as `mapthing-build -reuse-terrain` does). When the
+  fingerprint recorded in `terrain.pmtiles.json` (areas, zooms, rounding step, sources) matches
+  what this build would make, `terrain.pmtiles` and `contours.pmtiles` are hard-linked into the
+  new generation instead of being rebuilt, the disk guard does not count them, and the
+  verification still samples them. A refresh build is then the basemap plus the routing graph.
+  Regions added, removed or redrawn, or a changed terrain setting, change the fingerprint and
+  the terrain is built. The DEM data itself is not part of the fingerprint: to pick up newer
+  elevation data, start a build with `rebuild_terrain` (the "Rebuild terrain" switch on Builds).
+  The two generations share the file, so deleting either leaves the other intact, and
+  `/admin/api/generations` counts it once in `disk.bytes`.
 - Besides the archive, it writes `<outPath>.json`: zooms, tile count, bytes, per-source pixel
   counts, pieces fetched or reused, and duration.
 
@@ -409,15 +506,42 @@ when the style does not template it, and with `MAPTHING_IMAGERY_URL` set replace
 every font in the stack answer 404.
 
 **Configuration** (environment): `MAPTHING_DATA`, `MAPTHING_LISTEN`, `ADMIN_USER`,
-`ADMIN_PASSWORD`, `MAPTHING_PUBLIC_URL`, `MAPTHING_VALHALLA_URL` (default
+`ADMIN_PASSWORD`, `MAPTHING_PUBLIC_URL`, `MAPTHING_TRUSTED_PROXY` (`off`), `MAPTHING_VALHALLA_URL` (default
 `http://127.0.0.1:8002`; blue/green also uses the next port), `MAPTHING_VALHALLA_CMD` (`{config}`), `MAPTHING_RENDERER_URL` (default
 `http://127.0.0.1:8081`), `MAPTHING_RENDERER_CMD` (default `node /opt/renderer/server.js`),
 `MAPTHING_RENDERER_HEALTH_URL` (default renderer URL + `/health`), `MAPTHING_RASTER_CACHE_MB`
 (2048), `MAPTHING_IMAGERY_CACHE_MB` (4096), `MAPTHING_PACK_CACHE_MB` (4096),
 `MAPTHING_PACK_MAX_TILES` (2000000), `MAPTHING_INTERNAL_TOKEN`, `MAPTHING_IMAGERY_URL`,
-`MAPTHING_DEBUG`, `MAPTHING_RENDERER` (`on`; `off` starts no renderer and raster tiles answer
+`MAPTHING_DEBUG`, `MAPTHING_LOG_MAX_MB` (50: total size of the log files), `MAPTHING_RENDERER` (`on`; `off` starts no renderer and raster tiles answer
 404 `renderer_off`), `MAPTHING_SERVE` (`tiles,routing,elevation`; a part left out is not served
 and its files are not required of a generation: [operations.md](operations.md)). Caches live in `/data/raster-cache`, `/data/imagery-cache`, `/data/pack-cache`.
+
+**Behind a proxy or tunnel.** The usual deployment is a tunnel or reverse proxy that terminates
+TLS and reaches the container over plain HTTP on a private network (`samples/`).
+
+- `MAPTHING_PUBLIC_URL` is the base of every URL the server writes: tile, glyph and sprite URLs
+  in styles, `tiles` in TileJSON, and the snippets the admin UI shows for a new key
+  (`public_url` in `/admin/api/system`). Without it the base is taken from each request
+  (`X-Forwarded-Proto` and `X-Forwarded-Host` when present, else the request's own scheme and
+  host), which is right only when the proxy passes the public host through. The renderer's
+  internal requests and the admin UI's own map (a session, no key) always get the host they
+  came in on, so the admin map also works on `http://127.0.0.1:8080`.
+- `MAPTHING_TRUSTED_PROXY=on` makes `auth.Auth.ClientIP` take the client address from
+  `CF-Connecting-IP`, else the first `X-Forwarded-For` entry (values that are not an IP
+  address are skipped), else the connection. It is what the login throttle (5 failures in
+  5 minutes per address), per-client rate limits and request log lines (`ip=`) use. Off by
+  default, and the headers are then ignored: a directly reachable server must not let a client
+  name its own address. Turn it on only when the port is not published to clients (the
+  compose sample binds it to 127.0.0.1; anyone on the host itself can still claim an address).
+- The renderer's internal token is accepted only from a loopback **connection**, never from a
+  forwarded address, whatever this setting is.
+- The session cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` when the browser came over
+  HTTPS: a TLS connection, `X-Forwarded-Proto: https`, Cloudflare's `CF-Visitor`, or a request
+  for the host of an `https` `MAPTHING_PUBLIC_URL`. Over plain HTTP on the box itself
+  (`http://127.0.0.1:8080/admin`) it is not `Secure`, so that still works.
+- The CSRF check accepts the request's host, `X-Forwarded-Host` and the public URL's host.
+- Server-sent events (`/admin/api/events`, `/admin/api/logs/stream`) send a comment every 15 s
+  and `X-Accel-Buffering: no`, so proxies neither buffer nor time them out.
 
 **Errors.** Keyed and admin errors are JSON `{"error":{"code","message"}}`, except under
 `/maps/api/` (Google Elevation shape), `/directions/v2` (Google RPC shape) and `/ors/` (ORS
@@ -466,21 +590,38 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   `data_date`/`downloaded_at`/`disk_bytes` come from `downloads/<id>/meta.json` and the download size; `extract_bytes`/`elevation_sources` from the catalog at add time.
   `POST` `{id}` (catalog extract) or `{name,bbox}` / `{name,polygon:[[lon,lat]…]}` (custom; id `custom/<slug>`) → 201 region; 409 if the id exists.
   `GET`/`PATCH {refresh}`/`DELETE` `/admin/api/regions/{id}` (ids contain `/`, may be URL-encoded) → region / region / 204.
-- `POST /admin/api/build` `{refresh_downloads}` → 202 job; 409 if a build is queued or running; 503 if the build job is not registered.
+- `POST /admin/api/build` `{refresh_downloads, rebuild_terrain}` → 202 job (`rebuild_terrain`: do not reuse the live generation's terrain, see Elevation); 409 if a build is queued or running; 503 if the build job is not registered.
 - Job: `{id,name,status:"queued"|"running"|"succeeded"|"failed"|"cancelled",trigger:"manual"|"schedule",refresh_downloads,created_at,started_at?,finished_at?,progress:0..1,stages:[{name,status:"pending"|"running"|"done"|"failed"|"skipped",progress,detail?,started_at?,finished_at?}],error?,generation_id?}`.
   Stages are the pipeline's, all listed from the moment a build is queued: `guard, download, merge, basemap, valhalla, terrain, verify, swap, retention`;
   stages never reached in a successful build end `skipped`. `progress` is the mean over stages.
   `GET /admin/api/jobs` → `{jobs:[…]}` newest first; `GET /admin/api/jobs/{id}` → job + `log:[{job_id,t,level:"debug"|"info"|"warn"|"error",msg}]` (tail, `?tail=n`);
   `POST /admin/api/jobs/{id}/cancel` → 204 (409 if not queued/running).
 - `GET /admin/api/events` (SSE): named events `job` (data: job), `log` (data: log line), `generation` (data: `{id,previous}` when a generation goes live). The current job is sent on connect.
-- `GET /admin/api/generations` → `{generations:[{id,created_at,status:"live"|"kept",manifest:{regions:[{id,name,data_date,bbox}],sizes:{basemap,terrain,routing,total},timings:{stage:seconds},checks:[{name,ok,detail?}],raw}}]}`
-  (generations on disk; `manifest` is normalised from the pipeline's `manifest.json`, which is in `raw`; sizes are measured on disk).
+- `GET /admin/api/generations` → `{generations:[{id,created_at,status,owned,problems?,bytes,can_activate,can_delete,manifest:{regions:[{id,name,data_date,bbox}],sizes:{basemap,terrain,contours,routing,total},timings:{stage:seconds},checks:[{name,ok,detail?}],raw}}],disk:{bytes,sum_bytes,free_bytes,total_bytes}}`,
+  newest first (generations on disk; `manifest` is normalised from the pipeline's `manifest.json`, which is in `raw`; sizes are measured on disk).
+  `status` (`build.Builder.Inventory`): `live`; `previous` (the newest other complete generation this server owns: the one retention keeps, the rollback);
+  `kept` (owned and complete, beyond that); `building` (a build is writing it); `incoming` (not owned: copied in and never activated here; `problems` is set while the copy is incomplete);
+  `invalid` (owned, or left by a build that was killed, and failing validation: `problems` says why).
+  `can_activate`: it validates, is not live or building, and no build is running. `can_delete`: it is not live and not being built.
+  `disk.bytes` counts a file shared by hard link (terrain reused from the previous generation) once; `disk.sum_bytes` is the generations' sizes added up.
+  Rolling back is activating the `previous` generation. `DELETE /admin/api/generations/{id}` → 204.
+  A build, an activation and a delete each claim their generation under one short lock
+  (`build.Builder.busyMu`) before touching it, and `current` only moves to a claimed generation,
+  so a delete cannot remove a directory that is being written, validated or made live, and an
+  activation of one being deleted answers 409 `busy`. Updates of `.retention.json` are serialised. Activations and deletions by hand are recorded in history (`kind` `generation`).
 - `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,refresh_downloads,regions:[{id,enabled}]}` (cron 5-field, UTC; PUT fields optional, 400 `bad_cron`)
   + *extra* `next_run,last_run,upcoming:[5 times],default_cron,timezone,history`.
 - `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}` (revoked keys left out; `?revoked=1` includes them with `revoked_at`).
   `POST` `{label,rpm?,rpd?,origins?}` (null = unlimited) → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` (same fields) `/admin/api/keys/{id}` → key; `DELETE` → 204 (revoked at once).
 - `GET /admin/api/stats?days=30` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state:"running"|"starting"|"restarting"|"stopped",pid|null,uptime_s,restarts,rss_bytes}]}`
   (+ *extra* disk `raster_cache_bytes,pack_cache_bytes,database_bytes`, process `detail,healthy`). Usage kinds map to buckets: tile→tiles, raster→raster, pack→packs, elevation→elevation, everything else (route, matrix, snap, isochrone, valhalla, compat)→routes; `raster-internal` is not shown. `key_id` "0" is the admin UI.
+- `GET /admin/api/overview` → `{version,commit,started_at,ready,readiness,generation:{id,created_at,bytes,sizes,regions:[{id,name,data_date,bbox}]}|null,regions_installed,processes:[process],system:{cpus,load1,memory_used_bytes,memory_total_bytes,platform},traffic:{since,kinds:[{kind,hour:window,day:window,series:[60 per-minute counts]}]},disk:{total_bytes,free_bytes,data_bytes,parts:[{name,bytes}],guard:{known,need_bytes?,ok?}},builds:{schedule_enabled,cron,next_run,active:job|null,last:{id,status,trigger,started_at,finished_at,duration_s,error,generation_id}|null}}`.
+  - `process` = `{name,state,detail?,pid,uptime_s,restarts,rss_bytes,cpu_percent|null,healthy,standby?,role?}`: this server first, then each supervised child, then `build tools` while a build's tools run.
+    `rss_bytes` and `cpu_percent` (of one core, between two readings at least a second apart) cover a child's whole process group, so the renderer's include Node and Xvfb. Read from `/proc`; zero elsewhere.
+  - `window` = `{requests,errors (5xx),rejected (401/403/429),per_min,p50_ms,p95_ms}` for the last hour and the last 24 hours. Kinds: `tiles` (vector tiles and archives), `raster`, `route` (every routing endpoint, native and compatible), `elevation`, `style` (styles, glyphs, sprites), `pack`.
+    Measured by the request middleware for keyed endpoints (`stats.Traffic`: per kind, one slot per minute for 24 hours with a 96-bucket latency histogram, so a quantile is the upper bound of its bucket, at most 19% above the true value).
+    In memory only: it starts empty at every start. The renderer's own requests are not counted. Time is to the last byte written.
+  - `disk.guard`: what the next build needs free (`build.Builder.EstimateFor` for the installed regions, refreshed in the background every 5 minutes; `known` is false until then or with no regions).
 - `GET /admin/api/system` → `{version,commit,build_date,components:[{name,version}],ready,readiness:[{name,ok,detail?}],disk:{free_bytes,total_bytes},current_generation|null,attribution:[{name,license,url?,note?}],imagery_source:{name,attribution}|null}`
   + *extra* `styles:[{id,name,description,dark}],elevation_sources,platform,data_dir,process`.
 - `GET /admin/api/history?kind=&limit=` → `{history:[{id,at,kind,ok,message,job_id?,generation?,details?}]}`; `POST /admin/api/system/restart/{name}` → 204.

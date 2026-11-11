@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/jclement/mapthing/internal/build"
 	"github.com/jclement/mapthing/internal/catalog"
@@ -14,6 +16,7 @@ import (
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/server"
 	"github.com/jclement/mapthing/internal/store"
+	"github.com/jclement/mapthing/internal/tiles"
 )
 
 // wirePipeline registers the build job and the region catalog.
@@ -37,14 +40,15 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 
 	f.runner.Register(scheduler.BuildJob, func(ctx context.Context, j *jobs.Job) error {
 		var p struct {
-			Refresh bool `json:"refresh"`
+			Refresh        bool `json:"refresh"`
+			RebuildTerrain bool `json:"rebuild_terrain"`
 		}
 		_ = j.Decode(&p)
 		regions, skip, err := f.buildRegions(ctx, cat)
 		if err != nil {
 			return &build.StageError{Stage: build.StageGuard, Err: err}
 		}
-		m, err := b.Run(ctx, j, build.Options{Regions: regions, Refresh: p.Refresh, SkipRefresh: skip, Restart: restart})
+		m, err := b.Run(ctx, j, f.buildOptions(regions, skip, p.Refresh, p.RebuildTerrain, restart))
 		if err == nil && m != nil {
 			j.SetGeneration(m.Generation)
 		}
@@ -56,6 +60,36 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 			return map[string]any{"stage": se.Stage, "error": se.Err.Error(), "log_tail": se.LogTail}, true
 		}
 		return nil, false
+	}
+	// What the next build needs free, for the overview: the build's own disk guard for the
+	// installed regions. It is worked out in the background (it stats every extract and may
+	// ask Geofabrik for a size), so the page never waits on it.
+	var est struct {
+		sync.Mutex
+		at      time.Time
+		running bool
+		need    int64
+		ok      bool
+	}
+	d.BuildEstimate = func(context.Context) (int64, bool) {
+		est.Lock()
+		defer est.Unlock()
+		if !est.running && (est.at.IsZero() || time.Since(est.at) > 5*time.Minute) {
+			est.running = true
+			go func() {
+				need, ok := int64(0), false
+				ectx, cancel := context.WithTimeout(ctx, time.Minute)
+				defer cancel()
+				if regions, skip, err := f.buildRegions(ectx, cat); err == nil && len(regions) > 0 {
+					e := b.EstimateFor(f.buildOptions(regions, skip, true, false, nil))
+					need, ok = e.NeedBytes, true
+				}
+				est.Lock()
+				est.at, est.running, est.need, est.ok = time.Now(), false, need, ok
+				est.Unlock()
+			}()
+		}
+		return est.need, est.ok
 	}
 	d.Catalog = func(ctx context.Context) (any, error) {
 		if err := cat.Ensure(ctx); err != nil {
@@ -103,6 +137,21 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 		return est, nil
 	}
 	return cat
+}
+
+// buildOptions are the options of a build this server runs (the job, and the disk estimate
+// shown before it). The live generation's terrain is offered for reuse: when it was built
+// for the same areas with the same settings the build links it instead of rebuilding it,
+// which is most of a refresh build's time (mapthing-build -reuse-terrain does the same).
+// rebuildTerrain turns that off for one build.
+func (f *features) buildOptions(regions []catalog.Region, skip map[string]bool, refresh, rebuildTerrain bool, restart func(context.Context) error) build.Options {
+	o := build.Options{Regions: regions, Refresh: refresh, SkipRefresh: skip, Restart: restart}
+	if !rebuildTerrain {
+		if _, dir, ok := tiles.CurrentGeneration(f.cfg.DataDir); ok {
+			o.ReuseTerrain = dir
+		}
+	}
+	return o
 }
 
 // catalogEntryJSON is a catalog entry in the admin API shape (docs/architecture.md).
