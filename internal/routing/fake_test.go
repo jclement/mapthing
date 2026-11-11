@@ -22,6 +22,7 @@ type fakeValhalla struct {
 	mu       sync.Mutex
 	handlers map[string]func(body map[string]any) (int, string)
 	bodies   map[string][]map[string]any
+	queries  []string // raw query of every request, as the engine saw it
 }
 
 func newFake(t *testing.T) (*fakeValhalla, *Client) {
@@ -52,6 +53,9 @@ func newFake(t *testing.T) (*fakeValhalla, *Client) {
 }
 
 func (f *fakeValhalla) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.queries = append(f.queries, r.URL.RawQuery)
+	f.mu.Unlock()
 	action := strings.TrimPrefix(r.URL.Path, "/")
 	var body map[string]any
 	data, _ := io.ReadAll(r.Body)

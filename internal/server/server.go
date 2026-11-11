@@ -176,6 +176,13 @@ func (s *Server) routes() {
 	for _, mt := range s.d.Mounts {
 		mt.Mount(m, a.Wrap)
 	}
+	// CORS preflight for the routing, elevation and compatibility endpoints (the tile server
+	// registers its own). A browser on another origin sends one before any request that
+	// carries the key in a header (Authorization, X-Goog-Api-Key) or a JSON body; without an
+	// answer it never sends the request. Wrap answers OPTIONS itself, before asking for a key.
+	for _, p := range []string{"/api/", "/directions/", "/ors/", "/maps/api/"} {
+		m.Handle("OPTIONS "+p, a.Wrap("preflight", http.NotFoundHandler()))
+	}
 
 	// Admin UI (Vite base "/admin/"). /admin/api/… is matched by the more specific patterns above.
 	m.Handle("GET /admin/", s.ui())

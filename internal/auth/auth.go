@@ -312,8 +312,13 @@ func (a *Auth) sameOrigin(r *http.Request) bool {
 	return false
 }
 
+// KeyParams are the query parameters a key may arrive in: ours and Google's (key), ORS's
+// (api_key) and Mapbox's (access_token), so a client of any of them switches by changing the
+// host. Code that forwards a request elsewhere removes all of them.
+var KeyParams = []string{"key", "api_key", "access_token"}
+
 // KeyFromRequest extracts an API key from, in order: Authorization (Bearer or bare, ORS
-// style), X-Goog-Api-Key, ?key=, ?api_key=.
+// style), X-Goog-Api-Key, ?key=, ?api_key=, ?access_token=.
 func KeyFromRequest(r *http.Request) string {
 	if h := strings.TrimSpace(r.Header.Get("Authorization")); h != "" {
 		if len(h) > 7 && strings.EqualFold(h[:7], "bearer ") {
@@ -325,10 +330,12 @@ func KeyFromRequest(r *http.Request) string {
 		return strings.TrimSpace(h)
 	}
 	q := r.URL.Query()
-	if k := q.Get("key"); k != "" {
-		return k
+	for _, p := range KeyParams {
+		if k := q.Get(p); k != "" {
+			return k
+		}
 	}
-	return q.Get("api_key")
+	return ""
 }
 
 // Wrap guards a keyed endpoint: API key (or admin session), origin, rate limits, and counts

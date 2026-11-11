@@ -81,7 +81,10 @@ slot. A generation must be a real directory of regular files: symbolic links are
 ## HTTP API
 
 Everything under `/api/v1`, `/tiles`, `/styles`, `/packs` and the compatibility endpoints needs an
-**API key** (`Authorization: Bearer mt_…`, or `?key=mt_…` for tile URLs that browsers fetch).
+**API key** (`Authorization: Bearer mt_…`, or `?key=mt_…` for tile URLs that browsers fetch;
+also accepted the way other services' clients send theirs: bare `Authorization`,
+`X-Goog-Api-Key`, `?api_key=`, `?access_token=`; see docs/switching.md). CORS preflight
+(`OPTIONS`) is answered without a key on every keyed path.
 The admin UI and `/admin/api` use a session cookie from the single admin credential
 (`ADMIN_USER` / `ADMIN_PASSWORD`). The admin session may also call every keyed endpoint, so the
 UI's own map needs no key. `/healthz` and `/readyz` are open. `/healthz` answers `{"ok":true,"version":"…","building":bool}`;

@@ -361,6 +361,12 @@ func TestKeysLifecycle(t *testing.T) {
 	if r, _ := e.do(nil, "GET", "/tiles/basemap.json?key="+secret, nil, nil); r.StatusCode != 200 {
 		t.Fatalf("?key=: %d", r.StatusCode)
 	}
+	// …and as the parameter a Mapbox or an OpenRouteService client sends.
+	for _, p := range []string{"access_token", "api_key"} {
+		if r, _ := e.do(nil, "GET", "/tiles/basemap.json?"+p+"="+secret, nil, nil); r.StatusCode != 200 {
+			t.Fatalf("?%s=: %d", p, r.StatusCode)
+		}
+	}
 	if r, _ := e.do(nil, "GET", "/tiles/basemap.json", nil, nil); r.StatusCode != 401 {
 		t.Fatalf("no key: %d", r.StatusCode)
 	}
@@ -1138,5 +1144,25 @@ func TestUIFallback(t *testing.T) {
 	}
 	if r, _ := e.do(nil, "GET", "/admin/api/nope", nil, nil); r.StatusCode != 401 {
 		t.Fatalf("unknown admin path unauthenticated: %d", r.StatusCode)
+	}
+}
+
+// A browser app on another origin can call the routing and elevation endpoints with the key
+// in a header: the preflight it sends first is answered, without a key, for every family.
+func TestPreflightForHeaderKeys(t *testing.T) {
+	e := newEnv(t, true)
+	for _, path := range []string{"/directions/v2:computeRoutes", "/api/v1/route", "/api/v1/elevation", "/api/v1/valhalla/route",
+		"/ors/v2/directions/driving-car", "/maps/api/elevation/json", "/tiles/basemap/0/0/0.mvt", "/styles/outdoors.json"} {
+		r, _ := e.do(nil, "OPTIONS", path, nil, map[string]string{"Origin": "https://app.example.com",
+			"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "x-goog-api-key,x-goog-fieldmask,content-type,authorization"})
+		allow := strings.ToLower(r.Header.Get("Access-Control-Allow-Headers"))
+		if r.StatusCode != 204 || r.Header.Get("Access-Control-Allow-Origin") != "*" || !strings.Contains(r.Header.Get("Access-Control-Allow-Methods"), "POST") ||
+			!strings.Contains(allow, "x-goog-api-key") || !strings.Contains(allow, "x-goog-fieldmask") || !strings.Contains(allow, "authorization") || !strings.Contains(allow, "content-type") {
+			t.Errorf("preflight %s: %d %v", path, r.StatusCode, r.Header)
+		}
+	}
+	// The admin API is not for other origins.
+	if r, _ := e.do(nil, "OPTIONS", "/admin/api/keys", nil, map[string]string{"Origin": "https://app.example.com", "Access-Control-Request-Method": "POST"}); r.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Errorf("admin API preflight allowed another origin: %v", r.Header)
 	}
 }

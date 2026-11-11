@@ -198,7 +198,9 @@ func (h *Handlers) passthrough(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	q.Del("key") // the API key never reaches the engine
+	for _, p := range []string{"key", "api_key", "access_token"} { // auth.KeyParams: the API key never reaches the engine
+		q.Del(p)
+	}
 	var body io.Reader
 	if r.Method == http.MethodPost {
 		body = io.LimitReader(r.Body, maxBody)
