@@ -128,7 +128,9 @@ export function MapPage() {
   const [styleChoice, setStyleChoice] = useState<StyleName | null>(null);
   const styleName: StyleName = styleChoice ?? defaultStyle(styles.data, dark);
   const style = useMemo(
-    () => (gens.data && !hasLive ? blankStyle(dark) : styleUrl(styleName)),
+    // Until it is known that a map is live, draw nothing: asking a server without one for
+    // tiles only produces a screen of 503s.
+    () => (!gens.data || !hasLive ? blankStyle(dark) : styleUrl(styleName)),
     [gens.data, hasLive, dark, styleName],
   );
 

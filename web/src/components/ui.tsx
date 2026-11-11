@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
@@ -417,8 +418,10 @@ export function Modal({
   }, [open]);
   if (!open) return null;
   const w = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" }[size];
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
+  // In a portal, above everything: inside the page it sat under the phone layout's bottom
+  // navigation, which covered the dialog's own buttons.
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-end justify-center p-0 sm:items-center sm:p-4">
       <div
         className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
         onClick={() => dismissable && onClose()}
@@ -453,7 +456,8 @@ export function Modal({
           </footer>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

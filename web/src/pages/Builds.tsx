@@ -319,9 +319,29 @@ export function BuildsPage() {
           <Card>
             <div className="flex items-center gap-3 text-sm text-muted">
               <Circle className="size-4 text-ok" />
-              {noRegions
-                ? "Add a region first, then build."
-                : "Idle. The next build runs on the schedule, or start one now."}
+              {noRegions ? (
+                <span>
+                  Nothing to build yet.{" "}
+                  <Link
+                    to="/regions?add=1"
+                    className="font-medium text-accent-strong hover:underline"
+                  >
+                    Add a region
+                  </Link>{" "}
+                  first.
+                </span>
+              ) : gens.data && !gens.data.generations.some((g) => g.status === "live") ? (
+                <span>
+                  Nothing is built yet. <strong className="font-medium">Build now</strong> makes the
+                  first map: it downloads OpenStreetMap and elevation data for your{" "}
+                  {regions.data?.regions.length === 1
+                    ? "region"
+                    : `${regions.data?.regions.length ?? ""} regions`}
+                  , and shows its progress and log here.
+                </span>
+              ) : (
+                "Idle. The next build runs on the schedule, or start one now."
+              )}
             </div>
           </Card>
         )}
