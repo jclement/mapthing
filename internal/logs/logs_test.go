@@ -457,3 +457,43 @@ func TestStalledDownloadDoesNotBlockWriters(t *testing.T) {
 		t.Fatal("the download did not finish")
 	}
 }
+
+// The trigger-word shortcut in redactPatterns must never skip a pattern that would have
+// matched: with every pattern forced to run, each line of the redaction tests gives the same
+// result.
+func TestRedactShortcutMatchesFullPass(t *testing.T) {
+	full := func(s string) string {
+		for _, r := range redactors {
+			s = r.re.ReplaceAllString(s, r.repl)
+		}
+		return s
+	}
+	const key = "mt_abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrst"
+	lines := []string{
+		"GET /styles/overlay.json?key=" + key, "GET /x?sig=abcdef0123456789&x=1", "GET /x?SIG=abcdef0123456789",
+		"Authorization: Bearer " + key, "AUTHORIZATION=abc", "authorization=" + key, `{"Authorization":"Basic dXNlcjpodW50ZXIy"}`,
+		"X-Goog-Api-Key: AIzaSyA-1234567890abcdefghijklmnopqrstuv", "x-mapthing-internal=0123456789abcdef", "X-API-KEY: abc123",
+		"ADMIN_PASSWORD=correct-horse-battery", "TUNNEL_TOKEN=eyJhIjoiYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoifQ",
+		`{"username":"admin","PassWord":"correct horse"}`, "internal_token=deadbeefdeadbeef", "pwd=hunter2", "client_secret: abc",
+		"https://user:hunter2hunter2@example.com/tiles", "key " + key + " was revoked", "upstream said AIzaSyA-1234567890abcdefghijklmnopqrstuv",
+		"token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop", "Cookie: a=1; mapthing_session=0123456789abcdef",
+		"Set-Cookie: x=y", "bearer abcdefghijklmnop", "BEARER abcdefghijklmnop", "credential=abc", "Signature: abc",
+		"access_key=AKIAABCDEFGH", "private-key: abc", "an ordinary line with nothing in it", "100% done ways=[0]",
+	}
+	for _, l := range lines {
+		if got, want := redactPatterns(l), full(l); got != want {
+			t.Errorf("shortcut changed the result for %q:\n  got  %q\n  want %q", l, got, want)
+		}
+	}
+	if len(redactors) != 9 {
+		t.Fatalf("there are %d patterns; redactPatterns' trigger table is written for 9: update both", len(redactors))
+	}
+}
+
+func BenchmarkRedactOrdinaryLine(b *testing.B) {
+	line := "0:12:12 INF [osm_pass2] - nodes: [ 15.5M 15% ] ways: [ 0 ] " + strings.Repeat("x", 8000)
+	b.SetBytes(int64(len(line)))
+	for b.Loop() {
+		Redact(line)
+	}
+}

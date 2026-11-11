@@ -47,9 +47,48 @@ var redactors = []struct {
 	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]+)*`), Mask},
 }
 
+// redactPatterns applies every pattern whose trigger words occur in s. The check keeps the
+// cost of an ordinary line (no credential-like word in it at all) to one lower-casing and a
+// few substring searches: the patterns themselves cost milliseconds on a long line, and a
+// build can print megabytes.
 func redactPatterns(s string) string {
-	for _, r := range redactors {
-		s = r.re.ReplaceAllString(s, r.repl)
+	low := strings.ToLower(s)
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(low, w) {
+				return true
+			}
+		}
+		return false
+	}
+	named := has("passw", "pwd", "secret", "token", "key", "credential", "signature")
+	for i, r := range redactors {
+		var run bool
+		switch i {
+		case 0:
+			run = has("authorization", "cookie")
+		case 1:
+			run = has("x-goog-api-key", "x-mapthing-internal", "x-api-key")
+		case 2:
+			run = has("bearer")
+		case 3:
+			run = strings.Contains(s, "=") && (named || has("sig="))
+		case 4:
+			run = named
+		case 5:
+			run = strings.Contains(s, "://") && strings.Contains(s, "@")
+		case 6:
+			run = strings.Contains(s, "mt_")
+		case 7:
+			run = strings.Contains(s, "AIza")
+		case 8:
+			run = strings.Contains(s, "eyJ")
+		default:
+			run = true
+		}
+		if run {
+			s = r.re.ReplaceAllString(s, r.repl)
+		}
 	}
 	return s
 }

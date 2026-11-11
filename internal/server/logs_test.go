@@ -341,12 +341,13 @@ func TestStalledLogStreamIsDropped(t *testing.T) {
 		}
 		close(wrote)
 	}()
+	// Not a speed test: a blocked writer never finishes, a slow machine merely takes longer.
 	select {
 	case <-wrote:
-	case <-time.After(20 * time.Second):
+	case <-time.After(3 * time.Minute):
 		t.Fatal("log writers blocked behind a stalled stream")
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for sink.Subscribers() != 0 && time.Now().Before(deadline) {
 		sink.Log("child", logs.LevelInfo, "", line) // keep something to write
 		time.Sleep(50 * time.Millisecond)
