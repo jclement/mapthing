@@ -69,24 +69,9 @@ docker run -d --name mapthing --restart unless-stopped \
   ghcr.io/jclement/mapthing:latest
 ```
 
-With Docker Compose:
-
-```yaml
-services:
-  mapthing:
-    image: ghcr.io/jclement/mapthing:latest
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      ADMIN_USER: admin
-      ADMIN_PASSWORD: change-me          # or use an env_file / secret
-      MAPTHING_PUBLIC_URL: https://maps.example.com   # optional; used in styles and TileJSON
-    volumes:
-      - mapthing-data:/data
-volumes:
-  mapthing-data:
-```
+With Docker Compose, and published through a Cloudflare Tunnel with no open ports, use the
+reference files in [`samples/`](samples/): `docker-compose.yaml` (mapthing plus a `cloudflared`
+sidecar) and `.env.example`. See [samples/README.md](samples/README.md) for the steps.
 
 Everything mapthing keeps lives in `/data`: downloaded extracts, the built generations, the
 SQLite database (keys, schedule, history) and caches. The container runs as UID 10001; a named

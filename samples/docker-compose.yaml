@@ -1,6 +1,6 @@
 # mapthing in one container, published through a Cloudflare Tunnel (no open ports).
 #
-#   cp .env.example .env    # then fill it in
+#   cp .env.example .env    # then fill it in (see README.md here)
 #   mkdir -p data && sudo chown 10001:10001 data
 #   docker compose up -d
 #
