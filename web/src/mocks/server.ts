@@ -26,6 +26,7 @@ import type {
   Stage,
   StageName,
   Stats,
+  UpdateStatus,
 } from "../api";
 import { bboxOf, haversine } from "../lib/geo";
 import { type OwnPolicy, resolvePolicy } from "../lib/refresh";
@@ -36,6 +37,8 @@ export interface MockOptions {
   empty?: boolean;
   /** Add a generation copied in from another machine and a damaged one (the rarer states). */
   oddGenerations?: boolean;
+  /** Whether the registry has a newer image than the one "running". */
+  update?: "available" | "current" | "off";
   /** Start already signed in. */
   authed?: boolean;
   /** Milliseconds per simulated build tick; 0 = never tick on a timer (tests drive builds
@@ -65,6 +68,7 @@ interface State {
   logEntries: LogEntry[];
   keys: ApiKey[];
   limits: LimitsConfig;
+  update: "available" | "current" | "off";
   schedule: Schedule;
   tickMs: number;
   latencyMs?: number;
@@ -141,6 +145,7 @@ export function resetMock(opts: MockOptions = {}) {
       : fx.logEntries(),
     keys: empty ? [] : fx.apiKeys(),
     limits: fx.limitsConfig(),
+    update: opts.update ?? "current",
     schedule: {
       cron: "0 3 * * 0",
       enabled: true,
@@ -1023,6 +1028,33 @@ on("POST", /^\/api\/v1\/elevation\/profile$/, (_m, b) => {
 
 const mockStarted = Date.now() - 3.1 * 86400000;
 
+function mockUpdate(): UpdateStatus {
+  const base = {
+    image: "ghcr.io/jclement/mapthing:latest",
+    current_revision: "7efee20a1b2c3d4e5f60718293a4b5c6d7e8f901",
+    current_created: new Date(Date.now() - 9 * 86400000).toISOString(),
+  };
+  if (S.update === "off")
+    return {
+      ...base,
+      enabled: false,
+      reason: "turned off (MAPTHING_UPDATE_CHECK=off)",
+      checked_at: null,
+      latest_revision: "",
+      latest_created: null,
+      update_available: false,
+    };
+  const newer = S.update === "available";
+  return {
+    ...base,
+    enabled: true,
+    checked_at: new Date(Date.now() - 3 * 3600000).toISOString(),
+    latest_revision: newer ? "c0ffee1234567890abcdef1234567890abcdef12" : base.current_revision,
+    latest_created: newer ? new Date(Date.now() - 86400000).toISOString() : base.current_created,
+    update_available: newer,
+  };
+}
+
 function overview(): Overview {
   settleGenerations();
   const live = S.generations.find((g) => g.status === "live");
@@ -1088,6 +1120,7 @@ function overview(): Overview {
     version: "0.9.0",
     commit: "7efee20a1b2c",
     started_at: new Date(mockStarted).toISOString(),
+    update: mockUpdate(),
     ready: up,
     readiness: [
       {

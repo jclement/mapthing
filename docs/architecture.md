@@ -84,7 +84,8 @@ Everything under `/api/v1`, `/tiles`, `/styles`, `/packs` and the compatibility 
 **API key** (`Authorization: Bearer mt_…`, or `?key=mt_…` for tile URLs that browsers fetch).
 The admin UI and `/admin/api` use a session cookie from the single admin credential
 (`ADMIN_USER` / `ADMIN_PASSWORD`). The admin session may also call every keyed endpoint, so the
-UI's own map needs no key. `/healthz` and `/readyz` are open.
+UI's own map needs no key. `/healthz` and `/readyz` are open. `/healthz` answers `{"ok":true,"version":"…","building":bool}`;
+`building` is whether a map build is running, for an update script that must not interrupt one.
 
 | Method | Path | What |
 |---|---|---|

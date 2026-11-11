@@ -98,6 +98,8 @@ refuses to start, with a clear message, when the data volume is too small.
 | `MAPTHING_LISTEN` | `:8080` | listen address |
 | `MAPTHING_WATER_POLYGONS_URL`, `MAPTHING_LAND_POLYGONS_URL` | osmdata.openstreetmap.de | mirrors for Planetiler's ocean/land polygons |
 | `MAPTHING_RENDERER` | `on` | `off` runs without the raster renderer (raster tiles answer 404); saves about 150 MiB at idle |
+| `MAPTHING_UPDATE_CHECK` | `on` | Once a day the server asks the image registry whether a newer image exists and says so on Overview (it never updates itself). `off` stops that |
+| `MAPTHING_UPDATE_IMAGE` | `ghcr.io/jclement/mapthing:<MAPTHING_TAG or latest>` | The image and tag to compare with, if you run a copy from another registry |
 | `MAPTHING_LOG_MAX_MB` | `50` | total size of the log files kept in `/data/logs` (the admin Logs page reads them) |
 | `MAPTHING_SERVE` | `tiles,routing,elevation` | what this server serves; `routing,elevation` makes a backend that needs no basemap |
 

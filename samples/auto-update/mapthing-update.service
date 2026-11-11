@@ -1,0 +1,10 @@
+# /etc/systemd/system/mapthing-update.service
+[Unit]
+Description=Update mapthing when a newer image exists and no build is running
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=MAPTHING_DIR=/docker/maps
+ExecStart=/docker/maps/mapthing-update.sh

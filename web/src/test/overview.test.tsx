@@ -187,4 +187,27 @@ describe("Overview page", () => {
     expect(screen.getByText(/disk check runs once regions are chosen/)).toBeInTheDocument();
     expect(screen.getByText("None yet")).toBeInTheDocument();
   });
+
+  it("says when a newer image exists and how to update", async () => {
+    renderApp("/", { authed: true, update: "available" });
+    const note = await screen.findByRole("region", { name: "Software update" });
+    expect(note).toHaveTextContent("A newer mapthing image is available");
+    expect(note).toHaveTextContent("revision c0ffee123456; this server runs 7efee20a1b2c");
+    expect(note).toHaveTextContent("docker compose pull && docker compose up -d");
+    expect(note).toHaveTextContent("Your maps, keys and settings are kept");
+    expect(note).toHaveTextContent("No build is running");
+    expect(
+      within(note).getByRole("button", { name: "Copy the update command" }),
+    ).toBeInTheDocument();
+  });
+
+  it("is quiet when up to date, and says so when the check is off", async () => {
+    const first = renderApp("/");
+    expect(await screen.findByText(/up to date \(checked 3 h ago\)/)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Software update" })).not.toBeInTheDocument();
+    first.unmount();
+    renderApp("/", { authed: true, update: "off" });
+    expect(await screen.findByText(/update check off: turned off/)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Software update" })).not.toBeInTheDocument();
+  });
 });

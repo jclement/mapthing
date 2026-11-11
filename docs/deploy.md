@@ -104,6 +104,14 @@ what the next build needs. **Logs** has everything `docker compose logs` has, se
 
 ## Updating
 
+**Overview tells you when there is something to update to.** Once a day at most the server
+asks the image registry what your tag (`MAPTHING_TAG`, default `latest`) points at and compares
+it with what it is running. The page header then reads "up to date (checked 3 h ago)", or a
+note appears with the command below. It only reads the image's public description (five
+anonymous requests to ghcr.io), sends nothing about your server, and when the registry cannot
+be reached it stays quiet and asks again a day later. `MAPTHING_UPDATE_CHECK=off` in `.env`
+turns it off; a tag pinned to one build never has an update.
+
 ```sh
 cd /docker/maps
 docker compose pull && docker compose up -d
@@ -124,6 +132,46 @@ running.
 update, set `MAPTHING_TAG` in `.env` to a published `sha-<commit>` tag
 ([the image's tags](https://github.com/jclement/mapthing/pkgs/container/mapthing)) and change it
 when you want to move.
+
+### Updating by itself (opt-in)
+
+Nothing updates the container unless you set it up. If you want it, use the host's own timer
+with the two commands above, wrapped so it never interrupts a build:
+[`samples/auto-update/`](../samples/auto-update) has the script and a systemd timer.
+
+```sh
+cd /docker/maps
+base=https://raw.githubusercontent.com/jclement/mapthing/main/samples/auto-update
+curl -fsSLO $base/mapthing-update.sh && chmod +x mapthing-update.sh
+sudo curl -fsSL $base/mapthing-update.service -o /etc/systemd/system/mapthing-update.service
+sudo curl -fsSL $base/mapthing-update.timer   -o /etc/systemd/system/mapthing-update.timer
+sudo systemctl daemon-reload && sudo systemctl enable --now mapthing-update.timer
+systemctl list-timers mapthing-update.timer     # when it runs next
+journalctl -u mapthing-update.service           # what it did
+```
+
+Without systemd, one cron line does the same: `30 9 * * * /docker/maps/mapthing-update.sh`.
+
+What it does each night: asks `http://127.0.0.1:8080/healthz` whether a build is running
+(`"building":true`) and, if so, does nothing until the next night; otherwise pulls the image
+and runs `docker compose up -d mapthing`, which replaces the container only when the image
+changed. So on most nights nothing restarts. Set the timer's hour outside your build window
+(Schedule page). A build that starts in the seconds between the check and the restart is still
+lost, as described above: it shows as failed and its regions are built at their next scheduled
+time.
+
+**Why not a container that updates containers?** None is recommended here. The well-known
+one, Watchtower (`containrrr/watchtower`), has been archived by its authors and is reported
+not to work with current Docker Engine releases; community forks exist, but any such tool
+needs the Docker socket, which is root on the host, cannot wait for a build to finish, and
+would be one more image to keep pinned and updated. A timer running two commands you can read
+has none of those problems. If you already run such a tool for other containers it will work
+for this one too; expect it to interrupt a build now and then.
+
+**`/data` is never at risk from an update**, by hand or by timer: it is a folder on the host
+(`./data`), not part of the container, and neither command touches it. A new version may add
+tables to the database when it first starts; it does not remove any, so going back to the
+previous image (below) works on the same data.
 
 ## Rolling back
 

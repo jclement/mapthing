@@ -35,6 +35,7 @@ import (
 	"github.com/jclement/mapthing/internal/store"
 	"github.com/jclement/mapthing/internal/supervisor"
 	"github.com/jclement/mapthing/internal/tiles"
+	"github.com/jclement/mapthing/internal/update"
 	"github.com/jclement/mapthing/web"
 )
 
@@ -207,6 +208,11 @@ func serve() error {
 	}
 	deps.Settings = func() []config.Setting { return config.Describe(config.Environ(), sink.Redact) }
 	deps.Versions = imageVersions(cfg)
+	upd := &update.Checker{Image: cfg.UpdateImage, Off: cfg.UpdateCheckOff, Store: st,
+		Revision: os.Getenv("MAPTHING_IMAGE_REVISION"), Created: os.Getenv("MAPTHING_IMAGE_CREATED"),
+		Client: &http.Client{Timeout: 20 * time.Second}}
+	deps.Update = upd.Status
+	go upd.Run(ctx)
 	f = &features{cfg: cfg, store: st, runner: runner, sched: sched, sup: sup, watcher: watcher, tiles: ts}
 	if err := f.wire(ctx, &deps); err != nil {
 		return err

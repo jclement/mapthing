@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/jobs"
+	"github.com/jclement/mapthing/internal/update"
 )
 
 type overviewResp struct {
@@ -205,5 +206,50 @@ func TestProcSamplerGroups(t *testing.T) {
 	}
 	if u := p.own(); u.RSSBytes != 3*page {
 		t.Errorf("own: %+v", u)
+	}
+}
+
+// The overview carries the update check's answer; /healthz says whether a build is running,
+// without a login (the sample update script reads it).
+func TestOverviewUpdateAndHealthBuilding(t *testing.T) {
+	now := time.Now().UTC()
+	e := newEnv(t, true, func(d *Deps) {
+		d.Update = func() update.Status {
+			return update.Status{Enabled: true, Image: "ghcr.io/jclement/mapthing:latest", CurrentRevision: "aaa",
+				LatestRevision: "bbb", CheckedAt: &now, Available: true}
+		}
+	})
+	c := e.login()
+	_, b := e.do(c, "GET", "/admin/api/overview", nil, nil)
+	var o struct {
+		Update *update.Status `json:"update"`
+	}
+	if err := json.Unmarshal(b, &o); err != nil || o.Update == nil || !o.Update.Available || o.Update.LatestRevision != "bbb" || o.Update.CheckedAt == nil {
+		t.Fatalf("update in the overview: %+v %v", o.Update, err)
+	}
+	health := func() string {
+		r, b := e.do(nil, "GET", "/healthz", nil, nil)
+		if r.StatusCode != 200 {
+			t.Fatalf("healthz: %d", r.StatusCode)
+		}
+		return string(b)
+	}
+	if h := health(); !strings.Contains(h, `"building":false`) {
+		t.Fatalf("idle: %s", h)
+	}
+	release := make(chan struct{})
+	e.jobs.Register("build", func(context.Context, *jobs.Job) error { <-release; return nil })
+	if r, b := e.do(c, "POST", "/admin/api/build", map[string]any{}, map[string]string{"Origin": e.ts.URL}); r.StatusCode != 202 {
+		t.Fatalf("build: %d %s", r.StatusCode, b)
+	}
+	waitFor(t, func() bool { return strings.Contains(health(), `"building":true`) })
+	close(release)
+	waitFor(t, func() bool { return strings.Contains(health(), `"building":false`) })
+
+	// Without a checker (a build that has none) the field is null, not missing or an error.
+	e2 := newEnv(t, true)
+	_, b = e2.do(e2.login(), "GET", "/admin/api/overview", nil, nil)
+	if !strings.Contains(string(b), `"update":null`) {
+		t.Errorf("no checker: %s", b)
 	}
 }

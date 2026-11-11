@@ -120,9 +120,13 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var upd any
+	if s.d.Update != nil {
+		upd = s.d.Update()
+	}
 	started := s.d.Stats.Started()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": Version, "commit": commit, "started_at": started.UTC(),
+		"version": Version, "commit": commit, "started_at": started.UTC(), "update": upd,
 		"ready": ready, "readiness": readiness,
 		"generation": generation, "regions_installed": regions,
 		"processes": all,

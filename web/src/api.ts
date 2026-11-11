@@ -422,10 +422,25 @@ export interface KindTraffic {
 }
 
 /** GET /admin/api/overview: the admin home page in one call. */
+/** Whether a newer image has been published (asked of the registry at most once a day). */
+export interface UpdateStatus {
+  enabled: boolean;
+  reason?: string; // why no check is made
+  image: string;
+  current_revision: string;
+  current_created: string | null;
+  checked_at: string | null;
+  latest_revision: string;
+  latest_created: string | null;
+  update_available: boolean;
+  error?: string; // the last check found nothing out
+}
+
 export interface Overview {
   version: string;
   commit: string;
   started_at: string;
+  update?: UpdateStatus | null;
   ready: boolean;
   readiness: { name: string; ok: boolean; detail?: string }[];
   generation: {

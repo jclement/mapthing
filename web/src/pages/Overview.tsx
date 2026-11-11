@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUpCircle,
   CheckCircle2,
   CircleDashed,
   Hammer,
@@ -17,6 +18,7 @@ import { blankStyle, MapCanvas } from "../components/MapCanvas";
 import {
   Badge,
   Card,
+  CopyButton,
   cx,
   ErrorNote,
   Page,
@@ -39,7 +41,9 @@ import {
   processTone,
   rate,
   totals,
+  UPDATE_COMMAND,
   unionBBox,
+  updateLine,
 } from "../lib/overview";
 import { useTheme } from "../lib/theme";
 import { useApi } from "../lib/useApi";
@@ -74,6 +78,7 @@ export function OverviewPage() {
           <>
             mapthing {o.version}
             {o.commit ? ` (${o.commit})` : ""} · up {fmt.duration(secondsSince(o.started_at))}
+            {updateLine(o.update) ? ` · ${updateLine(o.update)}` : ""}
           </>
         }
         actions={
@@ -125,6 +130,49 @@ export function OverviewPage() {
           </Link>
         )}
       </div>
+
+      {o.update?.update_available && (
+        <section
+          aria-label="Software update"
+          className="mb-5 rounded-(--radius-card) border border-info/30 bg-info/8 px-4 py-3"
+        >
+          <div className="flex items-start gap-3">
+            <ArrowUpCircle className="mt-0.5 size-5 shrink-0 text-info" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div>
+                <div className="text-sm font-semibold">A newer mapthing image is available</div>
+                <div className="text-[13px] text-muted">
+                  {o.update.latest_created
+                    ? `Built ${fmt.date(o.update.latest_created)}`
+                    : "Published"}
+                  {o.update.latest_revision
+                    ? `, revision ${o.update.latest_revision.slice(0, 12)}`
+                    : ""}
+                  {o.update.current_revision
+                    ? `; this server runs ${o.update.current_revision.slice(0, 12)}`
+                    : ""}
+                  . Your maps, keys and settings are kept: they live in the data folder.
+                </div>
+              </div>
+              <div className="flex max-w-xl items-center gap-1 rounded-md bg-panel px-2.5 py-1.5 ring-1 ring-line ring-inset">
+                <code className="flex-1 font-mono text-[12px] break-all">{UPDATE_COMMAND}</code>
+                <CopyButton value={UPDATE_COMMAND} label="Copy the update command" />
+              </div>
+              <div className="text-[13px] text-muted">
+                Run it in the folder with your compose file. The server is away for about half a
+                minute.{" "}
+                {o.builds.active ? (
+                  <strong className="font-medium text-fg">
+                    A build is running now and would be lost: wait for it to finish.
+                  </strong>
+                ) : (
+                  "No build is running, so nothing is lost."
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3 [&>*]:min-w-0">
         <LiveCard o={o} />
