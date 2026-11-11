@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { api, type Generation, type Job, type LogLine, type Stage, type StageName } from "../api";
+import { api, type Job, type LogLine, type Stage, type StageName } from "../api";
 import {
   Badge,
   Button,
@@ -22,11 +22,11 @@ import {
   PageHeader,
   Progress,
   Spinner,
-  Stat,
   Switch,
 } from "../components/ui";
 import { useEvents } from "../lib/events";
 import * as fmt from "../lib/format";
+import { STATUS, sizeOf } from "../lib/generations";
 import { useApi } from "../lib/useApi";
 
 const STAGE_LABEL: Record<StageName, string> = {
@@ -40,7 +40,7 @@ const STAGE_LABEL: Record<StageName, string> = {
   swap: "Go live",
   retention: "Clean up old builds",
 };
-const stageLabel = (n: string) => STAGE_LABEL[n as StageName] ?? n;
+export const stageLabel = (n: string) => STAGE_LABEL[n as StageName] ?? n;
 
 function secs(a?: string, b?: string) {
   if (!a) return undefined;
@@ -193,74 +193,6 @@ function ActiveJob({ job }: { job: Job }) {
   );
 }
 
-function GenerationCard({ g }: { g: Generation }) {
-  const m = g.manifest;
-  const totalT = Object.values(m.timings).reduce((a, b) => a + (b ?? 0), 0);
-  const colors = [
-    "var(--color-k1)",
-    "var(--color-k2)",
-    "var(--color-k3)",
-    "var(--color-k4)",
-    "var(--color-k5)",
-    "var(--color-faint)",
-    "var(--color-line-strong)",
-  ];
-  const okChecks = m.checks.filter((c) => c.ok).length;
-  return (
-    <div
-      className={cx(
-        "rounded-xl border p-4",
-        g.status === "live" ? "border-accent/40 bg-accent-soft/40" : "border-line",
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-[13px] font-medium">{g.id}</span>
-          {g.status === "live" ? (
-            <Badge tone="accent" dot>
-              Live
-            </Badge>
-          ) : (
-            <Badge>Kept</Badge>
-          )}
-        </div>
-        <span className="text-xs text-faint">{fmt.dateTime(g.created_at)}</span>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Total" value={fmt.bytes(m.sizes.total)} />
-        <Stat label="Basemap" value={fmt.bytes(m.sizes.basemap)} />
-        <Stat label="Routing" value={fmt.bytes(m.sizes.routing)} />
-        <Stat label="Terrain" value={fmt.bytes(m.sizes.terrain)} />
-        {m.sizes.contours ? <Stat label="Contours" value={fmt.bytes(m.sizes.contours)} /> : null}
-      </div>
-      <div className="mt-3">
-        <div className="mb-1 flex justify-between text-[11px] text-faint">
-          <span>Build time</span>
-          <span className="tnum">{fmt.duration(totalT)}</span>
-        </div>
-        <div className="flex h-2 overflow-hidden rounded-full bg-sunken">
-          {Object.entries(m.timings).map(([k, v], i) => (
-            <div
-              key={k}
-              title={`${stageLabel(k)}: ${fmt.duration(v ?? 0)}`}
-              style={{
-                width: `${((v ?? 0) / (totalT || 1)) * 100}%`,
-                background: colors[i % colors.length],
-              }}
-            />
-          ))}
-        </div>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-        <span>{m.regions.map((r) => r.name).join(", ")}</span>
-        <span className={okChecks === m.checks.length ? "text-ok" : "text-bad"}>
-          {okChecks}/{m.checks.length} checks passed
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function HistoryRow({ j }: { j: Job }) {
   const [open, setOpen] = useState(false);
   const d = secs(j.started_at, j.finished_at);
@@ -388,17 +320,39 @@ export function BuildsPage() {
           </p>
         )}
 
-        <Card title="Generations">
+        <Card
+          title="Generations"
+          action={
+            <Link
+              to="/generations"
+              className="text-xs font-medium text-accent-strong hover:underline"
+            >
+              Manage generations
+            </Link>
+          }
+        >
           {gens.loading && !gens.data ? (
             <Spinner />
           ) : gens.error ? (
             <ErrorNote error={gens.error} onRetry={gens.reload} />
           ) : gens.data?.generations.length ? (
-            <div className="grid gap-3 lg:grid-cols-2">
-              {gens.data.generations.map((g) => (
-                <GenerationCard key={g.id} g={g} />
+            <ul className="divide-y divide-line">
+              {gens.data.generations.slice(0, 3).map((g) => (
+                <li
+                  key={g.id}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 first:pt-0 last:pb-0"
+                >
+                  <span className="font-mono text-[13px] font-medium">{g.id}</span>
+                  <Badge tone={STATUS[g.status]?.tone ?? "neutral"} dot={g.status === "live"}>
+                    {STATUS[g.status]?.label ?? g.status}
+                  </Badge>
+                  <span className="text-xs text-muted">
+                    {fmt.dateTime(g.created_at)} · {fmt.bytes(sizeOf(g))} ·{" "}
+                    {g.manifest.regions.map((r) => r.name).join(", ") || "no regions recorded"}
+                  </span>
+                </li>
               ))}
-            </div>
+            </ul>
           ) : (
             <Empty title="No generations yet">The first successful build creates one.</Empty>
           )}

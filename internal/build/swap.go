@@ -185,7 +185,7 @@ func (s *state) retention(ctx context.Context) error {
 
 // prune applies retention (retention.go) and deletes any stale work directory.
 func (b *Builder) prune(keepWork string) ([]string, error) {
-	removed, firstErr := b.pruneGenerations(b.building)
+	removed, firstErr := b.pruneGenerations(b.Building())
 	// Work dirs belong to builds; Run holds the lock, so any left now are stale.
 	if ents, err := os.ReadDir(b.workRoot()); err == nil {
 		for _, e := range ents {

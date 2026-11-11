@@ -116,7 +116,8 @@ Admin (session cookie):
 | GET/POST/DELETE | `/admin/api/regions[/{id}]` | installed regions; POST `{id}` or `{name, bbox|polygon}` |
 | POST | `/admin/api/build` | start a build now (refresh downloads optional) |
 | GET | `/admin/api/jobs[/{id}]`, `/admin/api/events` (SSE) | job progress, log tail |
-| GET | `/admin/api/generations` | live and kept generations, manifests (including ones copied in from another machine) |
+| GET | `/admin/api/generations` | every generation directory with its state (live, previous, kept, building, incoming, invalid), manifest and size, and the disk they use together |
+| DELETE | `/admin/api/generations/{id}` | delete a generation directory for good. 204; 404 `no_generation`; 409 `live` (the one being served: activate another first) or `busy` (a build is writing it, or it is being activated). Unlike retention it also deletes a generation this server does not own. |
 | POST | `/admin/api/generations/{id}/activate` | validate `<data>/generations/{id}` and make it live: routing graph up as a standby, the atomic swap, then the routing switch (the standby is discarded if the swap fails), then retention. 200 `{id, status:"live", already_live, previous, removed[]}`; idempotent. Refusals leave the live generation serving: 404 `no_generation`, 409 `busy`, 422 `invalid_generation` (`error.problems[]`) or `routing_failed`, 500 if `current` cannot be moved. |
 | GET/PUT | `/admin/api/schedule` | refresh schedule (cron expression, default weekly Sunday 03:00 UTC; per-region enable) |
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
@@ -541,8 +542,14 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   `GET /admin/api/jobs` → `{jobs:[…]}` newest first; `GET /admin/api/jobs/{id}` → job + `log:[{job_id,t,level:"debug"|"info"|"warn"|"error",msg}]` (tail, `?tail=n`);
   `POST /admin/api/jobs/{id}/cancel` → 204 (409 if not queued/running).
 - `GET /admin/api/events` (SSE): named events `job` (data: job), `log` (data: log line), `generation` (data: `{id,previous}` when a generation goes live). The current job is sent on connect.
-- `GET /admin/api/generations` → `{generations:[{id,created_at,status:"live"|"kept",manifest:{regions:[{id,name,data_date,bbox}],sizes:{basemap,terrain,routing,total},timings:{stage:seconds},checks:[{name,ok,detail?}],raw}}]}`
-  (generations on disk; `manifest` is normalised from the pipeline's `manifest.json`, which is in `raw`; sizes are measured on disk).
+- `GET /admin/api/generations` → `{generations:[{id,created_at,status,owned,problems?,bytes,can_activate,can_delete,manifest:{regions:[{id,name,data_date,bbox}],sizes:{basemap,terrain,contours,routing,total},timings:{stage:seconds},checks:[{name,ok,detail?}],raw}}],disk:{bytes,sum_bytes,free_bytes,total_bytes}}`,
+  newest first (generations on disk; `manifest` is normalised from the pipeline's `manifest.json`, which is in `raw`; sizes are measured on disk).
+  `status` (`build.Builder.Inventory`): `live`; `previous` (the newest other complete generation this server owns: the one retention keeps, the rollback);
+  `kept` (owned and complete, beyond that); `building` (a build is writing it); `incoming` (not owned: copied in and never activated here; `problems` is set while the copy is incomplete);
+  `invalid` (owned, or left by a build that was killed, and failing validation: `problems` says why).
+  `can_activate`: it validates, is not live or building, and no build is running. `can_delete`: it is not live and not being built.
+  `disk.bytes` counts a file shared by hard link (terrain reused from the previous generation) once; `disk.sum_bytes` is the generations' sizes added up.
+  Rolling back is activating the `previous` generation. `DELETE /admin/api/generations/{id}` → 204. Activations and deletions by hand are recorded in history (`kind` `generation`).
 - `GET/PUT /admin/api/schedule` ↔ `{cron,enabled,refresh_downloads,regions:[{id,enabled}]}` (cron 5-field, UTC; PUT fields optional, 400 `bad_cron`)
   + *extra* `next_run,last_run,upcoming:[5 times],default_cron,timezone,history`.
 - `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}` (revoked keys left out; `?revoked=1` includes them with `revoked_at`).

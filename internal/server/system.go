@@ -85,6 +85,13 @@ func (d *diskStats) get() diskReport {
 	return r
 }
 
+// reset makes the next get measure again (after something large was deleted).
+func (d *diskStats) reset() {
+	d.mu.Lock()
+	d.at = time.Time{}
+	d.mu.Unlock()
+}
+
 func dirSize(root string) int64 {
 	var n int64
 	_ = filepath.WalkDir(root, func(_ string, de fs.DirEntry, err error) error {

@@ -1,5 +1,6 @@
 import {
   Activity,
+  Boxes,
   CalendarClock,
   Gauge,
   KeyRound,
@@ -23,6 +24,7 @@ const NAV = [
   { to: "/", label: "Map", icon: MapIcon, end: true },
   { to: "/regions", label: "Regions", icon: Layers },
   { to: "/builds", label: "Builds", icon: Activity },
+  { to: "/generations", label: "Generations", icon: Boxes },
   { to: "/schedule", label: "Schedule", icon: CalendarClock },
   { to: "/keys", label: "API keys", icon: KeyRound },
   { to: "/stats", label: "Stats", icon: Gauge },

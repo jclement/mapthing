@@ -12,10 +12,13 @@ export type BBox = [number, number, number, number]; // west, south, east, north
 export class ApiError extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string, message: string) {
+  /** Details some refusals carry (an invalid generation lists what is wrong with it). */
+  problems?: string[];
+  constructor(status: number, code: string, message: string, problems?: string[]) {
     super(message);
     this.status = status;
     this.code = code;
+    this.problems = problems;
   }
 }
 
@@ -42,12 +45,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!res.ok) {
     if (res.status === 401 && path !== "/admin/api/login") onUnauthorized?.();
-    const err = (data as { error?: { code?: string; message?: string } | string } | undefined)
-      ?.error;
+    const err = (
+      data as
+        | { error?: { code?: string; message?: string; problems?: string[] } | string }
+        | undefined
+    )?.error;
     const code = typeof err === "object" ? (err.code ?? "error") : "error";
     const msg =
       typeof err === "string" ? err : (err?.message ?? (text || `${res.status} ${res.statusText}`));
-    throw new ApiError(res.status, code, msg);
+    throw new ApiError(res.status, code, msg, typeof err === "object" ? err.problems : undefined);
   }
   return data as T;
 }
@@ -161,17 +167,48 @@ export interface JobDetail extends Job {
 }
 
 export interface Manifest {
-  regions: { id: string; name: string; data_date: string | null }[];
+  regions: { id: string; name: string; data_date: string | null; bbox?: BBox }[];
   sizes: { basemap: number; terrain: number; contours?: number; routing: number; total: number };
   timings: Partial<Record<StageName, number>>; // seconds
   checks: { name: string; ok: boolean; detail?: string }[];
 }
 
+/**
+ * live: being served. previous: kept for rollback. kept: another complete one. building: a
+ * build is writing it. incoming: copied in from another machine, never activated here.
+ * invalid: incomplete or damaged (see problems).
+ */
+export type GenerationStatus = "live" | "previous" | "kept" | "building" | "incoming" | "invalid";
+
 export interface Generation {
   id: string;
   created_at: string;
-  status: "live" | "kept";
+  status: GenerationStatus;
+  owned?: boolean; // built or activated here (retention only prunes these)
+  problems?: string[];
+  bytes?: number; // size on disk
   manifest: Manifest;
+  can_activate?: boolean;
+  can_delete?: boolean;
+}
+
+export interface GenerationList {
+  generations: Generation[];
+  disk?: {
+    bytes: number; // what they occupy: files shared by hard link counted once
+    sum_bytes: number; // their sizes added up
+    free_bytes: number;
+    total_bytes: number;
+  };
+}
+
+/** POST /admin/api/generations/{id}/activate */
+export interface Activation {
+  id: string;
+  status: "live";
+  already_live: boolean;
+  previous: string | null;
+  removed: string[];
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -364,7 +401,11 @@ export const api = {
     request<Job>("POST", "/admin/api/build", { refresh_downloads }),
   jobs: () => request<{ jobs: Job[] }>("GET", "/admin/api/jobs"),
   job: (id: string) => request<JobDetail>("GET", `/admin/api/jobs/${encodeURIComponent(id)}`),
-  generations: () => request<{ generations: Generation[] }>("GET", "/admin/api/generations"),
+  generations: () => request<GenerationList>("GET", "/admin/api/generations"),
+  activateGeneration: (id: string) =>
+    request<Activation>("POST", `/admin/api/generations/${encodeURIComponent(id)}/activate`),
+  deleteGeneration: (id: string) =>
+    request<void>("DELETE", `/admin/api/generations/${encodeURIComponent(id)}`),
 
   schedule: () => request<Schedule>("GET", "/admin/api/schedule"),
   saveSchedule: (s: Schedule) => request<Schedule>("PUT", "/admin/api/schedule", s),

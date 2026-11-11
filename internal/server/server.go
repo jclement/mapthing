@@ -61,6 +61,12 @@ type Deps struct {
 	// build left, or one copied in from another machine) and makes it live. It returns an
 	// *ActivateError for a refusal. nil → 503 on the activate endpoint.
 	ActivateGeneration func(ctx context.Context, id string) (Activation, error)
+	// GenerationInventory says what state each generation directory is in (pipeline) and how
+	// much disk they use together. nil → generations are only "live" or "kept".
+	GenerationInventory func() (gens []GenerationState, diskBytes int64)
+	// DeleteGeneration removes a generation directory for good. It returns an *ActivateError
+	// for a refusal (the live one, the one being built). nil → 503 on the delete endpoint.
+	DeleteGeneration func(ctx context.Context, id string) error
 	// Info is extra, static configuration shown by /admin/api/system (e.g. which parts this
 	// server serves and whether the renderer is off). Optional.
 	Info map[string]any
@@ -118,6 +124,7 @@ func (s *Server) routes() {
 	m.Handle("POST /admin/api/build", admin(s.startBuild))
 	m.Handle("GET /admin/api/generations", admin(s.generations))
 	m.Handle("POST /admin/api/generations/{id}/activate", admin(s.activateGeneration))
+	m.Handle("DELETE /admin/api/generations/{id}", admin(s.deleteGeneration))
 
 	m.Handle("GET /admin/api/logs", admin(s.logsQuery))
 	m.Handle("GET /admin/api/logs/download", admin(s.logsDownload))

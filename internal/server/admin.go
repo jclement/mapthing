@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -542,17 +543,50 @@ func normaliseManifest(genDir string) manifestJSON {
 	return out
 }
 
-type generationJSON struct {
-	ID        string       `json:"id"`
-	CreatedAt time.Time    `json:"created_at"`
-	Status    string       `json:"status"` // live | kept
-	Manifest  manifestJSON `json:"manifest"`
+// GenerationState is what the pipeline knows about one generation directory (see
+// Deps.GenerationInventory).
+type GenerationState struct {
+	ID       string
+	Status   string // live | previous | kept | building | incoming | invalid
+	Owned    bool
+	Valid    bool
+	Problems []string
+	Bytes    int64
 }
 
-// generations: GET /admin/api/generations → {generations:[…]} (those on disk), newest first.
+type generationJSON struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	// live: being served. previous: the one kept for rollback. kept: another complete one.
+	// building: a build is writing it. incoming: copied in, never activated here. invalid:
+	// incomplete or damaged (problems says why).
+	Status   string       `json:"status"`
+	Owned    bool         `json:"owned"`
+	Problems []string     `json:"problems,omitempty"`
+	Bytes    int64        `json:"bytes"` // size on disk
+	Manifest manifestJSON `json:"manifest"`
+	// What the server will accept for it right now.
+	CanActivate bool `json:"can_activate"`
+	CanDelete   bool `json:"can_delete"`
+}
+
+// generations: GET /admin/api/generations → {generations:[…], disk:{…}}: every generation
+// directory, newest first.
 func (s *Server) generations(w http.ResponseWriter, r *http.Request) {
 	live, _, _ := tiles.CurrentGeneration(s.d.DataDir)
+	states := map[string]GenerationState{}
+	var diskBytes int64
+	inventory := s.d.GenerationInventory != nil
+	if inventory {
+		var list []GenerationState
+		list, diskBytes = s.d.GenerationInventory()
+		for _, g := range list {
+			states[g.ID] = g
+		}
+	}
+	busy := s.d.Jobs != nil && s.d.Jobs.Busy(r.Context(), scheduler.BuildJob)
 	out := []generationJSON{}
+	var sum int64
 	ents, _ := os.ReadDir(filepath.Join(s.d.DataDir, "generations"))
 	for _, e := range ents {
 		if !e.IsDir() && e.Type()&os.ModeSymlink == 0 {
@@ -565,19 +599,68 @@ func (s *Server) generations(w http.ResponseWriter, r *http.Request) {
 		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 			continue
 		}
-		g := generationJSON{ID: e.Name(), Status: "kept", Manifest: normaliseManifest(dir)}
+		g := generationJSON{ID: e.Name(), Status: "kept", Owned: true, Manifest: normaliseManifest(dir)}
 		if m, _ := readManifest(dir); !m.CreatedAt.IsZero() {
 			g.CreatedAt = m.CreatedAt.UTC()
 		} else if fi, err := e.Info(); err == nil {
 			g.CreatedAt = fi.ModTime().UTC()
 		}
+		g.Bytes = g.Manifest.Sizes["total"]
+		valid := true
+		if st, ok := states[e.Name()]; ok {
+			g.Status, g.Owned, g.Problems, valid = st.Status, st.Owned, st.Problems, st.Valid
+		} else if inventory {
+			// Not a real directory (a symbolic link): never activated or pruned.
+			g.Status, g.Owned, valid = "invalid", false, false
+			g.Problems = []string{"a symbolic link, not a generation directory"}
+		}
 		if e.Name() == live {
 			g.Status = "live"
 		}
+		g.CanActivate = valid && g.Status != "live" && g.Status != "building" && !busy && s.d.ActivateGeneration != nil
+		g.CanDelete = g.Status != "live" && g.Status != "building" && s.d.DeleteGeneration != nil
+		sum += g.Bytes
 		out = append(out, g)
 	}
+	if !inventory {
+		diskBytes = sum
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	writeJSON(w, http.StatusOK, map[string]any{"generations": out})
+	disk := s.diskCtl.get()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"generations": out,
+		"disk": map[string]any{
+			// bytes: what the generations occupy, a file shared by hard link (reused terrain)
+			// counted once. sum_bytes: the sizes above added up.
+			"bytes": diskBytes, "sum_bytes": sum,
+			"free_bytes": disk.FreeBytes, "total_bytes": disk.TotalBytes,
+		},
+	})
+}
+
+// deleteGeneration: DELETE /admin/api/generations/{id} → 204. 404 no_generation; 409 live
+// (the one being served) or busy (a build is writing it, or it is being activated).
+func (s *Server) deleteGeneration(w http.ResponseWriter, r *http.Request) {
+	if s.d.DeleteGeneration == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "this server cannot delete generations")
+		return
+	}
+	id := r.PathValue("id")
+	err := s.d.DeleteGeneration(r.Context(), id)
+	var ae *ActivateError
+	if errors.As(err, &ae) {
+		writeError(w, r, ae.Status, ae.Code, ae.Message)
+		return
+	}
+	if err != nil {
+		slog.Error("delete generation", "generation", id, "err", err)
+		writeError(w, r, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	slog.Info("generation deleted", "generation", id)
+	_ = s.d.Store.AddHistory(r.Context(), store.HistoryEntry{Kind: "generation", OK: true, Message: "generation " + id + " deleted by hand", Generation: id})
+	s.diskCtl.reset()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Activation is the result of making a generation live.
@@ -625,6 +708,15 @@ func (s *Server) activateGeneration(w http.ResponseWriter, r *http.Request) {
 	}
 	if res.Removed == nil {
 		res.Removed = []string{}
+	}
+	if !res.AlreadyLive {
+		msg := "generation " + res.ID + " made live by hand"
+		if res.Previous != nil {
+			msg += " (was " + *res.Previous + ")"
+		}
+		slog.Info("generation activated", "generation", res.ID, "removed", res.Removed)
+		_ = s.d.Store.AddHistory(r.Context(), store.HistoryEntry{Kind: "generation", OK: true, Message: msg, Generation: res.ID})
+		s.diskCtl.reset()
 	}
 	res.Status = "live"
 	writeJSON(w, http.StatusOK, res)

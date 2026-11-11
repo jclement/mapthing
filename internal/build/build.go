@@ -89,8 +89,12 @@ type Builder struct {
 	Need Parts
 
 	mu sync.Mutex
-	// building is the generation id of the build running now (under mu).
-	building string
+	// busyMu guards building and activating, which are read while mu is held by a build.
+	busyMu sync.Mutex
+	// building is the generation id of the build running now; activating the one an adoption
+	// is making live.
+	building   string
+	activating string
 	// symlink replaces the current swap (tests inject a failure).
 	symlink func(target, link string) error
 
@@ -148,10 +152,10 @@ func (b *Builder) Run(ctx context.Context, rep Reporter, opt Options) (*Manifest
 		// So that if this process is killed, a later build knows the leftover directory is its
 		// own and may delete it (retention.go).
 		b.EnsureRetentionRecord()
-		b.building = genID
+		b.setBusy(genID, "")
 		_ = b.updateRetention(func(r *retentionRecord) { r.Building = append(r.Building, genID) })
 		defer func() {
-			b.building = ""
+			b.setBusy("", "")
 			_ = b.updateRetention(func(r *retentionRecord) { r.Building = without(r.Building, genID) })
 		}()
 	}

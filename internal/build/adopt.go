@@ -302,6 +302,8 @@ func (b *Builder) Adopt(ctx context.Context, id string, opt AdoptOptions) (*Adop
 		return nil, ErrBusy
 	}
 	defer b.mu.Unlock()
+	b.setBusy("", id)
+	defer b.setBusy("", "")
 	genDir := filepath.Join(b.generationsDir(), id)
 	fi, err := os.Lstat(genDir)
 	if err != nil {

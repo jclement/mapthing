@@ -465,6 +465,7 @@ export function Confirm({
   onConfirm,
   onClose,
   busy,
+  variant = "danger",
 }: {
   open: boolean;
   title: string;
@@ -473,6 +474,8 @@ export function Confirm({
   onConfirm: () => void;
   onClose: () => void;
   busy?: boolean;
+  /** "danger" for something that cannot be undone; "primary" for a change that can. */
+  variant?: "danger" | "primary";
 }) {
   return (
     <Modal
@@ -483,7 +486,7 @@ export function Confirm({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="danger" loading={busy} onClick={onConfirm}>
+          <Button variant={variant} loading={busy} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </>

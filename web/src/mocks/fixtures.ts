@@ -296,7 +296,7 @@ export function generations(): Generation[] {
     {
       id: "20261025-030009",
       created_at: iso(10.1 * day),
-      status: "kept",
+      status: "previous",
       manifest: {
         regions: regions.slice(0, 2).map((r) => ({ ...r, data_date: iso(10.4 * day) })),
         sizes: { basemap: 1.31 * GB, terrain: 2.7 * GB, routing: 1.76 * GB, total: 5.77 * GB },
@@ -310,6 +310,35 @@ export function generations(): Generation[] {
           swap: 1,
         },
         checks,
+      },
+    },
+  ];
+}
+
+/** The states a healthy single-machine setup rarely shows: a copy from elsewhere, a damaged one. */
+export function oddGenerations(): Generation[] {
+  const [live] = generations();
+  return [
+    {
+      id: "20261110-181500",
+      created_at: iso(0.6 * day),
+      status: "incoming",
+      owned: false,
+      manifest: { ...live.manifest, timings: { ...live.manifest.timings, terrain: 0 } },
+    },
+    {
+      id: "20261018-030007",
+      created_at: iso(17.1 * day),
+      status: "invalid",
+      problems: [
+        "valhalla/tiles.tar is missing",
+        "terrain.pmtiles is 1.2 GB but the manifest records 2.7 GB (the copy is not finished)",
+      ],
+      manifest: {
+        regions: live.manifest.regions.slice(0, 2),
+        sizes: { basemap: 1.3 * GB, terrain: 1.2 * GB, routing: 0, total: 2.5 * GB },
+        timings: {},
+        checks: [],
       },
     },
   ];

@@ -5,6 +5,7 @@ import { Layout } from "./components/Layout";
 import { Spinner } from "./components/ui";
 import { EventsProvider } from "./lib/events";
 import { BuildsPage } from "./pages/Builds";
+import { GenerationsPage } from "./pages/Generations";
 import { KeysPage } from "./pages/Keys";
 import { LoginPage } from "./pages/Login";
 import { LogsPage } from "./pages/Logs";
@@ -47,6 +48,7 @@ export function AppShell() {
           <Route index element={<MapPage />} />
           <Route path="regions" element={<RegionsPage />} />
           <Route path="builds" element={<BuildsPage />} />
+          <Route path="generations" element={<GenerationsPage />} />
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="keys" element={<KeysPage />} />
           <Route path="stats" element={<StatsPage />} />

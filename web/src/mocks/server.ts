@@ -27,6 +27,8 @@ import * as fx from "./fixtures";
 export interface MockOptions {
   /** Start with nothing installed (first-run experience). */
   empty?: boolean;
+  /** Add a generation copied in from another machine and a damaged one (the rarer states). */
+  oddGenerations?: boolean;
   /** Start already signed in. */
   authed?: boolean;
   /** Milliseconds per simulated build tick; 0 = never tick on a timer (tests drive builds
@@ -59,6 +61,7 @@ export function resetMock(opts: MockOptions = {}) {
   const empty = !!opts.empty;
   const regions = empty ? [] : fx.installedRegions();
   const gens = empty ? [] : fx.generations();
+  if (opts.oddGenerations) gens.push(...fx.oddGenerations());
   const history: Job[] = empty
     ? []
     : [
@@ -282,7 +285,8 @@ function tick() {
       r.downloaded_at = new Date().toISOString();
       r.disk_bytes = r.disk_bytes || Math.max(25e6 * 4, r.extract_bytes * 5.5);
     }
-    for (const g of S.generations) g.status = "kept";
+    for (const g of S.generations)
+      if (g.status === "live" || g.status === "previous") g.status = "kept";
     const total = S.regions.reduce((s, r) => s + r.disk_bytes, 0);
     S.generations.unshift({
       id: gid,
@@ -319,7 +323,13 @@ function tick() {
         ],
       },
     });
-    S.generations = S.generations.slice(0, 2);
+    // retention: the live one and the newest other; copies from elsewhere are left alone
+    {
+      let kept = 0;
+      S.generations = S.generations.filter(
+        (g) => g.status === "incoming" || g.status === "invalid" || kept++ < 2,
+      );
+    }
     log(job, `generation ${gid} is live`);
     emit({ type: "job", data: clone(job) });
     emit({ type: "generation", data: { id: gid } });
@@ -560,7 +570,82 @@ on("GET", /^\/admin\/api\/jobs\/(.+)$/, (m) => {
   if (!j) return json(404, { error: { code: "not_found", message: "No such job" } });
   return { ...j, log: S.logs[j.id] ?? [] };
 });
-on("GET", /^\/admin\/api\/generations$/, () => ({ generations: S.generations }));
+// Statuses as the server derives them: one live, the newest other complete one is "previous".
+function settleGenerations() {
+  let previous = false;
+  for (const g of S.generations) {
+    if (g.status === "building" || g.status === "incoming" || g.status === "invalid") continue;
+    if (g.status === "live") continue;
+    g.status = previous ? "kept" : "previous";
+    previous = true;
+  }
+}
+on("GET", /^\/admin\/api\/generations$/, () => {
+  settleGenerations();
+  const building = S.jobs.some((j) => j.status === "running");
+  const gens = [...S.generations]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((g) => ({
+      ...g,
+      owned: g.owned ?? true,
+      bytes: g.manifest.sizes.total,
+      can_activate: !["live", "building", "invalid"].includes(g.status) && !building,
+      can_delete: g.status !== "live" && g.status !== "building",
+    }));
+  const sum = gens.reduce((n, g) => n + g.bytes, 0);
+  // Two generations of the same regions share their terrain.
+  const shared =
+    gens.length > 1 ? Math.min(...gens.slice(0, 2).map((g) => g.manifest.sizes.terrain)) : 0;
+  return {
+    generations: gens,
+    disk: { bytes: sum - shared, sum_bytes: sum, free_bytes: 28.6e9, total_bytes: 202e9 },
+  };
+});
+on("POST", /^\/admin\/api\/generations\/([^/]+)\/activate$/, (m) => {
+  const g = S.generations.find((x) => x.id === m[1]);
+  if (!g)
+    return json(404, {
+      error: { code: "no_generation", message: `There is no generation ${m[1]}` },
+    });
+  if (g.status === "invalid")
+    return json(422, {
+      error: {
+        code: "invalid_generation",
+        message: `generation ${g.id} is incomplete or invalid. The live generation is unchanged.`,
+        problems: g.problems ?? [],
+      },
+    });
+  const prev = S.generations.find((x) => x.status === "live");
+  if (prev === g)
+    return { id: g.id, status: "live", already_live: true, previous: null, removed: [] };
+  for (const x of S.generations)
+    if (x.status === "live" || x.status === "previous") x.status = "kept";
+  g.status = "live";
+  g.owned = true;
+  if (prev) {
+    // the generation that was live becomes the rollback slot
+    S.generations = [g, prev, ...S.generations.filter((x) => x !== g && x !== prev)];
+    prev.status = "previous";
+  }
+  emit({ type: "generation", data: { id: g.id } });
+  return { id: g.id, status: "live", already_live: false, previous: prev?.id ?? null, removed: [] };
+});
+on("DELETE", /^\/admin\/api\/generations\/([^/]+)$/, (m) => {
+  const g = S.generations.find((x) => x.id === m[1]);
+  if (!g)
+    return json(404, {
+      error: { code: "no_generation", message: `There is no generation ${m[1]}` },
+    });
+  if (g.status === "live")
+    return json(409, {
+      error: {
+        code: "live",
+        message: `generation ${g.id} is the one being served; activate another generation first`,
+      },
+    });
+  S.generations = S.generations.filter((x) => x !== g);
+  return json(204, undefined);
+});
 on("GET", /^\/admin\/api\/schedule$/, () => S.schedule);
 on("PUT", /^\/admin\/api\/schedule$/, (_m, b) => {
   S.schedule = b as Schedule;
@@ -905,4 +990,13 @@ export function installMock(opts: MockOptions = {}) {
 /** For tests: run the build simulation to completion synchronously. */
 export function finishBuilds() {
   for (let i = 0; i < 200 && S.jobs.some((j) => j.status === "running"); i++) tick();
+}
+
+/** For tests: damage a generation behind the UI's back, so the next activation is refused. */
+export function breakGeneration(id: string, problems: string[]) {
+  const g = S.generations.find((x) => x.id === id);
+  if (g) {
+    g.status = "invalid";
+    g.problems = problems;
+  }
 }
