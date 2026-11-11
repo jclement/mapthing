@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -56,6 +57,8 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 type RequestInfo struct {
 	Kind  string // usage kind the endpoint is counted under ("" = not a keyed endpoint)
 	KeyID int64  // API key that authenticated it (0 = none, or the admin session)
+	// Limited is which limit refused the request with a 429 ("" = none): keys.ScopeRate …
+	Limited string
 }
 
 type infoKey struct{}
@@ -369,15 +372,38 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			WriteError(w, r, http.StatusForbidden, "origin_not_allowed", err.Error())
 			return
 		}
-		if wait, err := a.keys.Allow(r.Context(), k); err != nil {
-			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-			WriteError(w, r, http.StatusTooManyRequests, "rate_limited", err.Error())
+		d := a.keys.Charge(r.Context(), k, kind, a.ClientIP(r))
+		setRateHeaders(w, d)
+		ri.KeyID = k.ID
+		if !d.OK {
+			ri.Limited = d.Scope
+			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(d.RetryAfter.Seconds()))))
+			code := "rate_limited"
+			if d.Scope == keys.ScopeDaily || d.Scope == keys.ScopeMonthly {
+				code = "quota_exceeded"
+			}
+			WriteError(w, r, http.StatusTooManyRequests, code, d.Message())
 			return
 		}
-		ri.KeyID = k.ID
 		a.stats.Count(k.ID, kind)
 		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{KeyID: k.ID, Secret: secret})))
 	})
+}
+
+// setRateHeaders tells the client where it stands against the limit closest to running out:
+// X-RateLimit-Limit (its size, in cost units), X-RateLimit-Remaining, X-RateLimit-Reset
+// (seconds until it is whole again), and on a refusal X-RateLimit-Scope (which limit it was).
+// A key with no limits gets none of them.
+func setRateHeaders(w http.ResponseWriter, d keys.Decision) {
+	h := w.Header()
+	if d.Limit > 0 {
+		h.Set("X-RateLimit-Limit", strconv.FormatInt(d.Limit, 10))
+		h.Set("X-RateLimit-Remaining", strconv.FormatInt(d.Remaining, 10))
+		h.Set("X-RateLimit-Reset", strconv.Itoa(int(math.Ceil(d.Reset.Seconds()))))
+	}
+	if d.Scope != "" {
+		h.Set("X-RateLimit-Scope", d.Scope)
+	}
 }
 
 // cors allows browsers on other origins to call keyed endpoints (the key's allowed-origins
@@ -390,7 +416,7 @@ func cors(w http.ResponseWriter, r *http.Request) {
 	hd.Set("Access-Control-Allow-Origin", "*")
 	hd.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
 	hd.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Goog-Api-Key, X-Goog-FieldMask, Range, If-None-Match")
-	hd.Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, ETag, Retry-After")
+	hd.Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, ETag, Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Scope")
 	hd.Set("Access-Control-Max-Age", "86400")
 }
 

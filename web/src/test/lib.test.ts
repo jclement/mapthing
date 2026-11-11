@@ -91,3 +91,53 @@ describe("routeFitPadding", () => {
     expect(p.bottom).toBeGreaterThan(p.top);
   });
 });
+
+describe("limits", () => {
+  it("turns the form into what the API takes", async () => {
+    const { formToInput, EMPTY_FORM, limitsSummary, share } = await import("../lib/limits");
+    expect(
+      formToInput({
+        ...EMPTY_FORM,
+        rps: "2.5",
+        daily: "1000",
+        origins: "https://a.example, https://b.example",
+      }),
+    ).toEqual({
+      input: {
+        rps: 2.5,
+        burst: null,
+        daily_quota: 1000,
+        monthly_quota: null,
+        ip_rps: null,
+        ip_burst: null,
+        origins: ["https://a.example", "https://b.example"],
+      },
+    });
+    // empty and 0 both mean no limit, so an edit can remove one
+    expect(formToInput({ ...EMPTY_FORM, rps: "0" })).toMatchObject({ input: { rps: null } });
+    for (const bad of [
+      { rps: "-1" },
+      { burst: "2.5", rps: "1" },
+      { burst: "5" },
+      { ipBurst: "5" },
+      { daily: "abc" },
+      { daily: "500", monthly: "100" },
+    ])
+      expect(formToInput({ ...EMPTY_FORM, ...bad })).toHaveProperty("error");
+    expect(
+      limitsSummary({
+        rpm: null,
+        rpd: null,
+        rps: 0.5,
+        burst: 10,
+        monthly_quota: 2000000,
+        ip_rps: 5,
+        origins: [],
+      }),
+    ).toEqual(["30/min, burst 10", "2,000,000/month", "5/s per client"]);
+    expect(limitsSummary({ rpm: null, rpd: null, origins: [] })).toEqual([]);
+    expect(share(50, 200)).toBe(0.25);
+    expect(share(500, 200)).toBe(1);
+    expect(share(5, null)).toBe(0);
+  });
+});

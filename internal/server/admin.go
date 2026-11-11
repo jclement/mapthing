@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jclement/mapthing/internal/jobs"
+	"github.com/jclement/mapthing/internal/keys"
 	"github.com/jclement/mapthing/internal/logs"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/store"
@@ -94,16 +96,37 @@ func validBBox(b []float64) bool {
 
 // ---------- keys ----------
 
+// keyLimitsJSON is a key's limits. null means unlimited. Rates and quotas are in cost units
+// (a request costs its kind's weight: GET /admin/api/limits). rpm and rpd are the older request
+// counts, still accepted on write (rps = rpm/60 with a burst of rpm; daily_quota = rpd) and
+// derived on read.
 type keyLimitsJSON struct {
-	RPM     *int     `json:"rpm"`
-	RPD     *int     `json:"rpd"`
-	Origins []string `json:"origins"`
+	RPM          *int     `json:"rpm"`
+	RPD          *int     `json:"rpd"`
+	RPS          *float64 `json:"rps"`
+	Burst        *int     `json:"burst"`
+	DailyQuota   *int64   `json:"daily_quota"`
+	MonthlyQuota *int64   `json:"monthly_quota"`
+	IPRPS        *float64 `json:"ip_rps"`
+	IPBurst      *int     `json:"ip_burst"`
+	Origins      []string `json:"origins"`
 }
 
 type keyUsageJSON struct {
 	Today int64   `json:"today"`
 	Total int64   `json:"total"`
-	Daily []int64 `json:"daily"` // last 14 UTC days, oldest first
+	Daily []int64 `json:"daily"` // requests, last 14 UTC days, oldest first
+	// Against the limits: cost units used in the current UTC day and month, and what is left
+	// in the rate bucket now (null without a rate limit).
+	UnitsToday    int64  `json:"units_today"`
+	UnitsMonth    int64  `json:"units_month"`
+	RateRemaining *int64 `json:"rate_remaining"`
+	// Requests answered 429: today, per day (last 14, oldest first), today by which limit,
+	// and the most recent ones (newest last; these are lost at a restart).
+	LimitedToday  int64            `json:"limited_today"`
+	LimitedDaily  []int64          `json:"limited_daily"`
+	LimitedScopes map[string]int64 `json:"limited_scopes"`
+	Recent        []keys.Refusal   `json:"recent_limited"`
 }
 
 type keyJSON struct {
@@ -120,22 +143,37 @@ type keyJSON struct {
 const keyDays = 14
 
 func limitsJSON(l store.Limits) keyLimitsJSON {
+	l = l.Normalise()
 	out := keyLimitsJSON{Origins: l.AllowedOrigins}
 	if out.Origins == nil {
 		out.Origins = []string{}
 	}
-	if l.RPM > 0 {
-		v := l.RPM
-		out.RPM = &v
+	if l.RPS > 0 {
+		rps, burst, rpm := l.RPS, l.Burst, int(math.Round(l.RPS*60))
+		out.RPS, out.Burst, out.RPM = &rps, &burst, &rpm
 	}
-	if l.RPD > 0 {
-		v := l.RPD
-		out.RPD = &v
+	if l.DailyQuota > 0 {
+		q, rpd := l.DailyQuota, int(l.DailyQuota)
+		out.DailyQuota, out.RPD = &q, &rpd
+	}
+	if l.MonthlyQuota > 0 {
+		q := l.MonthlyQuota
+		out.MonthlyQuota = &q
+	}
+	if l.IPRPS > 0 {
+		rps, burst := l.IPRPS, l.IPBurst
+		out.IPRPS, out.IPBurst = &rps, &burst
 	}
 	return out
 }
 
-// keyUsage returns per-key usage: today, all-time total and the last 14 days.
+func emptyUsage() *keyUsageJSON {
+	return &keyUsageJSON{Daily: make([]int64, keyDays), LimitedDaily: make([]int64, keyDays),
+		LimitedScopes: map[string]int64{}, Recent: []keys.Refusal{}}
+}
+
+// keyUsage returns per-key usage: requests today, in total and over the last 14 days, and
+// the requests that were refused.
 func (s *Server) keyUsage(ctx context.Context) (map[int64]*keyUsageJSON, error) {
 	rows, err := s.d.Store.UsageSince(ctx, "0000-00-00")
 	if err != nil {
@@ -151,12 +189,16 @@ func (s *Server) keyUsage(ctx context.Context) (map[int64]*keyUsageJSON, error) 
 		dayIdx[now.AddDate(0, 0, -(keyDays-1-i)).Format("2006-01-02")] = i
 	}
 	out := map[int64]*keyUsageJSON{}
-	for _, r := range rows {
-		u := out[r.KeyID]
+	get := func(id int64) *keyUsageJSON {
+		u := out[id]
 		if u == nil {
-			u = &keyUsageJSON{Daily: make([]int64, keyDays)}
-			out[r.KeyID] = u
+			u = emptyUsage()
+			out[id] = u
 		}
+		return u
+	}
+	for _, r := range rows {
+		u := get(r.KeyID)
 		u.Total += r.Count
 		if i, ok := dayIdx[r.Day]; ok {
 			u.Daily[i] += r.Count
@@ -165,15 +207,40 @@ func (s *Server) keyUsage(ctx context.Context) (map[int64]*keyUsageJSON, error) 
 			}
 		}
 	}
+	since := now.AddDate(0, 0, -(keyDays - 1)).Format("2006-01-02")
+	limited, err := s.d.Store.LimitedSince(ctx, since)
+	if err != nil {
+		return nil, err
+	}
+	for k, n := range s.d.Keys.PendingLimited() {
+		limited = append(limited, store.LimitedRow{KeyID: k.KeyID, Day: k.Day, Scope: k.Scope, Count: n})
+	}
+	for _, r := range limited {
+		i, ok := dayIdx[r.Day]
+		if !ok {
+			continue
+		}
+		u := get(r.KeyID)
+		u.LimitedDaily[i] += r.Count
+		if i == keyDays-1 {
+			u.LimitedToday += r.Count
+			u.LimitedScopes[r.Scope] += r.Count
+		}
+	}
 	return out, nil
 }
 
-func keyView(k *store.APIKey, usage map[int64]*keyUsageJSON) keyJSON {
+func (s *Server) keyView(ctx context.Context, k *store.APIKey, usage map[int64]*keyUsageJSON) keyJSON {
 	v := keyJSON{ID: strconv.FormatInt(k.ID, 10), Label: k.Label, Prefix: k.Prefix, CreatedAt: k.CreatedAt,
-		LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt, Limits: limitsJSON(k.Limits),
-		Usage: keyUsageJSON{Daily: make([]int64, keyDays)}}
+		LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt, Limits: limitsJSON(k.Limits), Usage: *emptyUsage()}
 	if u := usage[k.ID]; u != nil {
 		v.Usage = *u
+	}
+	live := s.d.Keys.UsageOf(ctx, k)
+	v.Usage.UnitsToday, v.Usage.UnitsMonth, v.Usage.Recent = live.UnitsToday, live.UnitsMonth, live.Limited
+	if live.RateRemaining >= 0 {
+		n := live.RateRemaining
+		v.Usage.RateRemaining = &n
 	}
 	return v
 }
@@ -196,7 +263,7 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 		if k.RevokedAt != nil && !all {
 			continue
 		}
-		out = append(out, keyView(k, usage))
+		out = append(out, s.keyView(r.Context(), k, usage))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
@@ -221,54 +288,95 @@ func (s *Server) getKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	usage, _ := s.keyUsage(r.Context())
-	writeJSON(w, http.StatusOK, keyView(k, usage))
+	writeJSON(w, http.StatusOK, s.keyView(r.Context(), k, usage))
 }
 
-// keyBody is the create/edit body: {label, rpm, rpd, origins} (null or 0 = unlimited).
+// keyBody is the create/edit body: {label, rps, burst, daily_quota, monthly_quota, ip_rps,
+// ip_burst, origins}, plus the older rpm and rpd. A field left out is unchanged; null or 0
+// removes that limit.
 type keyBody struct {
-	Label   *string   `json:"label"`
-	RPM     *int      `json:"rpm"`
-	RPD     *int      `json:"rpd"`
-	Origins *[]string `json:"origins"`
+	Label   *string
+	Origins *[]string
+	nums    map[string]float64 // the numeric fields that were present (null → 0)
 }
+
+var keyNumFields = []string{"rpm", "rpd", "rps", "burst", "daily_quota", "monthly_quota", "ip_rps", "ip_burst"}
 
 func (b keyBody) apply(l store.Limits) store.Limits {
-	if b.RPM != nil {
-		l.RPM = *b.RPM
+	l = l.Normalise()
+	set := func(name string) (float64, bool) { v, ok := b.nums[name]; return v, ok }
+	// The older fields first, so the current ones win when both are sent.
+	if v, ok := set("rpm"); ok {
+		l.RPS, l.Burst = v/60, int(v)
 	}
-	if b.RPD != nil {
-		l.RPD = *b.RPD
+	if v, ok := set("rpd"); ok {
+		l.DailyQuota = int64(v)
+	}
+	if v, ok := set("rps"); ok {
+		l.RPS = v
+		if _, hasBurst := set("burst"); !hasBurst {
+			if _, legacy := set("rpm"); !legacy {
+				l.Burst = 0 // the default for the new rate
+			}
+		}
+	}
+	if v, ok := set("burst"); ok {
+		l.Burst = int(v)
+	}
+	if v, ok := set("daily_quota"); ok {
+		l.DailyQuota = int64(v)
+	}
+	if v, ok := set("monthly_quota"); ok {
+		l.MonthlyQuota = int64(v)
+	}
+	if v, ok := set("ip_rps"); ok {
+		l.IPRPS = v
+		if _, hasBurst := set("ip_burst"); !hasBurst {
+			l.IPBurst = 0
+		}
+	}
+	if v, ok := set("ip_burst"); ok {
+		l.IPBurst = int(v)
+	}
+	if l.RPS <= 0 {
+		l.Burst = 0
+	}
+	if l.IPRPS <= 0 {
+		l.IPBurst = 0
 	}
 	if b.Origins != nil {
 		l.AllowedOrigins = *b.Origins
 	}
-	return l
+	return l.Normalise()
 }
 
-// readKeyBody decodes a key body; rpm/rpd may be null (unlimited), which leaves the pointer
-// nil, so null is mapped to 0 explicitly via a raw pass.
+// readKeyBody decodes a key body. A limit may be a non-negative number or null (no limit).
 func readKeyBody(w http.ResponseWriter, r *http.Request) (keyBody, bool) {
 	var raw map[string]json.RawMessage
 	if !readJSON(w, r, &raw) {
 		return keyBody{}, false
 	}
-	var b keyBody
-	zero := 0
-	for name, ptr := range map[string]**int{"rpm": &b.RPM, "rpd": &b.RPD} {
+	b := keyBody{nums: map[string]float64{}}
+	for _, name := range keyNumFields {
 		v, ok := raw[name]
 		if !ok {
 			continue
 		}
 		if string(v) == "null" {
-			*ptr = &zero
+			b.nums[name] = 0
 			continue
 		}
-		var n int
-		if json.Unmarshal(v, &n) != nil || n < 0 {
-			writeError(w, r, http.StatusBadRequest, "bad_request", name+" must be a non-negative integer or null")
+		var n float64
+		whole := name != "rps" && name != "ip_rps"
+		if json.Unmarshal(v, &n) != nil || n < 0 || math.IsNaN(n) || math.IsInf(n, 0) || n > 1e12 || (whole && n != math.Trunc(n)) {
+			kind := "a non-negative number"
+			if whole {
+				kind = "a non-negative whole number"
+			}
+			writeError(w, r, http.StatusBadRequest, "bad_request", name+" must be "+kind+" or null")
 			return b, false
 		}
-		*ptr = &n
+		b.nums[name] = n
 	}
 	if v, ok := raw["label"]; ok {
 		var l string
@@ -305,7 +413,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"key": keyView(k, nil), "secret": secret})
+	writeJSON(w, http.StatusCreated, map[string]any{"key": s.keyView(r.Context(), k, nil), "secret": secret})
 }
 
 func (s *Server) updateKey(w http.ResponseWriter, r *http.Request) {
@@ -348,6 +456,28 @@ func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// getLimits: GET /admin/api/limits → {weights, global, kinds, defaults}: what each kind of
+// request costs, and the server-wide limits by kind.
+func (s *Server) getLimits(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.d.Keys.Config()
+	writeJSON(w, http.StatusOK, map[string]any{"weights": cfg.Weights, "global": cfg.Global, "kinds": keys.Kinds, "defaults": keys.DefaultConfig()})
+}
+
+// putLimits: PUT /admin/api/limits {weights:{kind:n}, global:{kind:{rps,burst}}} → the same
+// shape as GET. A kind left out of weights keeps the default weight; a kind left out of
+// global (or with rps 0) has no server-wide limit. 400 bad_limits.
+func (s *Server) putLimits(w http.ResponseWriter, r *http.Request) {
+	var c keys.Config
+	if !readJSON(w, r, &c) {
+		return
+	}
+	if err := s.d.Keys.SetConfig(r.Context(), c); err != nil {
+		writeError(w, r, http.StatusBadRequest, "bad_limits", err.Error())
+		return
+	}
+	s.getLimits(w, r)
 }
 
 // ---------- jobs and builds ----------

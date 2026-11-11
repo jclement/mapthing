@@ -432,6 +432,73 @@ gravel/dirt.
   `wrap func(kind string, h http.Handler) http.Handler` applies auth and accounting; kinds are
   `route`, `matrix`, `isochrone`, `snap`, `valhalla`.
 
+## Rate limits
+
+Every request made with an API key has a **cost**: the weight of its kind. Limits count cost
+units, not requests, so one number covers a key that fetches cheap vector tiles and one that
+asks for routes. Requests made from the admin UI (a session, no key) are never limited.
+
+| Kind | Requests | Default cost | Default server limit (requests/s, burst) |
+|---|---|---|---|
+| `tile` | vector tiles, styles, fonts, sprites, tile archives | 1 | none |
+| `snap` | nearest-road lookups | 2 | none |
+| `elevation` | point and profile elevation | 5 | 100, 200 |
+| `raster` | rendered PNG tiles | 10 | 100, 200 |
+| `route` | routes, native and Google-compatible | 10 | 60, 120 |
+| `valhalla` | the Valhalla pass-through | 10 | 60, 120 |
+| `matrix`, `isochrone` | | 20 | 10, 20 |
+| `pack` | offline pack downloads | 50 | 2, 4 |
+
+The weights follow the measured CPU cost of each request (`docs/sizing.md`), coarsely. Both
+columns are editable on the Keys page and through `GET`/`PUT /admin/api/limits`
+(`{weights:{kind:n}, global:{kind:{rps,burst}}}`; a kind left out of `weights` keeps its
+default, a kind left out of `global` has no server limit); the setting is stored in SQLite
+(`limits.config`) and applies to the next request.
+
+A key can have any of these, each optional:
+
+- **Rate**: `rps` units per second with a `burst` (a token bucket holding `burst` units,
+  refilled at `rps`). No burst given: two seconds' worth, at least 10. A single request that
+  costs more than the whole burst is let through when the bucket is full, so a small bucket
+  cannot make an expensive kind impossible.
+- **Per-client rate** (`ip_rps`, `ip_burst`): the same, per client address within the key, so
+  one abuser of a key that ships in a browser cannot use it all up. An IPv6 client is its /64.
+  The address is the connection's, or the proxy's report of it with `MAPTHING_TRUSTED_PROXY=on`
+  (without that, behind a proxy every client looks like the proxy: leave this limit off).
+  At most 20,000 client buckets are kept; idle ones are dropped first.
+- **Daily and monthly quota** (`daily_quota`, `monthly_quota`): units per UTC day and per UTC
+  month. A request that would take the quota past its end is refused whole.
+
+Keys made by an earlier version keep their meaning: `rpm` becomes `rps = rpm/60` with a burst
+of `rpm`, and `rpd` becomes `daily_quota`. The API still accepts and returns both.
+
+The **server limits** are per kind, in requests per second across all keys: a safety net for
+the expensive kinds, near what the reference machine served. A request they refuse costs the
+key nothing, and a request the key's own limit refuses does not count against the server's.
+
+**A refused request** is answered `429` with a JSON error (`rate_limited`, or
+`quota_exceeded` for a daily or monthly quota) and:
+
+| Header | |
+|---|---|
+| `Retry-After` | whole seconds until the request can succeed (never 0): the bucket's refill, or the time to midnight UTC or the 1st |
+| `X-RateLimit-Limit` | size of the limit closest to running out, in units |
+| `X-RateLimit-Remaining` | what is left of it |
+| `X-RateLimit-Reset` | seconds until it is whole again |
+| `X-RateLimit-Scope` | which limit refused: `rate`, `ip`, `daily`, `monthly`, `global` |
+
+The three `X-RateLimit-*` figures are on every answer to a key that has limits, refused or
+not; a key without limits gets none. All of them are exposed to browsers on other origins.
+
+**What survives a restart.** Quota use and refusal counts are written to SQLite
+(`key_quota`, `key_limited`) every 10 seconds and at shutdown, and read back the first time a
+key is seen, so a restart forgets nothing and a crash at most 10 seconds of use. Rate buckets
+are memory only and start full. Rows older than 400 days are pruned.
+
+The Keys page shows, per key, units used against each quota, the burst in use, requests
+served and refused over 14 days, today's refusals by limit, and the most recent refusals with
+kind and client address (the recent list is memory only).
+
 ## Refresh schedule
 
 `internal/scheduler` keeps the data fresh. Each region has a refresh setting (`regions`
@@ -711,8 +778,12 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   This is the **default** schedule (see Refresh schedule). `refresh_downloads` is accepted and always true. `regions[].enabled` is the older on/off switch: `false` sets a region to mode `never`, `true` puts a `never` region back on the default; a region whose state already matches is left alone.
 - Region (in `/admin/api/regions`) also carries `refresh_policy:{mode,cron?,window?,only_changed,effective:{cron|null,window,only_changed,inherited},next_due|null,next_build|null,due,waiting,last_checked_at|null,last_check?,last_check_detail?}` and `refresh_cost:{download_bytes,build_seconds|null}`.
   `PATCH /admin/api/regions/{id}` `{refresh_policy:{mode,cron?,window?,only_changed?}}` → region (400 `bad_refresh`). `POST /admin/api/regions/check` → `{regions}` with the check results recorded.
-- `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits:{rpm|null,rpd|null,origins:[]},usage:{today,total,daily:[14 numbers, oldest first]}}]}` (revoked keys left out; `?revoked=1` includes them with `revoked_at`).
-  `POST` `{label,rpm?,rpd?,origins?}` (null = unlimited) → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` (same fields) `/admin/api/keys/{id}` → key; `DELETE` → 204 (revoked at once).
+- `GET /admin/api/keys` → `{keys:[{id,label,prefix,created_at,last_used_at|null,limits,usage}]}` (revoked keys left out; `?revoked=1` includes them with `revoked_at`).
+  - `limits` = `{rps,burst,daily_quota,monthly_quota,ip_rps,ip_burst,rpm,rpd,origins:[]}`, each number or null (no limit); `rpm` and `rpd` are derived (see Rate limits).
+  - `usage` = `{today,total,daily:[14, oldest first]}` in requests, `units_today`, `units_month`, `rate_remaining|null`, `limited_today`, `limited_daily:[14]`, `limited_scopes:{scope:n}` (today), `recent_limited:[{t,kind,scope,ip?}]` (newest last).
+
+  `POST` `{label, ...limits}` → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` `/admin/api/keys/{id}` → key (a field left out is unchanged; null or 0 removes that limit; 400 for a negative, fractional-where-whole or non-numeric value); `DELETE` → 204 (revoked at once).
+- `GET`/`PUT /admin/api/limits` → `{weights,global,kinds,defaults}` (see Rate limits; 400 `bad_limits`).
 - `GET /admin/api/stats?days=30` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state:"running"|"starting"|"restarting"|"stopped",pid|null,uptime_s,restarts,rss_bytes}]}`
   (+ *extra* disk `raster_cache_bytes,pack_cache_bytes,database_bytes`, process `detail,healthy`). Usage kinds map to buckets: tile→tiles, raster→raster, pack→packs, elevation→elevation, everything else (route, matrix, snap, isochrone, valhalla, compat)→routes; `raster-internal` is not shown. `key_id` "0" is the admin UI.
 - `GET /admin/api/overview` → `{version,commit,started_at,ready,readiness,generation:{id,created_at,bytes,sizes,regions:[{id,name,data_date,bbox}]}|null,regions_installed,processes:[process],system:{cpus,load1,memory_used_bytes,memory_total_bytes,platform},traffic:{since,kinds:[{kind,hour:window,day:window,series:[60 per-minute counts]}]},disk:{total_bytes,free_bytes,data_bytes,parts:[{name,bytes}],guard:{known,need_bytes?,ok?}},builds:{schedule_enabled,cron,next_run,active:job|null,last:{id,status,trigger,started_at,finished_at,duration_s,error,generation_id}|null}}`.

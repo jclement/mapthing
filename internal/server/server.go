@@ -127,6 +127,8 @@ func (s *Server) routes() {
 	m.Handle("PATCH /admin/api/keys/{id}", admin(s.updateKey))
 	m.Handle("DELETE /admin/api/keys/{id}", admin(s.revokeKey))
 
+	m.Handle("GET /admin/api/limits", admin(s.getLimits))
+	m.Handle("PUT /admin/api/limits", admin(s.putLimits))
 	m.Handle("GET /admin/api/overview", admin(s.overview))
 	m.Handle("GET /admin/api/stats", admin(s.stats))
 	m.Handle("GET /admin/api/system", admin(s.system))

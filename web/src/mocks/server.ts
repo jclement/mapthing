@@ -8,7 +8,10 @@ import type {
   ElevationSample,
   Generation,
   Job,
+  KeyLimits,
   KindTraffic,
+  LimitsConfig,
+  LimitsInput,
   LogEntry,
   LogLine,
   LonLat,
@@ -61,6 +64,7 @@ interface State {
   logs: Record<string, LogLine[]>;
   logEntries: LogEntry[];
   keys: ApiKey[];
+  limits: LimitsConfig;
   schedule: Schedule;
   tickMs: number;
   latencyMs?: number;
@@ -136,6 +140,7 @@ export function resetMock(opts: MockOptions = {}) {
           .slice(-6)
       : fx.logEntries(),
     keys: empty ? [] : fx.apiKeys(),
+    limits: fx.limitsConfig(),
     schedule: {
       cron: "0 3 * * 0",
       enabled: true,
@@ -768,6 +773,39 @@ on("PUT", /^\/admin\/api\/schedule$/, (_m, b) => {
   S.schedule = { ...S.schedule, ...rest, regions: regions?.length ? regions : S.schedule.regions };
   return scheduleOut();
 });
+/** Limits after a create or an edit, as the server answers them (default burst, derived rpm). */
+function mockLimits(
+  old: KeyLimits,
+  n: LimitsInput & { rpm?: number | null; rpd?: number | null },
+): KeyLimits {
+  const l: KeyLimits = { ...old };
+  if (n.rpm !== undefined) {
+    l.rps = n.rpm ? n.rpm / 60 : null;
+    l.burst = n.rpm || null;
+  }
+  if (n.rpd !== undefined) l.daily_quota = n.rpd || null;
+  if (n.rps !== undefined) {
+    l.rps = n.rps || null;
+    l.burst = null;
+  }
+  if (n.burst !== undefined && n.burst) l.burst = n.burst;
+  if (n.daily_quota !== undefined) l.daily_quota = n.daily_quota || null;
+  if (n.monthly_quota !== undefined) l.monthly_quota = n.monthly_quota || null;
+  if (n.ip_rps !== undefined) {
+    l.ip_rps = n.ip_rps || null;
+    l.ip_burst = null;
+  }
+  if (n.ip_burst !== undefined && n.ip_burst) l.ip_burst = n.ip_burst;
+  const auto = (rps: number) => Math.max(10, Math.ceil(rps * 2));
+  if (l.rps && !l.burst) l.burst = auto(l.rps);
+  if (!l.rps) l.burst = null;
+  if (l.ip_rps && !l.ip_burst) l.ip_burst = auto(l.ip_rps);
+  if (!l.ip_rps) l.ip_burst = null;
+  l.rpm = l.rps ? Math.round(l.rps * 60) : null;
+  l.rpd = l.daily_quota ?? null;
+  if (n.origins) l.origins = n.origins;
+  return l;
+}
 on("GET", /^\/admin\/api\/keys$/, () => ({ keys: S.keys }));
 on("POST", /^\/admin\/api\/keys$/, (_m, b) => {
   const nk = b as NewKey;
@@ -782,11 +820,32 @@ on("POST", /^\/admin\/api\/keys$/, (_m, b) => {
     prefix: secret.slice(0, 7),
     created_at: new Date().toISOString(),
     last_used_at: null,
-    limits: { rpm: nk.rpm ?? null, rpd: nk.rpd ?? null, origins: nk.origins ?? [] },
+    limits: mockLimits({ rpm: null, rpd: null, origins: [] }, nk),
     usage: { today: 0, total: 0, daily: new Array(14).fill(0) },
   };
   S.keys.unshift(key);
   return json(201, { key, secret } satisfies CreatedKey);
+});
+on("PATCH", /^\/admin\/api\/keys\/(.+)$/, (m, b) => {
+  const k = S.keys.find((x) => x.id === m[1]);
+  if (!k) return json(404, { error: { code: "not_found", message: "No such key" } });
+  k.limits = mockLimits(k.limits, b as LimitsInput);
+  return k;
+});
+on("GET", /^\/admin\/api\/limits$/, () => S.limits);
+on("PUT", /^\/admin\/api\/limits$/, (_m, b) => {
+  const c = b as Pick<LimitsConfig, "weights" | "global">;
+  for (const [k, w] of Object.entries(c.weights ?? {}))
+    if (!Number.isInteger(w) || w < 1)
+      return json(400, {
+        error: { code: "bad_limits", message: `the cost of ${k} must be 1 or more` },
+      });
+  S.limits = {
+    ...S.limits,
+    weights: { ...S.limits.defaults.weights, ...c.weights },
+    global: c.global ?? {},
+  };
+  return S.limits;
 });
 on("DELETE", /^\/admin\/api\/keys\/(.+)$/, (m) => {
   S.keys = S.keys.filter((k) => k.id !== m[1]);

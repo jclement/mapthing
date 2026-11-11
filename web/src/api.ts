@@ -279,10 +279,55 @@ export interface Schedule {
   history?: { id: number; at: string; ok: boolean; message: string; job_id?: number }[];
 }
 
+/**
+ * A key's limits; null = unlimited. Rates and quotas are in cost units: a request costs its
+ * kind's weight (a vector tile 1, a raster tile or a route 10 by default; LimitsConfig).
+ * rpm and rpd are the older request counts, derived by the server for clients that read them.
+ */
 export interface KeyLimits {
   rpm: number | null;
   rpd: number | null;
+  rps?: number | null; // sustained rate, units per second
+  burst?: number | null; // bucket size, units
+  daily_quota?: number | null; // units per UTC day
+  monthly_quota?: number | null; // units per UTC month
+  ip_rps?: number | null; // per client address within the key
+  ip_burst?: number | null;
   origins: string[];
+}
+
+export type LimitScope = "rate" | "ip" | "daily" | "monthly" | "global";
+
+/** A request answered 429. */
+export interface Refusal {
+  t: string;
+  kind: string;
+  scope: LimitScope;
+  ip?: string;
+}
+
+export interface KeyUsage {
+  today: number; // requests
+  total: number;
+  daily: number[]; // requests, last 14 days, oldest first
+  units_today?: number; // cost units against the daily quota
+  units_month?: number;
+  rate_remaining?: number | null; // what is left in the rate bucket now
+  limited_today?: number; // requests answered 429 today
+  limited_daily?: number[]; // last 14 days, oldest first
+  limited_scopes?: Partial<Record<LimitScope, number>>; // today, by which limit
+  recent_limited?: Refusal[]; // newest last
+}
+
+/** What each kind of request costs, and the server-wide limits by kind. */
+export interface LimitsConfig {
+  weights: Record<string, number>;
+  global: Record<string, { rps: number; burst: number }>;
+  kinds: string[];
+  defaults: {
+    weights: Record<string, number>;
+    global: Record<string, { rps: number; burst: number }>;
+  };
 }
 
 export interface ApiKey {
@@ -292,14 +337,24 @@ export interface ApiKey {
   created_at: string;
   last_used_at: string | null;
   limits: KeyLimits;
-  usage: { today: number; total: number; daily: number[] }; // daily: last 14 days, oldest first
+  usage: KeyUsage;
 }
 
-export interface NewKey {
+/** Limits as sent to the server: a field left out is unchanged, null removes the limit. */
+export interface LimitsInput {
+  rps?: number | null;
+  burst?: number | null;
+  daily_quota?: number | null;
+  monthly_quota?: number | null;
+  ip_rps?: number | null;
+  ip_burst?: number | null;
+  origins?: string[];
+}
+
+export interface NewKey extends LimitsInput {
   label: string;
   rpm?: number | null;
   rpd?: number | null;
-  origins?: string[];
 }
 
 export interface CreatedKey {
@@ -567,6 +622,11 @@ export const api = {
   keys: () => request<{ keys: ApiKey[] }>("GET", "/admin/api/keys"),
   createKey: (k: NewKey) => request<CreatedKey>("POST", "/admin/api/keys", k),
   revokeKey: (id: string) => request<void>("DELETE", `/admin/api/keys/${encodeURIComponent(id)}`),
+  updateKey: (id: string, k: LimitsInput & { label?: string }) =>
+    request<ApiKey>("PATCH", `/admin/api/keys/${encodeURIComponent(id)}`, k),
+  limits: () => request<LimitsConfig>("GET", "/admin/api/limits"),
+  saveLimits: (c: Pick<LimitsConfig, "weights" | "global">) =>
+    request<LimitsConfig>("PUT", "/admin/api/limits", c),
 
   /** `query` is the string lib/logs.ts apiQuery builds ("" or "?…"). */
   logs: (query: string) => request<LogPage>("GET", `/admin/api/logs${query}`),

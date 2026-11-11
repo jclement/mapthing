@@ -219,6 +219,7 @@ func serve() error {
 		return fmt.Errorf("scheduler: %w", err)
 	}
 	go ss.Run(ctx, 30*time.Second)
+	go ks.Run(ctx, 10*time.Second) // quota use and refusal counts, so quotas survive a restart
 	go watcher.Run(ctx, 2*time.Second)
 	sup.Start(ctx)
 	f.start(ctx)
@@ -247,6 +248,11 @@ func serve() error {
 	sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(sctx)
+	// Requests answered while the server drained were charged after the limiter's own final
+	// flush (it runs when the signal arrives), so write what is left now that none can come.
+	if err := ks.Flush(sctx); err != nil {
+		slog.Warn("rate limits: flush at shutdown", "err", err)
+	}
 	stop() // cancels jobs, scheduler, supervisor children, stats (final flush)
 	time.Sleep(500 * time.Millisecond)
 	return nil
