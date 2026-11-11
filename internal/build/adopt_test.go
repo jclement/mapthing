@@ -821,6 +821,99 @@ func TestReuseTerrain(t *testing.T) {
 	}
 }
 
+// A build on a server (in place, no OutDir) offered the live generation's terrain, as the
+// build job does: the second build links the terrain instead of rebuilding it, the disk guard
+// stops counting it, and both generations stay valid when retention later removes one.
+func TestInPlaceBuildReusesLiveTerrain(t *testing.T) {
+	e := newEnv(t)
+	var terrainBuilds atomic.Int32
+	fingerprint := func(regions []catalog.Region) string { return "fp:" + regions[0].ID }
+	RegisterTerrainFingerprint(fingerprint)
+	RegisterTerrainEstimate(func([]catalog.Region) int64 { return 7 << 30 })
+	RegisterTerrain(func(_ context.Context, _ Reporter, regions []catalog.Region, _, out string) error {
+		terrainBuilds.Add(1)
+		side, _ := json.Marshal(TerrainResult{Fingerprint: fingerprint(regions)})
+		if err := os.WriteFile(out+".json", side, 0o644); err != nil {
+			return err
+		}
+		return os.WriteFile(out, testPMTiles(), 0o644)
+	})
+	ctx := context.Background()
+	regions := []catalog.Region{e.region}
+	run := func(opt Options) (*Manifest, *testRep) {
+		t.Helper()
+		opt.Regions = regions
+		rep := &testRep{}
+		m, err := e.b.Run(ctx, rep, opt)
+		if err != nil {
+			t.Fatalf("build: %v\n%s", err, strings.Join(rep.logs, "\n"))
+		}
+		return m, rep
+	}
+	liveDir := func() string {
+		id := e.b.CurrentGeneration()
+		if id == "" {
+			return ""
+		}
+		return filepath.Join(e.b.generationsDir(), id)
+	}
+
+	// No generation yet: the guard counts the terrain, and it is built.
+	if est := e.b.EstimateFor(Options{Regions: regions, ReuseTerrain: liveDir()}); est.TerrainBytes != 7<<30 {
+		t.Fatalf("first estimate counts terrain %d, want the estimator's", est.TerrainBytes)
+	}
+	first, _ := run(Options{ReuseTerrain: liveDir()})
+	if terrainBuilds.Load() != 1 || e.b.CurrentGeneration() != first.Generation {
+		t.Fatalf("first build: terrain builds %d, live %q", terrainBuilds.Load(), e.b.CurrentGeneration())
+	}
+
+	// The refresh build: same regions, the live generation's terrain on offer.
+	if est := e.b.EstimateFor(Options{Regions: regions, ReuseTerrain: liveDir()}); est.TerrainBytes != 0 {
+		t.Errorf("the guard still counts %d bytes of terrain that will be reused", est.TerrainBytes)
+	}
+	second, rep := run(Options{Refresh: true, ReuseTerrain: liveDir()})
+	if terrainBuilds.Load() != 1 {
+		t.Errorf("the refresh build rebuilt the terrain\n%s", strings.Join(rep.logs, "\n"))
+	}
+	if !rep.has("terrain: reused from") || e.b.CurrentGeneration() != second.Generation {
+		t.Errorf("reuse not logged, or the second build is not live (%q)", e.b.CurrentGeneration())
+	}
+	a, err1 := os.Stat(filepath.Join(e.b.generationsDir(), first.Generation, "terrain.pmtiles"))
+	b, err2 := os.Stat(filepath.Join(e.b.generationsDir(), second.Generation, "terrain.pmtiles"))
+	if err1 != nil || err2 != nil || !os.SameFile(a, b) {
+		t.Errorf("terrain is not shared between the two generations (%v, %v)", err1, err2)
+	}
+	_, disk := e.b.Inventory()
+	gens, _ := e.b.Inventory()
+	var sum int64
+	for _, g := range gens {
+		sum += g.Bytes
+	}
+	if sum-disk < a.Size() {
+		t.Errorf("inventory: sum %d, on disk %d; the shared terrain (%d) should count once", sum, disk, a.Size())
+	}
+
+	// A third build removes the first generation; the second keeps its (shared) terrain.
+	third, _ := run(Options{Refresh: true, ReuseTerrain: liveDir()})
+	if terrainBuilds.Load() != 1 {
+		t.Errorf("third build rebuilt the terrain")
+	}
+	if _, err := os.Stat(filepath.Join(e.b.generationsDir(), first.Generation)); !os.IsNotExist(err) {
+		t.Errorf("retention kept the first generation")
+	}
+	for _, id := range []string{second.Generation, third.Generation} {
+		if _, err := Validate(filepath.Join(e.b.generationsDir(), id), id, AllParts()); err != nil {
+			t.Errorf("generation %s after retention: %v", id, err)
+		}
+	}
+
+	// Other regions: not reusable, so it is built and counted again.
+	other := []catalog.Region{{ID: "elsewhere", Name: "Elsewhere", BBox: e.region.BBox}}
+	if est := e.b.EstimateFor(Options{Regions: other, ReuseTerrain: liveDir()}); est.TerrainBytes == 0 {
+		t.Errorf("the guard counts no terrain for regions the live terrain does not cover")
+	}
+}
+
 func TestTerrainFingerprint(t *testing.T) {
 	region := func(id string, b catalog.BBox) catalog.Region { return catalog.Region{ID: id, BBox: b} }
 	a := []catalog.Region{region("x", catalog.BBox{-75.8, 38.4, -75.0, 39.9})}

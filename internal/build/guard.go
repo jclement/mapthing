@@ -140,8 +140,12 @@ func (b *Builder) EstimateFor(opt Options) DiskEstimate {
 	e.WorkBytes += naturalEarthUnpackBytes
 	item("planetiler Natural Earth unpack: %s", humanBytes(naturalEarthUnpackBytes))
 	if f := hooks.terrainEstimate(); f != nil {
-		e.TerrainBytes = f(opt.Regions)
-		item("terrain: %s", humanBytes(e.TerrainBytes))
+		if opt.ReuseTerrain != "" && terrainNotReusable(opt.ReuseTerrain, opt.Regions) == "" {
+			item("terrain: 0 (reused from %s)", filepath.Base(opt.ReuseTerrain))
+		} else {
+			e.TerrainBytes = f(opt.Regions)
+			item("terrain: %s", humanBytes(e.TerrainBytes))
+		}
 	}
 	for _, src := range planetilerSources {
 		if _, err := os.Stat(filepath.Join(b.sourcesDir(), src.file)); err == nil {

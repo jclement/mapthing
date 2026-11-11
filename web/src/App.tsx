@@ -10,6 +10,7 @@ import { KeysPage } from "./pages/Keys";
 import { LoginPage } from "./pages/Login";
 import { LogsPage } from "./pages/Logs";
 import { MapPage } from "./pages/Map";
+import { OverviewPage } from "./pages/Overview";
 import { RegionsPage } from "./pages/Regions";
 import { SchedulePage } from "./pages/Schedule";
 import { StatsPage } from "./pages/Stats";
@@ -45,7 +46,8 @@ export function AppShell() {
     <EventsProvider>
       <Routes>
         <Route element={<Layout onLogout={logout} />}>
-          <Route index element={<MapPage />} />
+          <Route index element={<OverviewPage />} />
+          <Route path="map" element={<MapPage />} />
           <Route path="regions" element={<RegionsPage />} />
           <Route path="builds" element={<BuildsPage />} />
           <Route path="generations" element={<GenerationsPage />} />

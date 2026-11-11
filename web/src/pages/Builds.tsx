@@ -253,6 +253,7 @@ export function BuildsPage() {
   const gens = useApi(() => api.generations(), [generationTick]);
   const regions = useApi(() => api.regions(), [generationTick]);
   const [refresh, setRefresh] = useState(true);
+  const [terrain, setTerrain] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -265,7 +266,7 @@ export function BuildsPage() {
     setBusy(true);
     setError(undefined);
     try {
-      await api.build(refresh);
+      await api.build(refresh, terrain);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -277,12 +278,22 @@ export function BuildsPage() {
     <Page>
       <PageHeader
         title="Builds"
-        description="Each build combines every region into a new generation, checks it, then swaps it in."
+        description="Each build combines every region into a new generation, checks it, then swaps it in. Elevation tiles are reused from the live generation when the regions have not changed."
         actions={
           <>
-            <div className="flex items-center gap-2 text-xs text-muted">
+            <div
+              className="flex items-center gap-2 text-xs text-muted"
+              title="Check Geofabrik for newer OpenStreetMap extracts before building"
+            >
               <Switch checked={refresh} onChange={setRefresh} label="Refresh downloads" />
               Refresh downloads
+            </div>
+            <div
+              className="flex items-center gap-2 text-xs text-muted"
+              title="Elevation tiles are reused from the live generation when the regions and settings are the same, which saves most of a build. Turn this on to make them again."
+            >
+              <Switch checked={terrain} onChange={setTerrain} label="Rebuild terrain" />
+              Rebuild terrain
             </div>
             <Button
               variant="primary"

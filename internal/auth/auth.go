@@ -51,6 +51,28 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 	return context.WithValue(ctx, ctxKey{}, p)
 }
 
+// RequestInfo is what the keyed-endpoint wrapper learns about a request, for the outer
+// request middleware (logging and traffic timing), which creates it with WithRequestInfo.
+type RequestInfo struct {
+	Kind  string // usage kind the endpoint is counted under ("" = not a keyed endpoint)
+	KeyID int64  // API key that authenticated it (0 = none, or the admin session)
+}
+
+type infoKey struct{}
+
+// WithRequestInfo returns ctx carrying a RequestInfo for Wrap to fill in.
+func WithRequestInfo(ctx context.Context) (context.Context, *RequestInfo) {
+	ri := &RequestInfo{}
+	return context.WithValue(ctx, infoKey{}, ri), ri
+}
+
+func requestInfo(ctx context.Context) *RequestInfo {
+	if ri, ok := ctx.Value(infoKey{}).(*RequestInfo); ok {
+		return ri
+	}
+	return &RequestInfo{} // nobody is listening
+}
+
 // Auth is the authentication layer.
 type Auth struct {
 	user, pass [32]byte // SHA-256 of the configured credential, compared in constant time
@@ -272,7 +294,10 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			return
 		}
 		cors(w, r)
+		ri := requestInfo(r.Context())
+		ri.Kind = kind
 		if a.isInternal(r) {
+			ri.Kind = KindInternal
 			a.stats.Count(0, KindInternal)
 			h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{Internal: true})))
 			return
@@ -305,6 +330,7 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			WriteError(w, r, http.StatusTooManyRequests, "rate_limited", err.Error())
 			return
 		}
+		ri.KeyID = k.ID
 		a.stats.Count(k.ID, kind)
 		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{KeyID: k.ID, Secret: secret})))
 	})

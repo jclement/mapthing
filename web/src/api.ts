@@ -291,6 +291,88 @@ export interface Stats {
   }[];
 }
 
+/** One process on the overview: this server, a supervised child, or a build's tools. */
+export interface ProcessInfo {
+  name: string;
+  state: "running" | "starting" | "restarting" | "stopped";
+  detail?: string;
+  pid: number | null;
+  uptime_s: number;
+  restarts: number;
+  rss_bytes: number; // the process and everything it started
+  healthy: boolean;
+  cpu_percent: number | null; // of one core; null until there are two readings
+  standby?: boolean; // a replacement warming up during a generation swap
+  role?: string;
+}
+
+export type TrafficKindName = "tiles" | "raster" | "route" | "elevation" | "style" | "pack";
+
+export interface TrafficWindow {
+  requests: number;
+  errors: number; // answered 5xx
+  rejected: number; // answered 401, 403 or 429
+  per_min: number;
+  p50_ms: number;
+  p95_ms: number;
+}
+
+export interface KindTraffic {
+  kind: TrafficKindName | string;
+  hour: TrafficWindow;
+  day: TrafficWindow;
+  series: number[]; // requests per minute, the last 60 minutes, oldest first
+}
+
+/** GET /admin/api/overview: the admin home page in one call. */
+export interface Overview {
+  version: string;
+  commit: string;
+  started_at: string;
+  ready: boolean;
+  readiness: { name: string; ok: boolean; detail?: string }[];
+  generation: {
+    id: string;
+    created_at?: string;
+    bytes: number;
+    regions: { id: string; name: string; data_date: string | null; bbox?: BBox }[];
+  } | null;
+  regions_installed: number;
+  processes: ProcessInfo[];
+  system: {
+    cpus: number;
+    load1: number; // -1 when unknown
+    memory_used_bytes: number;
+    memory_total_bytes: number;
+    platform: string;
+  };
+  traffic: { since: string; kinds: KindTraffic[] };
+  disk: {
+    total_bytes: number;
+    free_bytes: number;
+    data_bytes: number; // what mapthing keeps on the volume
+    parts: { name: string; bytes: number }[];
+    /** What the next build needs free (its disk guard). */
+    guard: { known: boolean; need_bytes?: number; ok?: boolean };
+  };
+  builds: {
+    schedule_enabled: boolean;
+    cron: string;
+    next_run: string | null;
+    active: Job | null;
+    last: {
+      id: string;
+      status: JobStatus;
+      trigger: string;
+      started_at?: string;
+      finished_at?: string;
+      duration_s?: number;
+      error?: string;
+      generation_id?: string;
+    } | null;
+  };
+}
+
 export interface SystemInfo {
   version: string;
   commit: string;
@@ -397,8 +479,8 @@ export const api = {
   removeRegion: (id: string) =>
     request<void>("DELETE", `/admin/api/regions/${encodeURIComponent(id)}`),
 
-  build: (refresh_downloads: boolean) =>
-    request<Job>("POST", "/admin/api/build", { refresh_downloads }),
+  build: (refresh_downloads: boolean, rebuild_terrain = false) =>
+    request<Job>("POST", "/admin/api/build", { refresh_downloads, rebuild_terrain }),
   jobs: () => request<{ jobs: Job[] }>("GET", "/admin/api/jobs"),
   job: (id: string) => request<JobDetail>("GET", `/admin/api/jobs/${encodeURIComponent(id)}`),
   generations: () => request<GenerationList>("GET", "/admin/api/generations"),
@@ -417,6 +499,7 @@ export const api = {
   /** `query` is the string lib/logs.ts apiQuery builds ("" or "?…"). */
   logs: (query: string) => request<LogPage>("GET", `/admin/api/logs${query}`),
 
+  overview: () => request<Overview>("GET", "/admin/api/overview"),
   stats: () => request<Stats>("GET", "/admin/api/stats"),
   system: () => request<SystemInfo>("GET", "/admin/api/system"),
 

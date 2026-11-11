@@ -40,8 +40,8 @@ const clickMap = async (page, pts) => {
 
 await shot("01-login", "/?login");
 await shot("02-first-run-empty", "/?empty");
-await shot("03-map", "/");
-await shot("04-map-route-profile", "/", {
+await shot("03-map", "/map");
+await shot("04-map-route-profile", "/map", {
   before: async (page) => {
     await focusPermian(page);
     await page.waitForTimeout(1500);
@@ -57,13 +57,13 @@ await shot("04-map-route-profile", "/", {
     await page.waitForTimeout(300);
   },
 });
-await shot("05-map-style-picker", "/", {
+await shot("05-map-style-picker", "/map", {
   before: async (page) => {
     await page.getByRole("button", { name: "Map style" }).click();
     await page.waitForTimeout(300);
   },
 });
-await shot("06-map-dark-elevation", "/", {
+await shot("06-map-dark-elevation", "/map", {
   dark: true,
   before: async (page) => {
     await focusPermian(page);
@@ -111,7 +111,7 @@ await shot("14-keys-created", "/keys", {
 await shot("15-stats", "/stats");
 await shot("16-system", "/system");
 await shot("17-stats-dark", "/stats", { dark: true });
-await shot("18-mobile-map-route", "/", {
+await shot("18-mobile-map-route", "/map", {
   width: 390,
   height: 844,
   before: async (page) => {

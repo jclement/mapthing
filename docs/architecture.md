@@ -123,6 +123,7 @@ Admin (session cookie):
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
 | GET | `/admin/api/stats` | tiles/routes/elevation calls by key and by day, cache hit rates, disk per generation and region, RAM, subprocess state |
 | GET | `/admin/api/logs`, `/admin/api/logs/stream` (SSE), `/admin/api/logs/download` | the server's log: filtered pages, a live tail, and the filtered view as a file (see Logs) |
+| GET | `/admin/api/overview` | the admin home page in one call: what is live, process health, traffic and latency by kind, memory, CPU, disk against the build guard, next and last build |
 | GET | `/admin/api/system` | versions, disk free, attribution, and the slim-mode settings (`renderer`: `on`/`off`, `serve`: the served parts) |
 
 ## Go layout
@@ -253,6 +254,17 @@ and `RegisterElevationCheck(ctx, terrainPath, pts)` (verify). It needs the GDAL 
   rest of the pyramid (down to z0) is averaged from those tiles. Averaging is always done on
   elevations, never on encoded RGB. Only tiles touching a region (its polygon if it has one,
   else its bbox) are written.
+- **Reuse.** A build on a server (manual or scheduled) offers the live generation's terrain to
+  the new one (`build.Options.ReuseTerrain`, as `mapthing-build -reuse-terrain` does). When the
+  fingerprint recorded in `terrain.pmtiles.json` (areas, zooms, rounding step, sources) matches
+  what this build would make, `terrain.pmtiles` and `contours.pmtiles` are hard-linked into the
+  new generation instead of being rebuilt, the disk guard does not count them, and the
+  verification still samples them. A refresh build is then the basemap plus the routing graph.
+  Regions added, removed or redrawn, or a changed terrain setting, change the fingerprint and
+  the terrain is built. The DEM data itself is not part of the fingerprint: to pick up newer
+  elevation data, start a build with `rebuild_terrain` (the "Rebuild terrain" switch on Builds).
+  The two generations share the file, so deleting either leaves the other intact, and
+  `/admin/api/generations` counts it once in `disk.bytes`.
 - Besides the archive, it writes `<outPath>.json`: zooms, tile count, bytes, per-source pixel
   counts, pieces fetched or reused, and duration.
 
@@ -535,7 +547,7 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   `data_date`/`downloaded_at`/`disk_bytes` come from `downloads/<id>/meta.json` and the download size; `extract_bytes`/`elevation_sources` from the catalog at add time.
   `POST` `{id}` (catalog extract) or `{name,bbox}` / `{name,polygon:[[lon,lat]…]}` (custom; id `custom/<slug>`) → 201 region; 409 if the id exists.
   `GET`/`PATCH {refresh}`/`DELETE` `/admin/api/regions/{id}` (ids contain `/`, may be URL-encoded) → region / region / 204.
-- `POST /admin/api/build` `{refresh_downloads}` → 202 job; 409 if a build is queued or running; 503 if the build job is not registered.
+- `POST /admin/api/build` `{refresh_downloads, rebuild_terrain}` → 202 job (`rebuild_terrain`: do not reuse the live generation's terrain, see Elevation); 409 if a build is queued or running; 503 if the build job is not registered.
 - Job: `{id,name,status:"queued"|"running"|"succeeded"|"failed"|"cancelled",trigger:"manual"|"schedule",refresh_downloads,created_at,started_at?,finished_at?,progress:0..1,stages:[{name,status:"pending"|"running"|"done"|"failed"|"skipped",progress,detail?,started_at?,finished_at?}],error?,generation_id?}`.
   Stages are the pipeline's, all listed from the moment a build is queued: `guard, download, merge, basemap, valhalla, terrain, verify, swap, retention`;
   stages never reached in a successful build end `skipped`. `progress` is the mean over stages.
@@ -556,6 +568,13 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   `POST` `{label,rpm?,rpd?,origins?}` (null = unlimited) → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` (same fields) `/admin/api/keys/{id}` → key; `DELETE` → 204 (revoked at once).
 - `GET /admin/api/stats?days=30` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state:"running"|"starting"|"restarting"|"stopped",pid|null,uptime_s,restarts,rss_bytes}]}`
   (+ *extra* disk `raster_cache_bytes,pack_cache_bytes,database_bytes`, process `detail,healthy`). Usage kinds map to buckets: tile→tiles, raster→raster, pack→packs, elevation→elevation, everything else (route, matrix, snap, isochrone, valhalla, compat)→routes; `raster-internal` is not shown. `key_id` "0" is the admin UI.
+- `GET /admin/api/overview` → `{version,commit,started_at,ready,readiness,generation:{id,created_at,bytes,sizes,regions:[{id,name,data_date,bbox}]}|null,regions_installed,processes:[process],system:{cpus,load1,memory_used_bytes,memory_total_bytes,platform},traffic:{since,kinds:[{kind,hour:window,day:window,series:[60 per-minute counts]}]},disk:{total_bytes,free_bytes,data_bytes,parts:[{name,bytes}],guard:{known,need_bytes?,ok?}},builds:{schedule_enabled,cron,next_run,active:job|null,last:{id,status,trigger,started_at,finished_at,duration_s,error,generation_id}|null}}`.
+  - `process` = `{name,state,detail?,pid,uptime_s,restarts,rss_bytes,cpu_percent|null,healthy,standby?,role?}`: this server first, then each supervised child, then `build tools` while a build's tools run.
+    `rss_bytes` and `cpu_percent` (of one core, between two readings at least a second apart) cover a child's whole process group, so the renderer's include Node and Xvfb. Read from `/proc`; zero elsewhere.
+  - `window` = `{requests,errors (5xx),rejected (401/403/429),per_min,p50_ms,p95_ms}` for the last hour and the last 24 hours. Kinds: `tiles` (vector tiles and archives), `raster`, `route` (every routing endpoint, native and compatible), `elevation`, `style` (styles, glyphs, sprites), `pack`.
+    Measured by the request middleware for keyed endpoints (`stats.Traffic`: per kind, one slot per minute for 24 hours with a 96-bucket latency histogram, so a quantile is the upper bound of its bucket, at most 19% above the true value).
+    In memory only: it starts empty at every start. The renderer's own requests are not counted. Time is to the last byte written.
+  - `disk.guard`: what the next build needs free (`build.Builder.EstimateFor` for the installed regions, refreshed in the background every 5 minutes; `known` is false until then or with no regions).
 - `GET /admin/api/system` → `{version,commit,build_date,components:[{name,version}],ready,readiness:[{name,ok,detail?}],disk:{free_bytes,total_bytes},current_generation|null,attribution:[{name,license,url?,note?}],imagery_source:{name,attribution}|null}`
   + *extra* `styles:[{id,name,description,dark}],elevation_sources,platform,data_dir,process`.
 - `GET /admin/api/history?kind=&limit=` → `{history:[{id,at,kind,ok,message,job_id?,generation?,details?}]}`; `POST /admin/api/system/restart/{name}` → 204.

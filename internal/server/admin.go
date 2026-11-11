@@ -425,11 +425,14 @@ func (s *Server) eventSnapshot() []jobs.Event {
 	return ev
 }
 
-// startBuild: POST /admin/api/build {refresh_downloads} → 202 job (409 if one is queued/running).
+// startBuild: POST /admin/api/build {refresh_downloads, rebuild_terrain} → 202 job (409 if one
+// is queued/running). rebuild_terrain builds the elevation tiles again even when the live
+// generation's could be reused.
 func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		RefreshDownloads bool `json:"refresh_downloads"`
 		Refresh          bool `json:"refresh"`
+		RebuildTerrain   bool `json:"rebuild_terrain"`
 	}
 	if r.ContentLength != 0 && !readJSON(w, r, &b) {
 		return
@@ -438,7 +441,7 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "the build pipeline is not available in this binary")
 		return
 	}
-	row, err := s.d.Jobs.Enqueue(r.Context(), scheduler.BuildJob, map[string]any{"refresh": b.RefreshDownloads || b.Refresh}, jobs.EnqueueOptions{Trigger: "manual", Unique: true})
+	row, err := s.d.Jobs.Enqueue(r.Context(), scheduler.BuildJob, map[string]any{"refresh": b.RefreshDownloads || b.Refresh, "rebuild_terrain": b.RebuildTerrain}, jobs.EnqueueOptions{Trigger: "manual", Unique: true})
 	if errors.Is(err, jobs.ErrBusy) {
 		writeError(w, r, http.StatusConflict, "busy", err.Error())
 		return

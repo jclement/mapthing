@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { api, type RequestKind } from "../api";
 import { BarList, type Series, StackedBars } from "../components/charts";
 import { Badge, Card, Empty, ErrorNote, Page, PageHeader, Spinner, Stat } from "../components/ui";
@@ -43,7 +44,16 @@ export function StatsPage() {
     <Page wide>
       <PageHeader
         title="Stats"
-        description="Requests over the last 30 days, caches, disk and processes."
+        description={
+          <>
+            Requests over the last 30 days, by kind and by key, with caches and disk. Live rates,
+            latency, memory and processes are on the{" "}
+            <Link to="/" className="text-accent-strong hover:underline">
+              Overview
+            </Link>
+            .
+          </>
+        }
       />
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card>
@@ -74,16 +84,16 @@ export function StatsPage() {
         </Card>
         <Card>
           <Stat
-            label="Memory"
-            value={fmt.bytes(
-              d.memory.process_rss_bytes + d.processes.reduce((a, p) => a + p.rss_bytes, 0),
+            label="Busiest day"
+            value={fmt.number(
+              Math.max(0, ...d.daily.map((r) => KINDS.reduce((b, k) => b + r[k.key], 0))),
             )}
-            sub={`system ${fmt.bytes(d.memory.system_used_bytes)} / ${fmt.bytes(d.memory.system_total_bytes)}`}
+            sub="requests in one day"
           />
         </Card>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3 [&>*]:min-w-0">
         <Card title="Requests by kind" className="lg:col-span-2">
           {d.daily.length ? (
             <StackedBars
@@ -196,46 +206,6 @@ export function StatsPage() {
               />
             </>
           )}
-        </Card>
-
-        <Card title="Processes">
-          <ul className="space-y-3">
-            {d.processes.map((p) => (
-              <li key={p.name} className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-mono text-[13px]">{p.name}</div>
-                  <div className="text-xs text-faint">
-                    {p.pid ? `pid ${p.pid} · up ${fmt.duration(p.uptime_s)}` : "not running"} ·{" "}
-                    {p.restarts} restart
-                    {p.restarts === 1 ? "" : "s"}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <Badge
-                    tone={p.state === "running" ? "ok" : p.state === "stopped" ? "neutral" : "warn"}
-                    dot
-                  >
-                    {p.state}
-                  </Badge>
-                  <div className="tnum mt-1 text-xs text-muted">{fmt.bytes(p.rss_bytes)}</div>
-                </div>
-              </li>
-            ))}
-            <li className="flex items-start justify-between gap-3 border-t border-line pt-3">
-              <div>
-                <div className="font-mono text-[13px]">mapthing</div>
-                <div className="text-xs text-faint">API, tiles, jobs</div>
-              </div>
-              <div className="text-right">
-                <Badge tone="ok" dot>
-                  running
-                </Badge>
-                <div className="tnum mt-1 text-xs text-muted">
-                  {fmt.bytes(d.memory.process_rss_bytes)}
-                </div>
-              </div>
-            </li>
-          </ul>
         </Card>
       </div>
     </Page>

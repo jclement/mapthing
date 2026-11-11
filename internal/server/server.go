@@ -67,6 +67,10 @@ type Deps struct {
 	// DeleteGeneration removes a generation directory for good. It returns an *ActivateError
 	// for a refusal (the live one, the one being built). nil → 503 on the delete endpoint.
 	DeleteGeneration func(ctx context.Context, id string) error
+	// BuildEstimate says how much free disk the next build needs (the build's own disk guard,
+	// for the installed regions). ok is false when it cannot be worked out now (no regions, or
+	// the catalog is not loaded). Optional.
+	BuildEstimate func(ctx context.Context) (needBytes int64, ok bool)
 	// Info is extra, static configuration shown by /admin/api/system (e.g. which parts this
 	// server serves and whether the renderer is off). Optional.
 	Info map[string]any
@@ -79,18 +83,19 @@ type Server struct {
 	d       Deps
 	mux     *http.ServeMux
 	diskCtl *diskStats
+	procs   *procSampler
 }
 
 // New builds the router.
 func New(d Deps) *Server {
-	s := &Server{d: d, mux: http.NewServeMux(), diskCtl: newDiskStats(d.DataDir)}
+	s := &Server{d: d, mux: http.NewServeMux(), diskCtl: newDiskStats(d.DataDir), procs: newProcSampler()}
 	s.routes()
 	return s
 }
 
 // Handler returns the root handler (with panic recovery, request logging and security headers).
 func (s *Server) Handler() http.Handler {
-	return recoverer(logRequests(securityHeaders(s.mux)))
+	return recoverer(s.logRequests(securityHeaders(s.mux)))
 }
 
 func (s *Server) routes() {
@@ -112,6 +117,7 @@ func (s *Server) routes() {
 	m.Handle("PATCH /admin/api/keys/{id}", admin(s.updateKey))
 	m.Handle("DELETE /admin/api/keys/{id}", admin(s.revokeKey))
 
+	m.Handle("GET /admin/api/overview", admin(s.overview))
 	m.Handle("GET /admin/api/stats", admin(s.stats))
 	m.Handle("GET /admin/api/system", admin(s.system))
 	m.Handle("POST /admin/api/system/restart/{name}", admin(s.restartChild))
@@ -313,13 +319,28 @@ func (w *statusWriter) Flush() {
 	}
 }
 
-func logRequests(h http.Handler) http.Handler {
+// logRequests times every request: keyed endpoints go into the traffic record (rate and
+// latency by kind, for the overview), and 5xx answers into the log (every request with
+// MAPTHING_DEBUG). The path is logged without its query string, which can carry a key.
+func (s *Server) logRequests(h http.Handler) http.Handler {
+	var traffic *stats.Traffic
+	if s.d.Stats != nil {
+		traffic = s.d.Stats.Traffic
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w}
-		h.ServeHTTP(sw, r)
+		ctx, info := auth.WithRequestInfo(r.Context())
+		h.ServeHTTP(sw, r.WithContext(ctx))
+		dur := time.Since(start)
+		if sw.status == 0 {
+			sw.status = http.StatusOK
+		}
+		if info.Kind != "" && r.Method != http.MethodOptions {
+			traffic.Observe(stats.TrafficKind(info.Kind, r.URL.Path), dur, sw.status)
+		}
 		if sw.status >= 500 || slog.Default().Enabled(r.Context(), slog.LevelDebug) {
-			slog.Info("http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "bytes", sw.n, "dur", time.Since(start).Round(time.Millisecond))
+			slog.Info("http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "bytes", sw.n, "dur", dur.Round(time.Millisecond))
 		}
 	})
 }

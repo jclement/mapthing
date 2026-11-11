@@ -8,11 +8,13 @@ import type {
   ElevationSample,
   Generation,
   Job,
+  KindTraffic,
   LogEntry,
   LogLine,
   LonLat,
   NewKey,
   NewRegion,
+  Overview,
   Region,
   RouteRequest,
   Schedule,
@@ -723,6 +725,7 @@ export function emitLog(e: Omit<LogEntry, "id" | "t"> & { t?: string }) {
   return entry;
 }
 
+on("GET", /^\/admin\/api\/overview$/, () => overview());
 on("GET", /^\/admin\/api\/stats$/, () => stats());
 on("GET", /^\/admin\/api\/system$/, () => {
   const live = S.generations.find((g) => g.status === "live");
@@ -842,6 +845,197 @@ on("POST", /^\/api\/v1\/elevation\/profile$/, (_m, b) => {
   };
   return { ...profileOf(path, interval_m ?? 30), bridges: bridges ?? "ground" };
 });
+
+const mockStarted = Date.now() - 3.1 * 86400000;
+
+function overview(): Overview {
+  settleGenerations();
+  const live = S.generations.find((g) => g.status === "live");
+  const up = !!live;
+  const active = S.jobs.find((j) => j.status === "running") ?? null;
+  const last = S.jobs.find((j) => j.status !== "running" && j.status !== "queued");
+  const minute = Math.floor(Date.now() / 60000);
+  // Deterministic within a minute, so polling does not make the numbers jump about.
+  const wave = (i: number, base: number, k: number) =>
+    Math.max(
+      0,
+      Math.round(base * (1 + 0.35 * Math.sin((minute - 59 + i) / k) + 0.15 * Math.sin(i * 1.7))),
+    );
+  const kind = (
+    name: string,
+    perMin: number,
+    p50: number,
+    p95: number,
+    errors = 0,
+    rejected = 0,
+  ): KindTraffic => {
+    const series = Array.from({ length: 60 }, (_, i) =>
+      up ? wave(i, perMin, 7 + name.length) : 0,
+    );
+    const hour = series.reduce((a, b) => a + b, 0);
+    return {
+      kind: name,
+      series,
+      hour: {
+        requests: hour,
+        errors: Math.round(errors / 20),
+        rejected: Math.round(rejected / 24),
+        per_min: Math.round((hour / 60) * 100) / 100,
+        p50_ms: up ? p50 : 0,
+        p95_ms: up ? p95 : 0,
+      },
+      day: {
+        requests: up ? Math.round(perMin * 60 * 24 * 0.62) : 0,
+        errors: up ? errors : 0,
+        rejected: up ? rejected : 0,
+        per_min: Math.round(perMin * 0.62 * 100) / 100,
+        p50_ms: up ? p50 * 1.05 : 0,
+        p95_ms: up ? p95 * 1.2 : 0,
+      },
+    };
+  };
+  const gensBytes = S.generations.reduce((n, g) => n + g.manifest.sizes.total, 0);
+  const downloads = S.regions.reduce((n, r) => n + r.extract_bytes, 0);
+  const parts = [
+    { name: "Generations", bytes: gensBytes },
+    { name: "Elevation cache", bytes: S.regions.length ? 7.4e9 : 0 },
+    { name: "Imagery cache", bytes: up ? 4.6e9 : 0 },
+    { name: "Downloaded extracts", bytes: downloads },
+    { name: "Build caches and scratch", bytes: S.jobs.length ? 4.1e9 : 0 },
+    { name: "Raster tile cache", bytes: up ? 1.8e9 : 0 },
+    { name: "Offline pack cache", bytes: up ? 0.3e9 : 0 },
+    { name: "Logs", bytes: 6.5e6 },
+    { name: "Database", bytes: 1.2e6 },
+  ].sort((a, b) => b.bytes - a.bytes);
+  const need = S.regions.length ? Math.max(4e9, downloads * 6 + 2e9) : 0;
+  const free = 28.6e9;
+  return {
+    version: "0.9.0",
+    commit: "7efee20a1b2c",
+    started_at: new Date(mockStarted).toISOString(),
+    ready: up,
+    readiness: [
+      {
+        name: "map data",
+        ok: up,
+        detail: up ? `live generation ${live.id}` : "no map data has been built yet",
+      },
+      { name: "renderer", ok: true, detail: "running" },
+      { name: "routing", ok: up },
+    ],
+    generation: live
+      ? {
+          id: live.id,
+          created_at: live.created_at,
+          bytes: live.manifest.sizes.total,
+          regions: live.manifest.regions.map((r) => ({
+            ...r,
+            bbox:
+              S.regions.find((x) => x.id === r.id)?.bbox ??
+              fx.catalog.find((c) => c.id === r.id)?.bbox,
+          })),
+        }
+      : null,
+    regions_installed: S.regions.length,
+    processes: [
+      {
+        name: "mapthing",
+        state: "running",
+        healthy: true,
+        pid: 1,
+        uptime_s: (Date.now() - mockStarted) / 1000,
+        restarts: 0,
+        rss_bytes: 412e6,
+        cpu_percent: 3.2,
+        role: "API, tiles, elevation, jobs, this page",
+      },
+      {
+        name: "renderer",
+        state: "running",
+        healthy: true,
+        pid: 2214,
+        uptime_s: 1.2 * 86400,
+        restarts: up ? 1 : 0,
+        rss_bytes: 640e6,
+        cpu_percent: up ? 41.5 : 0.1,
+        role: "raster tiles (MapLibre Native and its X server)",
+      },
+      {
+        name: "valhalla@8003",
+        state: up ? "running" : "stopped",
+        detail: up ? undefined : "waiting: no generation built yet",
+        healthy: up,
+        pid: up ? 2211 : null,
+        uptime_s: up ? 3.1 * 86400 : 0,
+        restarts: 0,
+        rss_bytes: up ? 1.9e9 : 0,
+        cpu_percent: up ? 12.0 : null,
+        role: "routing",
+      },
+      ...(active
+        ? [
+            {
+              name: "build tools",
+              state: "running" as const,
+              healthy: true,
+              pid: null,
+              uptime_s: 0,
+              restarts: 0,
+              rss_bytes: 9.8e9,
+              cpu_percent: 612,
+              role: "Planetiler, Valhalla and GDAL, while a build runs",
+            },
+          ]
+        : []),
+    ],
+    system: {
+      cpus: 8,
+      load1: active ? 6.4 : 0.42,
+      memory_used_bytes: active ? 31.3e9 : 21.3e9,
+      memory_total_bytes: 47e9,
+      platform: "linux/amd64",
+    },
+    traffic: {
+      since: new Date(mockStarted).toISOString(),
+      kinds: [
+        kind("tiles", 17, 1.4, 6.3, 0, 212),
+        kind("raster", 4.2, 38, 410, 3),
+        kind("route", 1.3, 85, 640, 1),
+        kind("elevation", 2.4, 3.1, 22),
+        kind("style", 0.6, 0.8, 2.6),
+        kind("pack", 0.03, 2100, 9400),
+      ],
+    },
+    disk: {
+      total_bytes: 202e9,
+      free_bytes: free,
+      data_bytes: parts.reduce((n, p) => n + p.bytes, 0),
+      parts,
+      guard: need ? { known: true, need_bytes: need, ok: free >= need } : { known: false },
+    },
+    builds: {
+      schedule_enabled: S.schedule.enabled,
+      cron: S.schedule.cron,
+      next_run: S.schedule.enabled ? new Date(Date.now() + 3.4 * 86400000).toISOString() : null,
+      active: active ? clone(active) : null,
+      last: last
+        ? {
+            id: last.id,
+            status: last.status,
+            trigger: last.trigger,
+            started_at: last.started_at,
+            finished_at: last.finished_at,
+            duration_s:
+              last.started_at && last.finished_at
+                ? (Date.parse(last.finished_at) - Date.parse(last.started_at)) / 1000
+                : undefined,
+            error: last.error,
+            generation_id: last.generation_id,
+          }
+        : null,
+    },
+  };
+}
 
 function stats(): Stats {
   const days = 30;
