@@ -116,7 +116,16 @@ export interface Region {
   refresh_policy?: RefreshPolicy;
   /** A refresh of this region: its own download, and a build (always over all regions). */
   refresh_cost?: { download_bytes: number; build_seconds: number | null };
+  /** How the region's terrain is provided. Absent on a server older than on-demand terrain. */
+  terrain_mode?: TerrainMode;
 }
+
+/**
+ * prebuilt: the build makes the region's terrain at every zoom. on_demand: the build makes
+ * only its low zooms; deeper tiles and elevations are read from the public DEM hosts the first
+ * time they are asked for, then kept in a cache.
+ */
+export type TerrainMode = "prebuilt" | "on_demand";
 
 export type RefreshMode = "default" | "never" | "daily" | "weekly" | "monthly" | "cron";
 
@@ -149,7 +158,47 @@ export interface RefreshSetting {
   only_changed?: boolean;
 }
 
-export type NewRegion = { id: string } | { name: string; bbox: BBox; polygon?: LonLat[] };
+export type NewRegion = ({ id: string } | { name: string; bbox: BBox; polygon?: LonLat[] }) & {
+  terrain_mode?: TerrainMode;
+};
+
+/** One public DEM host on-demand terrain reads from, and how its last requests went. */
+export interface OnDemandHost {
+  host: string;
+  requests: number;
+  failures: number;
+  bytes: number;
+  last_ok?: string;
+  last_error?: string;
+  error?: string;
+  healthy: boolean; // false while the most recent request to it failed
+}
+
+/** On-demand terrain: GET /admin/api/ondemand, and the overview's "ondemand". */
+export interface OnDemandStatus {
+  config: {
+    /** Terrain outside every built region: none ("off"), or read on demand. */
+    outside: "off" | "on_demand";
+    cache_mb: number;
+  };
+  enabled: boolean; // it applies somewhere: a region is set to it, or outside is on
+  regions: string[]; // ids of the regions set to on demand
+  minzoom: number;
+  maxzoom: number;
+  cache: { bytes: number; max_bytes: number; entries: number };
+  /** Totals since the server started. */
+  counters: {
+    hits: number; // tiles answered from the cache
+    built: number; // tiles read from the DEM hosts
+    failed: number;
+    limited: number; // cold requests a rate limit refused
+    requests: number; // requests sent to the DEM hosts
+    bytes: number;
+  };
+  upstream: OnDemandHost[]; // hosts contacted since the server started
+  sources: (ElevationSource & { host: string })[];
+  healthy: boolean;
+}
 
 // Build stages as the pipeline reports them, in order.
 export type StageName =
@@ -467,6 +516,8 @@ export interface Overview {
     /** What the next build needs free (its disk guard). */
     guard: { known: boolean; need_bytes?: number; ok?: boolean };
   };
+  /** On-demand terrain; null (or absent) when it is off everywhere and its cache is empty. */
+  ondemand?: OnDemandStatus | null;
   builds: {
     schedule_enabled: boolean;
     cron: string;
@@ -618,8 +669,14 @@ export const api = {
     request<void>("DELETE", `/admin/api/regions/${encodeURIComponent(id)}`),
   setRegionRefresh: (id: string, refresh_policy: RefreshSetting) =>
     request<Region>("PATCH", `/admin/api/regions/${encodeURIComponent(id)}`, { refresh_policy }),
+  setRegionTerrain: (id: string, terrain_mode: TerrainMode) =>
+    request<Region>("PATCH", `/admin/api/regions/${encodeURIComponent(id)}`, { terrain_mode }),
   /** Look at every refreshed region's source now; builds nothing. */
   checkRegions: () => request<{ regions: Region[] }>("POST", "/admin/api/regions/check"),
+  ondemand: () => request<OnDemandStatus>("GET", "/admin/api/ondemand"),
+  saveOnDemand: (c: Partial<OnDemandStatus["config"]>) =>
+    request<OnDemandStatus>("PUT", "/admin/api/ondemand", c),
+  clearOnDemand: () => request<OnDemandStatus>("POST", "/admin/api/ondemand/clear"),
 
   build: (refresh_downloads: boolean, rebuild_terrain = false) =>
     request<Job>("POST", "/admin/api/build", { refresh_downloads, rebuild_terrain }),

@@ -38,6 +38,7 @@ func terrainFingerprint(areas []area, o terrainOpts) string {
 		ID      string         `json:"id"`
 		BBox    [4]float64     `json:"bbox"`
 		Polygon [][][2]float64 `json:"polygon,omitempty"`
+		LowOnly bool           `json:"low_only,omitempty"` // terrain on demand: low zooms only
 	}
 	z, _ := chooseMaxZoom(areas, o)
 	v := struct {
@@ -53,7 +54,7 @@ func terrainFingerprint(areas []area, o terrainOpts) string {
 		v.Sources = append(v.Sources, s.def.ID)
 	}
 	for _, a := range areas {
-		fa := fpArea{ID: a.id, BBox: [4]float64{round6(a.bbox[0]), round6(a.bbox[1]), round6(a.bbox[2]), round6(a.bbox[3])}}
+		fa := fpArea{ID: a.id, BBox: [4]float64{round6(a.bbox[0]), round6(a.bbox[1]), round6(a.bbox[2]), round6(a.bbox[3])}, LowOnly: a.lowOnly}
 		for _, ring := range a.polygon {
 			rr := make([][2]float64, len(ring))
 			for i, p := range ring {

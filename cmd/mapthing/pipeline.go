@@ -29,6 +29,9 @@ func (f *features) wirePipeline(ctx context.Context, d *server.Deps, restart fun
 			slog.Warn("region catalog not loaded yet", "err", err)
 			return
 		}
+		if f.catalogLoaded != nil {
+			f.catalogLoaded(cat)
+		}
 		// Extract sizes for the catalog UI, custom-region estimates and the disk guard.
 		if err := cat.WarmSizes(ctx, catalog.Filter{}); err != nil {
 			slog.Warn("catalog extract sizes not saved", "err", err)
@@ -289,6 +292,7 @@ func (f *features) buildRegions(ctx context.Context, cat *catalog.Catalog) ([]ca
 		if !rg.Refresh {
 			skip[r.ID] = true
 		}
+		r.TerrainOnDemand = rg.TerrainMode == store.TerrainOnDemand
 		out = append(out, r)
 	}
 	return out, skip, nil

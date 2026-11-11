@@ -14,6 +14,7 @@ async function boot() {
       empty: q.has("empty"),
       authed: q.has("authed") || !q.has("login"),
       oddGenerations: q.has("gens"),
+      onDemandFailing: q.has("odfail"),
       update: q.has("update") ? "available" : "current",
     });
   }

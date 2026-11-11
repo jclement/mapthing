@@ -13,6 +13,7 @@ export const KIND_NAME: Record<string, string> = {
   valhalla: "Valhalla pass-through",
   elevation: "Elevation",
   pack: "Offline packs",
+  ondemand: "On-demand terrain, read from the sources",
 };
 
 export const SCOPE_NAME: Record<LimitScope, string> = {

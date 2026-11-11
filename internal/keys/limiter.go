@@ -58,7 +58,12 @@ type Config struct {
 }
 
 // Kinds lists the usage kinds a weight or a global limit can be set for, in display order.
-var Kinds = []string{"tile", "raster", "route", "matrix", "isochrone", "snap", "valhalla", "elevation", "pack"}
+var Kinds = []string{"tile", "raster", "route", "matrix", "isochrone", "snap", "valhalla", "elevation", "pack", KindOnDemand}
+
+// KindOnDemand is charged on top of a request's own kind when answering it means reading
+// elevation from the public DEM hosts (on-demand terrain that is not in the cache yet). A
+// cached answer does not pay it.
+const KindOnDemand = "ondemand"
 
 // DefaultConfig is what a new server uses. The weights follow the measured CPU cost of each
 // request (docs/sizing.md: a vector tile 0.5 ms, a route 15 ms, a profile 36 ms, a cold raster
@@ -67,11 +72,14 @@ var Kinds = []string{"tile", "raster", "route", "matrix", "isochrone", "snap", "
 func DefaultConfig() Config {
 	return Config{
 		Weights: map[string]int{"tile": 1, "raster": 10, "route": 10, "matrix": 20, "isochrone": 20,
-			"snap": 2, "valhalla": 10, "elevation": 5, "pack": 50},
+			"snap": 2, "valhalla": 10, "elevation": 5, "pack": 50, KindOnDemand: 20},
 		Global: map[string]GlobalLimit{
 			"raster": {RPS: 100, Burst: 200}, "route": {RPS: 60, Burst: 120}, "matrix": {RPS: 10, Burst: 20},
 			"isochrone": {RPS: 10, Burst: 20}, "valhalla": {RPS: 60, Burst: 120}, "elevation": {RPS: 100, Burst: 200},
 			"pack": {RPS: 2, Burst: 4},
+			// Cold on-demand requests lean on other people's servers: capped well below
+			// what the DEM hosts would bear, whatever the keys allow.
+			KindOnDemand: {RPS: 20, Burst: 40},
 		},
 	}
 }
@@ -166,6 +174,15 @@ func (s *Service) loadConfig(ctx context.Context) {
 		if json.Unmarshal([]byte(v), &stored) == nil && stored.Validate() == nil {
 			if stored.Global == nil {
 				stored.Global = map[string]GlobalLimit{}
+			}
+			// A kind this version added (the stored configuration has no weight for it)
+			// starts with its default limit; a limit the operator removed stays removed.
+			for _, k := range Kinds {
+				if _, known := stored.Weights[k]; !known {
+					if g, ok := cfg.Global[k]; ok {
+						stored.Global[k] = g
+					}
+				}
 			}
 			cfg = stored
 		}

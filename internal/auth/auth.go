@@ -37,6 +37,9 @@ type Principal struct {
 	Internal bool   // the local renderer, authenticated by the internal token
 	KeyID    int64  // 0 for the admin session
 	Secret   string // the key as presented (for templating it into style URLs); "" for admin
+	// key and ip are what the request was charged with, kept for Surcharge.
+	key *store.APIKey
+	ip  string
 }
 
 type ctxKey struct{}
@@ -399,8 +402,30 @@ func (a *Auth) Wrap(kind string, h http.Handler) http.Handler {
 			return
 		}
 		a.stats.Count(k.ID, kind)
-		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{KeyID: k.ID, Secret: secret})))
+		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{KeyID: k.ID, Secret: secret, key: k, ip: a.ClientIP(r)})))
 	})
+}
+
+// Surcharge charges a request that Wrap already let in for extra work of another kind, found
+// only while answering it (reading elevation from the DEM hosts rather than the cache). It
+// goes through the same limits as any request of that kind: the key's rate and quotas and the
+// server's limit for the kind. ok is false when a limit refuses; the handler then answers 429
+// with the decision's Retry-After and does not do the work. The admin session and the local
+// renderer have no key and are not charged.
+func (a *Auth) Surcharge(ctx context.Context, kind string) (d keys.Decision, ok bool) {
+	p, _ := FromContext(ctx)
+	if p.key == nil {
+		return keys.Decision{OK: true}, true
+	}
+	d = a.keys.Charge(ctx, p.key, kind, p.ip)
+	if !d.OK {
+		if ri := requestInfo(ctx); ri != nil && d.Scope != keys.ScopeUnavailable {
+			ri.Limited = d.Scope
+		}
+		return d, false
+	}
+	a.stats.Count(p.key.ID, kind)
+	return d, true
 }
 
 // setRateHeaders tells the client where it stands against the limit closest to running out:

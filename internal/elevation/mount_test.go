@@ -1,20 +1,23 @@
-package elevation
+// An external test package: core's server imports on-demand terrain, which imports this
+// package, so a test inside it cannot import the server.
+package elevation_test
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/server"
 )
 
 // The handler must satisfy core's Mountable.
-var _ server.Mountable = (*Handler)(nil)
+var _ server.Mountable = (*elevation.Handler)(nil)
 
 func TestMountWrapsEveryRoute(t *testing.T) {
 	mux := http.NewServeMux()
 	var kinds []string
-	NewHandler(NewTerrain("/nonexistent/terrain.pmtiles", 0)).Mount(mux, func(kind string, h http.Handler) http.Handler {
+	elevation.NewHandler(elevation.NewTerrain("/nonexistent/terrain.pmtiles", 0)).Mount(mux, func(kind string, h http.Handler) http.Handler {
 		kinds = append(kinds, kind)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) })
 	})

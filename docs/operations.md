@@ -13,7 +13,11 @@ build machine (large, short-lived)            serving machine (small, always on)
                                                        POST /admin/api/generations/<id>/activate
 ```
 
-It has three independent parts, and each is useful without the others:
+Terrain, the largest part of a build, has a third arrangement of its own:
+[on-demand terrain](#on-demand-terrain) skips building it and reads it from the public sources as
+places are asked for.
+
+Building elsewhere has three independent parts, and each is useful without the others:
 
 1. [`mapthing-build -out`](#1-build-a-generation-into-a-directory) writes a complete generation
    to a directory of your choosing, without a server and without making anything live.
@@ -251,6 +255,132 @@ The renderer's share grows under load (it keeps a pool of maps per style), so th
 in a busy server is larger than at idle. What is left is the Go server (about 28 MiB) and
 `valhalla_service`, whose resident size is mostly the memory-mapped graph and follows the
 graph's size and how much of it has been touched.
+
+## On-demand terrain
+
+Terrain is the largest and slowest part of a build ([sizing.md](sizing.md)). As an option, a
+region's terrain, or terrain for everywhere outside your regions, can be **read on demand**
+instead: the first time a tile or an elevation is asked for, mapthing reads the small window it
+needs out of the same public cloud-optimised GeoTIFFs the build uses, answers, and keeps the
+result in a cache. The second request for the same place is as fast as built terrain.
+
+It is off unless you turn it on, and a server that never turns it on behaves exactly as before:
+nothing is fetched at request time.
+
+| | Built (default) | On demand |
+|---|---|---|
+| First view of a place | instant | about a second (0.7 to 2.2 s for one tile, 1 to 3.4 s for a screen) |
+| Later views | instant | instant, from the cache |
+| Internet at request time | not needed | needed for places not seen before |
+| Disk | 110–150 KB per deepest-zoom tile, for the whole region | the region's zoomed-out terrain (about 1 % of that), plus a cache you size |
+| Build time | most of a build | about a minute per Texas-sized region |
+| Works when a DEM host is down | yes | what is cached, yes; anything new answers 504 |
+
+### What it covers, and what it does not
+
+- **Terrain tiles** (`/tiles/terrain/{z}/{x}/{y}.png`) at zooms 9 to 13, so hillshade in every
+  style, in the browser and in rendered raster tiles.
+- **Elevation**: `/api/v1/elevation`, `/api/v1/elevation/profile` and the Google-compatible
+  `/maps/api/elevation/json`. They sample the same zoom-13 tiles built terrain is sampled from,
+  so an on-demand elevation is the same kind of answer as a built one.
+- **Not map tiles and not routing.** They are always built: the basemap comes from an OSM
+  extract and Valhalla needs a graph, and neither can be fetched a piece at a time.
+- **Not contours** (yet): contour lines exist only where terrain was built.
+- **Below zoom 9**, terrain is always built. A region set to on demand still gets zooms 0 to 9
+  made by the build (from the sources' overviews, without GDAL), so a zoomed-out map never
+  waits. Outside every region there is nothing below zoom 9: zoomed out that far, terrain shows
+  only where a region exists.
+
+The sources and their order are those of the build ([elevation-sources.md](elevation-sources.md)):
+NRCan HRDEM, USGS 3DEP 1/3″, NRCan MRDEM-30, Copernicus GLO-30. Where the best one has no data
+for a pixel, the next one fills it. **Built terrain always wins**: a tile the live archive has is
+served from it and the sources are never asked.
+
+### Turning it on
+
+- **For a region**: on the Regions page, under the region's elevation sources, choose *Terrain
+  built* or *Terrain read on demand*; or when adding the region; or
+  `PATCH /admin/api/regions/{id}` with `{"terrain_mode":"on_demand"}` (`"prebuilt"` to go back).
+  Switching to on demand applies at once to places with no built terrain; terrain already built
+  keeps being served until the next build, which leaves it out and frees its disk. Switching back
+  takes effect with the next build; until that build has made the terrain, the region keeps
+  being read on demand.
+- **Outside built regions**: Settings → On-demand terrain, or
+  `PUT /admin/api/ondemand` with `{"outside":"on_demand"}` (`"off"` is the default). With it on,
+  any place on Earth has terrain and elevation from zoom 9 in.
+
+Both are stored in the database and apply to the next request; there is nothing to restart and
+no environment variable.
+
+### The cache
+
+One cache holds everything on-demand terrain fetches, under `<data>/ondemand-cache`: the finished
+tiles, the source blocks they were made from (a neighbouring tile or the next zoom often needs
+the same block) and the files' headers. It has one budget, 5 GB by default, set in Settings or
+with `PUT /admin/api/ondemand` `{"cache_mb":20000}`. When it is full, what was used longest ago
+is dropped first, which in practice means source blocks go before tiles. A finished tile is 17 to
+60 KB, so 5 GB holds on the order of 100,000 tiles. The Overview shows how full it is, how much
+is answered from it, and each source's health; Settings can empty it.
+
+Cached data is **versioned**. mapthing remembers each source file's ETag and asks the host
+again once a day; when a file has changed, tiles made from the old one are rebuilt the next time
+they are asked for, and the old blocks are deleted. The versions are kept in
+`<data>/ondemand/versions.json`, so after a restart, or with no internet, cached tiles are
+still served.
+
+### When a source does not answer
+
+A request that needs data a host will not give is answered with an error, and **nothing is
+cached**, so the next request tries again:
+
+- terrain tile: `504` with `{"error":{"code":"terrain_source_unavailable",…}}`,
+  `Cache-Control: no-store` and `Retry-After: 30`;
+- `/api/v1/elevation…`: `504` with `{"error":"…"}`;
+- `/maps/api/elevation/json`: `504` with `{"status":"UNKNOWN_ERROR","error_message":"…","results":[]}`
+  (Google's own status for "try again").
+
+A raster tile drawn while its terrain could not be read is served without hillshade and not
+cached, as with any other source that fails. The Overview names the host that is not answering
+and when it last did.
+
+### Limits and manners
+
+mapthing reads other people's servers here, so it is careful by design:
+
+- at most 16 requests in flight to the DEM hosts, 8 to any one host; each attempt times out
+  after 20 s; a failed request is retried twice, with a growing pause;
+- requests for the same tile, block or header that arrive together share one fetch;
+- every request carries `User-Agent: mapthing (+https://github.com/jclement/mapthing)`;
+- only public, anonymous files are read (USGS and NRCan publish theirs as public data, the
+  Copernicus DEM under its own free licence): the attribution is the same as for built terrain
+  and is in every style and in the terrain TileJSON.
+
+A request that has to read from the hosts also **costs its API key more**: on top of its own
+kind it is charged one `ondemand` request (20 units by default, against 1 for a tile and 5 for an
+elevation request), and the server caps such requests across all keys (20 per second by
+default). Both figures are with the other limits on the Keys page. A cached answer pays nothing
+extra. A key that cannot pay is answered `429` with `Retry-After` before anything is fetched.
+One elevation request may need at most 600 on-demand tiles (about 2,000 km of profile); a
+larger one is refused with `413` and nothing is fetched.
+
+### What a first request costs
+
+Measured from one server against the live hosts with nothing cached ([sizing.md](sizing.md) has
+the full tables). "Later" means the files' headers are already known, as they are once a server
+has served anything nearby.
+
+| | First ever (p50 / p95) | Later, new tile (p50 / p95) | Read from the hosts |
+|---|---|---|---|
+| One tile, Texas (3DEP) | 0.9 / 1.2 s | 0.5 / 0.6 s | 2.7 MB |
+| One tile, Calgary (HRDEM + MRDEM) | 1.6 / 1.9 s | 0.7 / 0.9 s | 3.8 MB |
+| One tile, northern Alberta (MRDEM) | 1.7 / 2.1 s | 0.8 / 1.1 s | 3.1 MB |
+| One tile, Alps (GLO-30) | 0.8 / 1.7 s | 0.4 / 1.4 s | 3.4 MB |
+| A screen of 12 tiles | 1.0 to 3.4 s | | 4 to 24 MB |
+| A 100 km profile at 30 m | 1.9 to 4.8 s | | 16 to 61 MB |
+
+The megabytes matter more than the milliseconds on a slow line: the sources store elevation in
+blocks much larger than a tile, so a cold screen is 4 to 24 MB of download. On a 20 Mbit/s
+uplink that alone is 2 to 10 s.
 
 ## What these do not do
 

@@ -51,6 +51,9 @@ func (s *state) verify(ctx context.Context) error {
 		if f := hooks.elevationCheck(); f != nil {
 			path := filepath.Join(s.genDir, "terrain.pmtiles")
 			for _, r := range s.opt.Regions {
+				if r.TerrainOnDemand {
+					continue // nothing deep was built to sample: its elevations are read on demand
+				}
 				c := r.BBox.Center()
 				err := f(ctx, path, [][2]float64{c})
 				ch := Check{Name: "elevation", Region: r.ID, OK: err == nil, Detail: fmt.Sprintf("at %.4f,%.4f", c[0], c[1])}

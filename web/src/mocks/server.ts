@@ -17,6 +17,7 @@ import type {
   LonLat,
   NewKey,
   NewRegion,
+  OnDemandStatus,
   Overview,
   RefreshSetting,
   Region,
@@ -39,6 +40,8 @@ export interface MockOptions {
   oddGenerations?: boolean;
   /** Whether the registry has a newer image than the one "running". */
   update?: "available" | "current" | "off";
+  /** On-demand terrain: a DEM host stopped answering (the Overview's warning state). */
+  onDemandFailing?: boolean;
   /** Start already signed in. */
   authed?: boolean;
   /** Milliseconds per simulated build tick; 0 = never tick on a timer (tests drive builds
@@ -69,6 +72,10 @@ interface State {
   keys: ApiKey[];
   limits: LimitsConfig;
   update: "available" | "current" | "off";
+  /** On-demand terrain: what the operator set, whether the cache was cleared, a failing host. */
+  ondemand: OnDemandStatus["config"];
+  ondemandCleared: boolean;
+  ondemandFailing: boolean;
   schedule: Schedule;
   tickMs: number;
   latencyMs?: number;
@@ -146,6 +153,9 @@ export function resetMock(opts: MockOptions = {}) {
     keys: empty ? [] : fx.apiKeys(),
     limits: fx.limitsConfig(),
     update: opts.update ?? "current",
+    ondemand: { outside: "off", cache_mb: 5000 },
+    ondemandCleared: false,
+    ondemandFailing: !!opts.onDemandFailing,
     schedule: {
       cron: "0 3 * * 0",
       enabled: true,
@@ -590,6 +600,7 @@ function regionOut(r: Region): Region {
     : null;
   return {
     ...r,
+    terrain_mode: r.terrain_mode ?? "prebuilt",
     refresh_policy: resolvePolicy(own, S.schedule, new Date(own.handledAt), new Date(), {
       last_checked_at: ("last_checked_at" in own ? own.last_checked_at : undefined) ?? null,
       last_check: "last_check" in own ? own.last_check : undefined,
@@ -599,6 +610,29 @@ function regionOut(r: Region): Region {
   };
 }
 on("GET", /^\/admin\/api\/regions$/, () => ({ regions: S.regions.map(regionOut) }));
+// On-demand terrain: the configuration is kept, the cache and counters are a fixture.
+function ondemandStatus(): OnDemandStatus {
+  const regions = S.regions.filter((r) => r.terrain_mode === "on_demand").map((r) => r.id);
+  return fx.onDemandStatus(S.ondemand, regions, S.ondemandCleared, S.ondemandFailing);
+}
+on("GET", /^\/admin\/api\/ondemand$/, () => ondemandStatus());
+on("PUT", /^\/admin\/api\/ondemand$/, (_m, b) => {
+  const c = b as Partial<OnDemandStatus["config"]>;
+  if (c.outside !== undefined && c.outside !== "off" && c.outside !== "on_demand")
+    return json(400, {
+      error: { code: "bad_request", message: 'outside must be "off" or "on_demand"' },
+    });
+  if (c.cache_mb !== undefined && (c.cache_mb < 64 || c.cache_mb > 4000000))
+    return json(400, {
+      error: { code: "bad_request", message: "cache_mb must be between 64 and 4000000" },
+    });
+  S.ondemand = { ...S.ondemand, ...c };
+  return ondemandStatus();
+});
+on("POST", /^\/admin\/api\/ondemand\/clear$/, () => {
+  S.ondemandCleared = true;
+  return ondemandStatus();
+});
 on("POST", /^\/admin\/api\/regions\/check$/, () => {
   const now = new Date().toISOString();
   for (const r of S.regions) {
@@ -616,6 +650,14 @@ on("PATCH", /^\/admin\/api\/regions\/(.+)$/, (m, b) => {
   const id = decodeURIComponent(m[1]);
   const r = S.regions.find((x) => x.id === id);
   if (!r) return json(404, { error: { code: "not_found", message: "not found" } });
+  const tm = (b as { terrain_mode?: string }).terrain_mode;
+  if (tm !== undefined) {
+    if (tm !== "prebuilt" && tm !== "on_demand")
+      return json(400, {
+        error: { code: "bad_terrain_mode", message: "terrain_mode must be prebuilt or on_demand" },
+      });
+    r.terrain_mode = tm;
+  }
   const p = (b as { refresh_policy?: RefreshSetting }).refresh_policy;
   if (p) {
     if (p.mode === "cron" && !/^(\S+\s+){4}\S+$/.test((p.cron ?? "").trim()))
@@ -652,6 +694,7 @@ on("POST", /^\/admin\/api\/regions$/, (_m, b) => {
       data_date: null,
       downloaded_at: null,
       elevation_sources: c.elevation_sources.slice(0, 2),
+      terrain_mode: nr.terrain_mode ?? "prebuilt",
     };
   } else {
     const slug =
@@ -672,6 +715,7 @@ on("POST", /^\/admin\/api\/regions$/, (_m, b) => {
       data_date: null,
       downloaded_at: null,
       elevation_sources: [sourceAt([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]).source],
+      terrain_mode: nr.terrain_mode ?? "prebuilt",
     };
   }
   S.regions.push(r);
@@ -1101,6 +1145,7 @@ function overview(): Overview {
       },
     };
   };
+  const od = ondemandStatus();
   const gensBytes = S.generations.reduce((n, g) => n + g.manifest.sizes.total, 0);
   const downloads = S.regions.reduce((n, r) => n + r.extract_bytes, 0);
   const parts = [
@@ -1111,6 +1156,7 @@ function overview(): Overview {
     { name: "Build caches and scratch", bytes: S.jobs.length ? 4.1e9 : 0 },
     { name: "Raster tile cache", bytes: up ? 1.8e9 : 0 },
     { name: "Offline pack cache", bytes: up ? 0.3e9 : 0 },
+    { name: "On-demand terrain cache", bytes: od.cache.bytes },
     { name: "Logs", bytes: 6.5e6 },
     { name: "Database", bytes: 1.2e6 },
   ].sort((a, b) => b.bytes - a.bytes);
@@ -1121,6 +1167,7 @@ function overview(): Overview {
     commit: "7efee20a1b2c",
     started_at: new Date(mockStarted).toISOString(),
     update: mockUpdate(),
+    ondemand: od.enabled || od.cache.bytes > 0 ? od : null,
     ready: up,
     readiness: [
       {

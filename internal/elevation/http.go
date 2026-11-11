@@ -23,6 +23,16 @@ const (
 // Handler serves the elevation HTTP API.
 type Handler struct {
 	Svc Service
+	// Context, if set, returns the context a request's sampling runs under. Core uses it to
+	// attach what a cold on-demand read costs the caller (rate limits).
+	Context func(r *http.Request) context.Context
+}
+
+func (h *Handler) ctx(r *http.Request) context.Context {
+	if h.Context != nil {
+		return h.Context(r)
+	}
+	return r.Context()
 }
 
 // NewHandler returns the HTTP handler set for svc.
@@ -53,7 +63,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func apiError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
+	var lim *LimitedError
 	switch {
+	case errors.As(err, &lim):
+		// A cold on-demand request met a rate limit (nothing was fetched).
+		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(lim.RetryAfter.Seconds())))))
+		status = http.StatusTooManyRequests
+	case errors.Is(err, ErrSourceUnavailable):
+		// On-demand terrain could not reach a DEM host. Never cached: retry later.
+		w.Header().Set("Retry-After", "30")
+		status = http.StatusGatewayTimeout
+	case errors.Is(err, ErrTooLarge):
+		status = http.StatusRequestEntityTooLarge
 	case errors.Is(err, ErrUnavailable):
 		status = http.StatusServiceUnavailable
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -114,7 +135,7 @@ func (h *Handler) points(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := h.Svc.Points(r.Context(), req.Points)
+	res, err := h.Svc.Points(h.ctx(r), req.Points)
 	if err != nil {
 		apiError(w, wrapInternal(err))
 		return
@@ -137,7 +158,8 @@ func usedSources(svc Service, res []Sample) []SourceInfo {
 }
 
 func wrapInternal(err error) error {
-	if errors.Is(err, ErrUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, ErrUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrSourceUnavailable) || errors.Is(err, ErrTooLarge) || errors.As(err, new(*LimitedError)) {
 		return err
 	}
 	return &internalError{err}
@@ -209,7 +231,7 @@ func (h *Handler) profile(w http.ResponseWriter, r *http.Request) {
 	if req.IntervalM > 0 && req.IntervalM < 1 {
 		req.IntervalM = 1
 	}
-	p, err := h.Svc.Profile(r.Context(), path, ProfileOptions{IntervalM: req.IntervalM, Samples: req.Samples, HysteresisM: req.HysteresisM, SmoothWindowM: req.SmoothWindowM, Bridges: req.Bridges})
+	p, err := h.Svc.Profile(h.ctx(r), path, ProfileOptions{IntervalM: req.IntervalM, Samples: req.Samples, HysteresisM: req.HysteresisM, SmoothWindowM: req.SmoothWindowM, Bridges: req.Bridges})
 	if err != nil {
 		apiError(w, wrapInternal(err))
 		return
@@ -274,7 +296,7 @@ func (h *Handler) google(w http.ResponseWriter, r *http.Request) {
 			fail(http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("At most %d locations per request.", MaxGoogleCount))
 			return
 		}
-		samples, err = h.Svc.Points(r.Context(), pts)
+		samples, err = h.Svc.Points(h.ctx(r), pts)
 	case path != "":
 		pts, perr := parseGoogleCoords(path)
 		if perr != nil {
@@ -295,7 +317,7 @@ func (h *Handler) google(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var p *Profile
-		p, err = h.Svc.Profile(r.Context(), pts, ProfileOptions{Samples: n})
+		p, err = h.Svc.Profile(h.ctx(r), pts, ProfileOptions{Samples: n})
 		if p != nil {
 			samples = p.Samples
 		}
@@ -304,11 +326,24 @@ func (h *Handler) google(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		if errors.Is(err, ErrUnavailable) {
+		var lim *LimitedError
+		switch {
+		case errors.Is(err, ErrUnavailable):
 			fail(http.StatusOK, "DATA_NOT_AVAILABLE", "No elevation data is loaded.")
-			return
+		case errors.As(err, &lim):
+			// Google's own word for "slow down".
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(lim.RetryAfter.Seconds())))))
+			fail(http.StatusTooManyRequests, "OVER_QUERY_LIMIT", lim.Message)
+		case errors.Is(err, ErrSourceUnavailable):
+			// On-demand terrain could not reach a DEM host. Google documents UNKNOWN_ERROR
+			// as "a server error; the request may succeed if you try again", which is this.
+			w.Header().Set("Retry-After", "30")
+			fail(http.StatusGatewayTimeout, "UNKNOWN_ERROR", "Elevation data for this area is read on demand and its source did not answer. Try again shortly.")
+		case errors.Is(err, ErrTooLarge):
+			fail(http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		default:
+			fail(http.StatusInternalServerError, "UNKNOWN_ERROR", err.Error())
 		}
-		fail(http.StatusInternalServerError, "UNKNOWN_ERROR", err.Error())
 		return
 	}
 	resp := googleResponse{Status: "OK", Results: make([]googleResult, len(samples))}

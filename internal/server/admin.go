@@ -1074,6 +1074,9 @@ type regionJSON struct {
 	AddedAt          time.Time       `json:"added_at"`
 	RefreshPolicy    refreshJSON     `json:"refresh_policy"`
 	RefreshCost      refreshCostJSON `json:"refresh_cost"`
+	// TerrainMode is "prebuilt" (the build makes the region's terrain) or "on_demand" (only
+	// its low zooms are built; the rest is read from the DEM hosts when asked for).
+	TerrainMode string `json:"terrain_mode"`
 }
 
 // refreshJSON is a region's refresh setting, what it resolves to, and where it stands.
@@ -1173,7 +1176,7 @@ var (
 
 func (s *Server) regionView(rg *store.Region, rc regionContext) regionJSON {
 	v := regionJSON{ID: rg.ID, Name: rg.Name, Parent: rg.Parent, BBox: rg.BBox, Status: "pending",
-		ElevationSources: []string{}, Refresh: rg.Refresh, AddedAt: rg.AddedAt}
+		ElevationSources: []string{}, Refresh: rg.Refresh, AddedAt: rg.AddedAt, TerrainMode: rg.TerrainMode}
 	if rg.Kind == "extract" {
 		id := rg.ID
 		v.CatalogID = &id
@@ -1309,11 +1312,16 @@ func (s *Server) addRegion(w http.ResponseWriter, r *http.Request) {
 		BBox    []float64       `json:"bbox"`
 		Polygon json.RawMessage `json:"polygon"`
 		Refresh *bool           `json:"refresh"`
+		// TerrainMode: "prebuilt" (default) or "on_demand".
+		TerrainMode string `json:"terrain_mode"`
 	}
 	if !readJSON(w, r, &b) {
 		return
 	}
-	rg := &store.Region{Refresh: true, Parent: b.Parent, Meta: json.RawMessage("{}")}
+	if !s.terrainModeOK(w, r, &b.TerrainMode) {
+		return
+	}
+	rg := &store.Region{Refresh: true, Parent: b.Parent, Meta: json.RawMessage("{}"), TerrainMode: b.TerrainMode}
 	if b.Refresh != nil {
 		rg.Refresh = *b.Refresh
 	}
@@ -1400,7 +1408,33 @@ func (s *Server) addRegion(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
+	s.regionsChanged(r.Context())
 	writeJSON(w, http.StatusCreated, s.regionView(saved, s.regionContext(r.Context())))
+}
+
+// terrainModeOK checks a terrain_mode from a request ("" = prebuilt) and answers 400 for one
+// it cannot honour.
+func (s *Server) terrainModeOK(w http.ResponseWriter, r *http.Request, mode *string) bool {
+	switch *mode {
+	case "", store.TerrainPrebuilt:
+		*mode = store.TerrainPrebuilt
+		return true
+	case store.TerrainOnDemand:
+		if s.d.OnDemand == nil {
+			writeError(w, r, http.StatusBadRequest, "bad_terrain_mode", "on-demand terrain is not part of this server")
+			return false
+		}
+		return true
+	}
+	writeError(w, r, http.StatusBadRequest, "bad_terrain_mode", "terrain_mode must be prebuilt or on_demand")
+	return false
+}
+
+// regionsChanged tells on-demand terrain that the regions (or their terrain modes) changed.
+func (s *Server) regionsChanged(ctx context.Context) {
+	if s.d.OnDemand != nil {
+		s.d.OnDemand.Refresh(ctx)
+	}
 }
 
 // patchRegion: PATCH /admin/api/regions/{id} {refresh_policy:{mode,cron,window,only_changed}}
@@ -1415,9 +1449,23 @@ func (s *Server) patchRegion(w http.ResponseWriter, r *http.Request) {
 			Window      string `json:"window"`
 			OnlyChanged *bool  `json:"only_changed"`
 		} `json:"refresh_policy"`
+		// TerrainMode: "prebuilt" or "on_demand". It takes effect for tiles and elevation at
+		// once where no built terrain covers; the next build drops (or adds) the region's
+		// deep terrain.
+		TerrainMode *string `json:"terrain_mode"`
 	}
 	if !readJSON(w, r, &b) {
 		return
+	}
+	if b.TerrainMode != nil {
+		if !s.terrainModeOK(w, r, b.TerrainMode) {
+			return
+		}
+		if err := s.d.Store.SetRegionTerrain(r.Context(), r.PathValue("id"), *b.TerrainMode); err != nil {
+			storeError(w, r, err)
+			return
+		}
+		s.regionsChanged(r.Context())
 	}
 	if p := b.RefreshPolicy; p != nil {
 		mode := strings.ToLower(strings.TrimSpace(p.Mode))
@@ -1480,6 +1528,7 @@ func (s *Server) deleteRegion(w http.ResponseWriter, r *http.Request) {
 		storeError(w, r, err)
 		return
 	}
+	s.regionsChanged(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
 

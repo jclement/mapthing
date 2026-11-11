@@ -1,6 +1,7 @@
 import { AlertTriangle, ExternalLink, Lock } from "lucide-react";
 import { useState } from "react";
 import { api, type Setting } from "../api";
+import { OnDemandSettings } from "../components/OnDemand";
 import { Badge, Card, cx, ErrorNote, Page, PageHeader, Segmented, Spinner } from "../components/ui";
 import { countSet, groupSettings, shownValue, UNRECOGNISED } from "../lib/settings";
 import { useApi } from "../lib/useApi";
@@ -8,6 +9,10 @@ import { useApi } from "../lib/useApi";
 export function SettingsPage() {
   const s = useApi(() => api.settings(), []);
   const sys = useApi(() => api.system(), []);
+  // On-demand terrain is the one thing set here rather than in the environment. A server that
+  // serves neither tiles nor elevation has none (503): the section is then left out.
+  const od = useApi(() => api.ondemand(), [], 10000);
+  const regions = useApi(() => api.regions(), []);
   const [show, setShow] = useState<"all" | "set">("all");
 
   return (
@@ -18,7 +23,7 @@ export function SettingsPage() {
           <>
             How this server is configured, and what it is running. Settings come from the
             container's environment: change them in your <code className="font-mono">.env</code> or
-            compose file and restart the container. Nothing can be changed here.
+            compose file and restart the container. Only on-demand terrain is changed here.
           </>
         }
         actions={
@@ -56,6 +61,15 @@ export function SettingsPage() {
               </tbody>
             </table>
           </Card>
+
+          {od.data && (
+            <OnDemandSettings
+              status={od.data}
+              regions={regions.data?.regions ?? []}
+              freeBytes={sys.data?.disk.free_bytes}
+              onChange={(st) => od.setData(() => st)}
+            />
+          )}
 
           {groupSettings(s.data.settings, show === "set").map((g) => (
             <Card

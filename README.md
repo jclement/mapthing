@@ -27,6 +27,10 @@ live. To put it on the internet under your own hostname, follow
 - **Routing** (Valhalla): car and truck, with sensible handling of gravel and unpaved roads.
 - **Elevation** at points and along paths, from the best open DEM for each area (USGS 3DEP in
   the US, NRCan and provincial data in Canada, Copernicus elsewhere).
+- **On-demand terrain**, as an option: a region's terrain, or terrain for the whole world
+  outside your regions, read from the public DEM files the first time a place is asked for and
+  cached, instead of built ahead. Off unless you turn it on
+  ([docs/operations.md](docs/operations.md#on-demand-terrain)).
 - **Compatibility endpoints**, so existing clients can switch by changing a URL: Google
   Elevation API, Google Routes `computeRoutes`, Mapbox Static Tiles URLs, and OpenRouteService
   v2. [docs/switching.md](docs/switching.md) says exactly what switches by changing the host,
@@ -48,6 +52,11 @@ Whole-country builds, from measurements of regional builds plus published data
 
 Terrain (elevation) dominates both build time and disk. An offline pack for a ~100×150 km basin
 at full detail is ~20 MB; a state or province at z14 is 100–470 MB.
+
+A region whose terrain is set to **on demand** skips almost all of that: the build makes only its
+zoomed-out terrain (Texas: 12 MB in about a minute, instead of gigabytes over hours), and the
+rest is fetched when first viewed, about a second per screen, into a cache you size. Map tiles
+and routing are always built.
 
 ## Stack
 

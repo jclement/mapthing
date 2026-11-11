@@ -56,6 +56,9 @@ renderer or without a basemap (`MAPTHING_RENDERER`, `MAPTHING_SERVE`). See
                               retention never touches any other directory
   current -> generations/<gen-id>   atomic symlink swap
   imagery-cache/              cached satellite imagery tiles (bounded LRU)
+  ondemand-cache/             on-demand terrain: fetched tiles, source blocks and headers (bounded LRU;
+                              empty unless on demand is turned on)
+  ondemand/versions.json      on-demand terrain: the version (ETag) of each DEM file read
   logs/                       the server's log: log-current.jsonl and rotated log-<id>.jsonl
                               segments, bounded in total by MAPTHING_LOG_MAX_MB (see Logs)
 ```
@@ -124,7 +127,8 @@ Admin (session cookie):
 | DELETE | `/admin/api/generations/{id}` | delete a generation directory for good. 204; 404 `no_generation`; 409 `live` (the one being served: activate another first) or `busy` (a build is writing it, or it is being activated). Unlike retention it also deletes a generation this server does not own. |
 | POST | `/admin/api/generations/{id}/activate` | validate `<data>/generations/{id}` and make it live: routing graph up as a standby, the atomic swap, then the routing switch (the standby is discarded if the swap fails), then retention. 200 `{id, status:"live", already_live, previous, removed[]}`; idempotent. Refusals leave the live generation serving: 404 `no_generation`, 409 `busy`, 422 `invalid_generation` (`error.problems[]`) or `routing_failed`, 500 if `current` cannot be moved. |
 | GET/PUT | `/admin/api/schedule` | the default refresh schedule (cron expression, weekly Sunday 03:00 UTC unless changed; build window; only-when-changed) for regions without a setting of their own |
-| PATCH | `/admin/api/regions/{id}` | a region's own refresh setting (`refresh_policy`: never, daily, weekly, monthly, a cron expression or the default; build window; only-when-changed) |
+| PATCH | `/admin/api/regions/{id}` | a region's own refresh setting (`refresh_policy`: never, daily, weekly, monthly, a cron expression or the default; build window; only-when-changed), and how its terrain is provided (`terrain_mode`: `prebuilt` or `on_demand`) |
+| GET/PUT | `/admin/api/ondemand` | on-demand terrain: status (cache use, counters, health of each DEM host) and its two settings; `POST …/clear` empties its cache |
 | POST | `/admin/api/regions/check` | ask each region's source now whether it has newer data; builds nothing |
 | GET/POST/DELETE | `/admin/api/keys[/{id}]` | API keys: label, created, last used, limits (requests/min, requests/day, allowed origins), usage. The secret is shown once at creation; only a SHA-256 hash is stored. |
 | GET | `/admin/api/stats` | tiles/routes/elevation calls by key and by day, cache hit rates, disk per generation and region, RAM, subprocess state |
@@ -153,6 +157,12 @@ internal/pmtiles      the one PMTiles v3 implementation: reader (leaf cache), wr
 internal/tiles        z/x/y serving, TileJSON, styles, packs, imagery proxy, raster proxy
 internal/routing      Router interface; Valhalla client; Google Routes compatibility
 internal/elevation    Service interface; terrain tile reader; profiles; Google Elevation compatibility
+internal/cog          reads blocks of cloud-optimised GeoTIFFs by byte range (tiled TIFF/BigTIFF, LZW or
+                      Deflate, overviews); no GDAL
+internal/ondemand     on-demand terrain: tiles built at request time from the public DEM files, with
+                      a versioned disk cache, capped and merged upstream requests, and the manager
+                      (settings, policy, status) the server and tile server talk to
+internal/diskcache    the bounded least-recently-used file cache (raster, imagery, packs, on demand)
 internal/contours     terrain.pmtiles → contours.pmtiles (marching squares, MVT encoder)
 internal/server       HTTP routes, embedding web/dist
 web/                  admin UI (React + Vite + Tailwind + MapLibre GL JS), built into web/dist
@@ -356,6 +366,38 @@ reads `/data/current/terrain.pmtiles` and reopens it within 2 s of a `current` s
 - `elevation.CoverageIDs(bbox)` / `CoverageFor(bbox)`: static, offline list of the sources
   expected in a bbox, for the catalog.
 
+**On-demand terrain** (`internal/ondemand`, `internal/cog`; operator's view in
+[operations.md](operations.md#on-demand-terrain)). Optional and off by default. Where the live
+archive has no tile, and the operator has set the region (or everything outside built regions)
+to on demand, the tile is built at request time: for each source in priority order, the file(s)
+covering the tile are found (1° cells for 3DEP and GLO-30, the STAC index for HRDEM, one file
+for MRDEM), the overview level matching the tile's pixel size is chosen, and the 1 to 4 blocks
+under the tile are read by HTTP range and resampled (bilinear, 2×2 supersampled when the level
+is finer than the tile); pixels a source leaves empty fall through to the next. The result is
+quantised and encoded exactly as the build encodes a tile. Contracts:
+
+- `tiles.Options.OnDemand` (`tiles.OnDemandTerrain`): asked by the terrain tile handler only
+  for a tile the archive does not have. Built terrain wins per tile.
+- `elevation.Terrain.SetFallback(elevation.Fallback)`: asked only about points the archive
+  cannot answer, at zoom 13, after fetching every tile a request needs together (`Prepare`).
+  At most `elevation.MaxFallbackTiles` (600) per request.
+- Zooms 9 to 13 (`ondemand.MinZoom`, `MaxZoom`). Below 9 the build makes the tiles of an
+  on-demand region itself (`internal/build/terrain_ondemand.go`: the chunk-level tiles read
+  with the on-demand reader, then the usual pyramid), and records the region in the archive's
+  `on_demand` metadata.
+- Cache (`internal/diskcache` under `<data>/ondemand-cache`): `tile/z/x/y` (8 bytes of version,
+  then the PNG; empty = no data there), `src/<file id>/b/<level>-<col>-<row>` (a source block
+  as fetched) and `src/<file id>/m/<offset>` (a 64 KB page of a file's header or block index).
+  A tile's version is a hash of the ETags of every file that could contribute to it; a file
+  id is a hash of its URL and ETag. ETags are re-read after 24 h; a stale one stands while the
+  host cannot be reached.
+- Upstream (`ondemand.Upstream`): the only door to the DEM hosts. Caps (16 in flight, 8 per
+  host), a 20 s timeout per attempt, 3 attempts with backoff, a `User-Agent` naming mapthing and
+  its repository, and per-host health for the Overview. Any failure fails the request
+  (`elevation.ErrSourceUnavailable` → 504) and stores nothing.
+- Cost: the first cold fetch of a keyed request calls `auth.Surcharge(ctx, "ondemand")`
+  (`ondemand.WithGate`); a refusal is `elevation.LimitedError` → 429.
+
 ## Contours
 
 `internal/contours.Build(terrainPath, outPath)` turns the generation's `terrain.pmtiles` into
@@ -452,6 +494,7 @@ asks for routes. Requests made from the admin UI (a session, no key) are never l
 | `valhalla` | pass-through actions with no kind of their own (map matching, expansion, centroid, status) | 10 | 60, 120 |
 | `matrix`, `isochrone` | | 20 | 10, 20 |
 | `pack` | offline pack downloads | 50 | 2, 4 |
+| `ondemand` | charged **on top of** a terrain tile or elevation request that has to read from the public DEM hosts (on-demand terrain not yet cached); a cached answer does not pay it | 20 | 20, 40 |
 
 The Valhalla pass-through (`/api/v1/valhalla/{action}`) is charged as the operation it runs,
 so an alias never gets past an endpoint's cost or server limit: `route` as `route`,
@@ -813,6 +856,11 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
 
   `POST` `{label, ...limits}` → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` `/admin/api/keys/{id}` → key (a field left out is unchanged; null or 0 removes that limit; 400 for a negative, fractional-where-whole or non-numeric value); `DELETE` → 204 (revoked at once).
 - `GET`/`PUT /admin/api/limits` → `{weights,global,kinds,defaults}` (see Rate limits; 400 `bad_limits`).
+- On-demand terrain (`docs/operations.md`, "On-demand terrain"; 503 `unavailable` on a server that serves neither tiles nor elevation):
+  `GET /admin/api/ondemand` → `{config:{outside:"off"|"on_demand",cache_mb},enabled,regions:[id…],minzoom,maxzoom,cache:{bytes,max_bytes,entries},counters:{hits,built,failed,limited,requests,bytes},upstream:[{host,requests,failures,bytes,last_ok?,last_error?,error?,healthy}],sources:[source+{host}],healthy,warm}`;
+  `PUT /admin/api/ondemand` `{outside?,cache_mb?}` → the same (400 `bad_request`); `POST /admin/api/ondemand/clear` → the same, cache emptied.
+  A region carries `terrain_mode:"prebuilt"|"on_demand"`; `POST /admin/api/regions` and `PATCH /admin/api/regions/{id}` take it (400 `bad_terrain_mode`).
+  The overview carries `ondemand` (the same status, or `null` while it is off everywhere and its cache is empty).
 - `GET /admin/api/stats?days=30` → `{daily:[{date,tiles,raster,routes,elevation,packs}],by_key:[{key_id,label,requests}],cache:[{name,hits,misses,size_bytes}],disk:{generations:[{id,bytes}],regions:[{id,name,bytes}],downloads_bytes,elevation_cache_bytes,imagery_cache_bytes,free_bytes,total_bytes},memory:{process_rss_bytes,system_used_bytes,system_total_bytes},processes:[{name,state:"running"|"starting"|"restarting"|"stopped",pid|null,uptime_s,restarts,rss_bytes}]}`
   (+ *extra* disk `raster_cache_bytes,pack_cache_bytes,database_bytes`, process `detail,healthy`). Usage kinds map to buckets: tile→tiles, raster→raster, pack→packs, elevation→elevation, everything else (route, matrix, snap, isochrone, valhalla, compat)→routes; `raster-internal` is not shown. `key_id` "0" is the admin UI.
 - `GET /admin/api/overview` → `{version,commit,started_at,ready,readiness,generation:{id,created_at,bytes,sizes,regions:[{id,name,data_date,bbox}]}|null,regions_installed,processes:[process],system:{cpus,load1,memory_used_bytes,memory_total_bytes,platform},traffic:{since,kinds:[{kind,hour:window,day:window,series:[60 per-minute counts]}]},disk:{total_bytes,free_bytes,data_bytes,parts:[{name,bytes}],guard:{known,need_bytes?,ok?}},builds:{schedule_enabled,cron,next_run,active:job|null,last:{id,status,trigger,started_at,finished_at,duration_s,error,generation_id}|null}}`.
