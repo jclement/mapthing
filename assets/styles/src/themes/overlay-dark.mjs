@@ -1,6 +1,7 @@
 // overlay-dark: the overlay basemap for dark application chrome. Cool charcoal land, dark slate
-// water, near-neutral vegetation; roads lighten with rank. Built so light and saturated data
-// colours (cyan, orange, light grey, green) read on top. POI icons are off.
+// water, near-neutral vegetation; roads lighten with rank, and motorways alone carry a hue (a
+// muted gold) so the main routes can be picked out of a city grid. Built so light and saturated
+// data colours (cyan, orange, light grey, green) read on top. POI icons are off.
 import { base } from "./_base.mjs";
 import { ex } from "../layers.mjs";
 import { streams, thinShields } from "./_roads.mjs";
@@ -26,7 +27,10 @@ export default {
     sand: "#22221f",
     beach: "#242421",
     hospital: "#201e1f",
-    industrial: "#201f1e", // well pads: neutral, not the cool slate of the water
+    // well pads and yards: a warm grey clearly above the land (it was two steps of lightness
+    // from it and could not be seen), still neutral so it is not taken for water, and still
+    // below every road so lease roads read across a pad
+    industrial: "#2f2e2b",
     school: "#201f1d",
     pedestrian: "#212325",
     aerodrome: "#1f2123",
@@ -58,8 +62,10 @@ export default {
     minor_a: "#464b51",
     minor_b: "#464b51",
     link: "#5a6066",
-    major: "#5a6066",
-    highway: "#6a7178",
+    major: "#6f767d", // trunk to tertiary: a step above residential streets
+    // motorways: the one road class with a hue. Gold is none of the data colours (cyan, orange,
+    // light grey, green) and brighter than the taupe of tracks, which are thin and dashed.
+    highway: "#a09258",
     railway: "#43494e",
     boundaries: "#5a636b",
     bridges_other_casing: casing,
@@ -70,8 +76,8 @@ export default {
     bridges_other: "#33373b",
     bridges_minor: "#464b51",
     bridges_link: "#5a6066",
-    bridges_major: "#5a6066",
-    bridges_highway: "#6a7178",
+    bridges_major: "#6f767d",
+    bridges_highway: "#a09258",
     roads_label_minor: "#8c959b",
     roads_label_minor_halo: "#141617",
     roads_label_major: "#9ba4aa",

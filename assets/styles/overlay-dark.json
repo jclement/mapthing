@@ -282,7 +282,7 @@
     "industrial"
    ],
    "paint": {
-    "fill-color": "#201f1e"
+    "fill-color": "#2f2e2b"
    }
   },
   {
@@ -1889,7 +1889,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#5a6066",
+    "line-color": "#6f767d",
     "line-width": [
      "interpolate",
      [
@@ -1996,7 +1996,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#6a7178",
+    "line-color": "#a09258",
     "line-width": [
      "interpolate",
      [
@@ -2462,7 +2462,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#5a6066",
+    "line-color": "#6f767d",
     "line-width": [
      "interpolate",
      [
@@ -2563,7 +2563,7 @@
     ]
    ],
    "paint": {
-    "line-color": "#6a7178",
+    "line-color": "#a09258",
     "line-width": [
      "interpolate",
      [

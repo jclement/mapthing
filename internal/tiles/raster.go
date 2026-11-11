@@ -1,9 +1,12 @@
 package tiles
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -77,7 +80,9 @@ func (s *Server) handleRaster(w http.ResponseWriter, r *http.Request) {
 		scale = "@2x"
 	}
 	tail := fmt.Sprintf("%s/%s/%d/%d/%d%s.%s", name, size, z, x, y, scale, ext)
-	key := gen + "/" + tail
+	// The style's own revision is part of the key (and so of the ETag): a new version of
+	// mapthing with a changed style must not go on serving tiles drawn with the old one.
+	key := gen + "/" + s.styleRev(name) + "/" + tail
 	render := func() (body []byte, degraded bool, err error) {
 		ctx, cancel := detach(r.Context(), 90*time.Second)
 		defer cancel()
@@ -163,4 +168,19 @@ func serveCached(w http.ResponseWriter, r *http.Request, path, contentType, etag
 	h.Set("Cache-Control", tileCache)
 	h.Set("ETag", etag)
 	http.ServeContent(w, r, "", fi.ModTime(), f)
+}
+
+// styleRev is a short hash of a style's source, fixed for the life of the process (styles are
+// embedded in the binary).
+func (s *Server) styleRev(name string) string {
+	if v, ok := s.styleRevs.Load(name); ok {
+		return v.(string)
+	}
+	rev := "s0"
+	if b, err := fs.ReadFile(s.opt.Assets, "styles/"+name+".json"); err == nil {
+		sum := sha256.Sum256(b)
+		rev = "s" + hex.EncodeToString(sum[:4])
+	}
+	s.styleRevs.Store(name, rev)
+	return rev
 }

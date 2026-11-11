@@ -64,6 +64,7 @@ type Server struct {
 
 	styleOnce sync.Once
 	styleSet  map[string]bool
+	styleRevs sync.Map // style name → short hash of its source (raster cache key)
 
 	mu   sync.RWMutex
 	gen  string
