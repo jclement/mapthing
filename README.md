@@ -15,7 +15,8 @@ docker run -d --name mapthing -p 8080:8080 -v mapthing-data:/data \
 
 Open http://localhost:8080, sign in, add a region (a US state, a Canadian province, or a box you
 draw), and build it. When the build finishes the map, routing and elevation for that region are
-live.
+live. To put it on the internet under your own hostname, follow
+[docs/deploy.md](docs/deploy.md).
 
 ## What it serves
 
@@ -69,9 +70,10 @@ docker run -d --name mapthing --restart unless-stopped \
   ghcr.io/jclement/mapthing:latest
 ```
 
-With Docker Compose, and published through a Cloudflare Tunnel with no open ports, use the
-reference files in [`samples/`](samples/): `docker-compose.yaml` (mapthing plus a `cloudflared`
-sidecar) and `.env.example`. See [samples/README.md](samples/README.md) for the steps.
+**Deploying for real:** [docs/deploy.md](docs/deploy.md) is the step-by-step guide for Docker
+Compose behind a Cloudflare Tunnel (no open ports): creating the tunnel, the `.env`, the data
+folder, the first build, then updating, rolling back and backups. The files it uses are in
+[`samples/`](samples/).
 
 Everything mapthing keeps lives in `/data`: downloaded extracts, the built generations, the
 SQLite database (keys, schedule, history) and caches. The container runs as UID 10001; a named

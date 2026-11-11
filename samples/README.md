@@ -8,6 +8,9 @@ Tunnel, so the host needs no open ports or public IP.
 | `docker-compose.yaml` | mapthing (`ghcr.io/jclement/mapthing`) and a `cloudflared` sidecar |
 | `.env.example` | admin login, public URL, tunnel token; copy to `.env` |
 
+The full guide, with updating, rolling back, backups and troubleshooting, is
+[docs/deploy.md](../docs/deploy.md). In short:
+
 ## Steps
 
 1. **Create the tunnel.** Cloudflare dashboard: Zero Trust > Networks > Tunnels > Create a tunnel >
@@ -25,7 +28,8 @@ Tunnel, so the host needs no open ports or public IP.
 3. Open `https://<your hostname>/admin`, add regions and build. On the host itself the server is
    also at `http://127.0.0.1:8080`.
 
-**Update:** `docker compose pull && docker compose up -d`. To pin a release, set `MAPTHING_TAG`
+**Update:** `docker compose pull && docker compose up -d`. A build that is running is lost
+(the live map is not affected): check Overview first. To pin a release, set `MAPTHING_TAG`
 (for example `sha-242aefa`) in `.env`.
 
 **Sizing:** serving is small (2 vCPU and 4 GB is comfortable). Building runs in the same container
