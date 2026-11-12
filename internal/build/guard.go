@@ -266,10 +266,16 @@ func (s *state) guard(ctx context.Context) error {
 	mb := memoryBudget()
 	s.m.Memory = &mb
 	if mem := mb.Effective; mem > 0 {
-		s.logf("memory available: %s (host %s, container limit %s, %s)", humanBytes(mem),
-			humanBytes(mb.HostAvailable), humanBytes(mb.CgroupLimit), mb.Source)
-		if mem < 2<<30 {
-			return fmt.Errorf("only %s of memory available; a build needs at least 2 GiB", humanBytes(mem))
+		have := mb.guardMemory()
+		need := memoryNeed(e.InputBytes)
+		s.logf("memory available: %s (host %s, swap %s, container limit %s, %s); this build asks for %s",
+			humanBytes(mem), humanBytes(mb.HostAvailable), humanBytes(mb.SwapFree), humanBytes(mb.CgroupLimit),
+			mb.Source, humanBytes(need))
+		if need > 0 && have < need {
+			return fmt.Errorf("only %s of memory available (with swap); this build asks for about %s. "+
+				"Add memory or swap, build smaller regions, or set MAPTHING_MEMORY_GUARD_FACTOR below 1 "+
+				"(0 turns the check off) to accept the risk: if the routing graph build runs out of memory, "+
+				"the kernel may stop the live server too", humanBytes(have), humanBytes(need))
 		}
 	}
 	return nil

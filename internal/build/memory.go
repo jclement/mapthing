@@ -24,13 +24,14 @@ type MemBudget struct {
 	CgroupLimit   int64  `json:"cgroup_limit,omitempty"` // container limit, 0 = none
 	CgroupAnon    int64  `json:"cgroup_anon,omitempty"`  // non-reclaimable memory already in use in the container
 	Effective     int64  `json:"effective"`              // what sizing uses
+	SwapFree      int64  `json:"swap_free,omitempty"`    // host swap, counted by the build guard only
 	Source        string `json:"source"`                 // "host", "cgroup v2", "cgroup v1"
 }
 
 // memoryBudget returns min(host MemAvailable, container limit − memory the container already
 // holds (valhalla, renderer, this process)). Page cache is not counted as used: it is reclaimed.
 func memoryBudget() MemBudget {
-	b := MemBudget{HostAvailable: readMeminfo("MemAvailable"), Source: "host"}
+	b := MemBudget{HostAvailable: readMeminfo("MemAvailable"), SwapFree: readMeminfo("SwapFree"), Source: "host"}
 	b.Effective = b.HostAvailable
 	if lim, ok := readLimit(cgroupV2Max); ok {
 		b.CgroupLimit, b.Source = lim, "cgroup v2"
@@ -125,4 +126,36 @@ func parseJavaSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
 	return v * mult, nil
+}
+
+// memoryNeed is the memory a build asks for before it starts: about 768 MiB plus twice its OSM
+// input, at least 1 GiB and at most 2 GiB (Planetiler sizes itself to what there is and goes to
+// disk when short; Valhalla's graph build is what can run out), times
+// MAPTHING_MEMORY_GUARD_FACTOR. A factor of 0 turns the check off.
+func memoryNeed(inputBytes int64) int64 {
+	need := int64(768<<20) + 2*inputBytes
+	need = max(need, 1<<30)
+	need = min(need, 2<<30)
+	return int64(float64(need) * memoryGuardFactor())
+}
+
+// memoryGuardFactor reads MAPTHING_MEMORY_GUARD_FACTOR (default 1; 0 turns the check off;
+// invalid or negative → 1).
+func memoryGuardFactor() float64 {
+	if v := os.Getenv("MAPTHING_MEMORY_GUARD_FACTOR"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			return f
+		}
+	}
+	return 1
+}
+
+// guardMemory is what the build guard counts as available: the effective budget, plus free
+// swap when the container has no limit of its own (a little swapping during a build is fine;
+// Planetiler's sizing does not count swap).
+func (b MemBudget) guardMemory() int64 {
+	if b.CgroupLimit > 0 {
+		return b.Effective
+	}
+	return b.Effective + b.SwapFree
 }

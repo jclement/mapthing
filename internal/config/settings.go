@@ -65,6 +65,7 @@ var settingDefs = []settingDef{
 	{name: "MAPTHING_PACK_CACHE_MB", group: GroupLimits, def: "4096", help: "Disk cache of offline packs."},
 	{name: "MAPTHING_PACK_MAX_TILES", group: GroupLimits, def: "2000000", help: "The largest offline pack a client may ask for, in tiles."},
 
+	{name: "MAPTHING_MEMORY_GUARD_FACTOR", group: GroupBuild, def: "1", help: "Multiplies the memory a build asks for before it starts (768 MiB plus twice its OSM input, 1 to 2 GiB; swap counts). Below 1 accepts the risk; 0 turns the check off."},
 	{name: "MAPTHING_DISK_GUARD_FACTOR", group: GroupBuild, def: "1", help: "Multiplies the free disk a build asks for before it starts. Below 1 accepts the risk of running out."},
 	{name: "MAPTHING_PLANETILER_XMX", group: GroupBuild, def: "60% of available memory", help: "Java heap for the basemap build, for example 12g."},
 	{name: "MAPTHING_WATER_POLYGONS_URL", group: GroupBuild, def: "osmdata.openstreetmap.de", sensitive: true, help: "Mirror for the ocean polygons the basemap build downloads once."},

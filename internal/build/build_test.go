@@ -653,6 +653,45 @@ func TestMemoryBudget(t *testing.T) {
 	}
 }
 
+func TestMemoryNeed(t *testing.T) {
+	t.Setenv("MAPTHING_MEMORY_GUARD_FACTOR", "")
+	for _, tt := range []struct {
+		input, want int64
+	}{
+		{0, 1 << 30},                   // floor
+		{50 << 20, 1 << 30},            // a basin box: 868 MiB, raised to the floor
+		{300 << 20, 768<<20 + 600<<20}, // Alberta-sized: 1.34 GiB
+		{2 << 30, 2 << 30},             // a big state: capped at the old 2 GiB
+	} {
+		if got := memoryNeed(tt.input); got != tt.want {
+			t.Errorf("memoryNeed(%d) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+	t.Setenv("MAPTHING_MEMORY_GUARD_FACTOR", "0.5")
+	if got := memoryNeed(0); got != 512<<20 {
+		t.Errorf("factor 0.5: %d", got)
+	}
+	t.Setenv("MAPTHING_MEMORY_GUARD_FACTOR", "0")
+	if got := memoryNeed(5 << 30); got != 0 {
+		t.Errorf("factor 0 should turn the check off: %d", got)
+	}
+	t.Setenv("MAPTHING_MEMORY_GUARD_FACTOR", "-3")
+	if got := memoryNeed(0); got != 1<<30 {
+		t.Errorf("negative factor should fall back to 1: %d", got)
+	}
+}
+
+func TestGuardMemoryCountsSwapOnlyWithoutLimit(t *testing.T) {
+	host := MemBudget{Effective: 800 << 20, SwapFree: 2 << 30, Source: "host"}
+	if got := host.guardMemory(); got != 800<<20+2<<30 {
+		t.Errorf("host: %d", got)
+	}
+	limited := MemBudget{Effective: 800 << 20, SwapFree: 2 << 30, CgroupLimit: 1 << 30, Source: "cgroup v2"}
+	if got := limited.guardMemory(); got != 800<<20 {
+		t.Errorf("cgroup limit: %d", got)
+	}
+}
+
 func TestParseJavaSize(t *testing.T) {
 	for in, want := range map[string]int64{"4g": 4 << 30, "4096m": 4 << 30, "512M": 512 << 20, "1073741824": 1 << 30} {
 		if got, err := parseJavaSize(in); err != nil || got != want {

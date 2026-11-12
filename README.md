@@ -113,6 +113,8 @@ refuses to start, with a clear message, when the data volume is too small.
 | `MAPTHING_UPDATE_IMAGE` | `ghcr.io/jclement/mapthing:<MAPTHING_TAG or latest>` | The image and tag to compare with, if you run a copy from another registry |
 | `MAPTHING_LOG_MAX_MB` | `50` | total size of the log files kept in `/data/logs` (the admin Logs page reads them) |
 | `MAPTHING_SERVE` | `tiles,routing,elevation` | what this server serves; `routing,elevation` makes a backend that needs no basemap |
+| `MAPTHING_MEMORY_GUARD_FACTOR` | `1` | a build asks for 768 MiB plus twice its OSM input (1–2 GiB) of free memory, swap included; below 1 accepts the risk, `0` turns the check off |
+| `MAPTHING_DISK_GUARD_FACTOR` | `1` | multiplies the free disk a build asks for; below 1 accepts the risk |
 
 **Building on one machine and serving on another.** `mapthing-build -regions-file … -out DIR`
 writes a complete generation to a directory; a server adopts a copy of it with
