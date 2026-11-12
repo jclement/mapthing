@@ -168,6 +168,12 @@ func (m *Manager) Tile(ctx context.Context, z, x, y int) ([]byte, bool, error) {
 	return m.Svc.Tile(ctx, z, x, y)
 }
 
+// Has implements the tile server's on-demand hook: the tile is in the cache.
+func (m *Manager) Has(z, x, y int) bool {
+	_, ok := m.cache.Get(tileKey(z, x, y))
+	return ok
+}
+
 // Bounds returns the box on demand applies to (the world, or the union of
 // the on-demand regions), and false when it applies nowhere.
 func (m *Manager) Bounds() (elevation.BBox, bool) {

@@ -6,10 +6,12 @@ import {
   cacheFill,
   cacheHitRate,
   cacheSizeProblem,
+  estimateSummary,
   gbToMb,
   hostState,
   mbToGb,
   onDemandTerrainBytes,
+  parseBox,
   sortedHosts,
   terrainMode,
 } from "../lib/ondemand";
@@ -70,6 +72,30 @@ describe("on-demand logic", () => {
     expect(cacheSizeProblem(99999)).not.toBe("");
   });
 
+  it("reads a typed box and puts an estimate into words", () => {
+    expect(parseBox("-104.2, 31, -101.2 33.2")).toEqual([-104.2, 31, -101.2, 33.2]);
+    expect(parseBox("1, 2, 3")).toBeNull();
+    expect(parseBox("3, 2, 1, 4")).toBeNull();
+    expect(parseBox("a, b, c, d")).toBeNull();
+    const e = {
+      tiles: 1200,
+      cached: 200,
+      to_fetch: 1000,
+      cache_bytes: 45e6,
+      download_bytes: 600e6,
+      seconds: 75,
+      cache_max_bytes: 5e9,
+      cache_used_bytes: 1e9,
+      fits: true,
+      applies: true,
+    };
+    expect(estimateSummary(e)).toMatch(
+      /1,200 tiles, 200 already cached\. Fetching the other 1,000 reads about 600 MB/,
+    );
+    expect(estimateSummary({ ...e, cached: 1200, to_fetch: 0 })).toMatch(/already works offline/);
+    expect(estimateSummary({ ...e, tiles: 0, applies: false })).toMatch(/nothing to warm/);
+  });
+
   it("treats a region from an older server as built, and sizes on-demand terrain small", () => {
     expect(terrainMode({})).toBe("prebuilt");
     expect(terrainMode({ terrain_mode: "on_demand" })).toBe("on_demand");
@@ -118,7 +144,7 @@ describe("on-demand terrain in the pages", () => {
     expect(c.getByText(/waits about a second/)).toBeInTheDocument();
     expect(c.getByText(/needs the internet/)).toBeInTheDocument();
     expect(c.getByText(/Map tiles and\s+routing are always built/)).toBeInTheDocument();
-    expect(c.getByText("Alberta")).toBeInTheDocument(); // the region set to on demand
+    expect(c.getAllByText("Alberta").length).toBeGreaterThan(0); // the region set to on demand
 
     // Outside built regions: off → on demand, saved at once.
     const outside = c.getByRole("radiogroup", { name: "Terrain outside built regions" });
@@ -193,5 +219,52 @@ describe("on-demand terrain in the pages", () => {
     expect(
       await within(row).findByRole("button", { name: /Terrain read on demand/ }),
     ).toBeVisible();
+  });
+
+  it("warms a region: estimate first, then a job with progress", async () => {
+    const { user } = renderApp("/settings");
+    const card = (await screen.findByRole("heading", { name: /On-demand terrain/ })).closest(
+      "section",
+    ) as HTMLElement;
+    const c = within(card);
+    // Alberta is on demand: it is the area offered, and the estimate arrives by itself.
+    expect(c.getByLabelText("Area")).toHaveValue("north-america/canada/alberta");
+    const est = await c.findByTestId("warm-estimate");
+    expect(est).toHaveTextContent(/tiles, .* already cached\. Fetching the other/);
+    // Alberta to zoom 13 is more than the 5 GB cache holds: said, and not startable.
+    expect(c.getByText(/The cache cannot hold this area/)).toBeInTheDocument();
+    expect(c.getByRole("button", { name: "Warm this area" })).toBeDisabled();
+    // A shallower zoom fits.
+    await user.selectOptions(c.getByLabelText("Down to zoom"), "10");
+    await waitFor(() => expect(c.getByRole("button", { name: "Warm this area" })).toBeEnabled());
+    expect(c.queryByText(/The cache cannot hold this area/)).not.toBeInTheDocument();
+    await user.click(c.getByRole("button", { name: "Warm this area" }));
+    // It runs, with a way to stop it, then reports how it ended.
+    const last = await c.findByTestId("warm-last", undefined, { timeout: 4000 });
+    expect(last).toHaveTextContent(/Warmed Alberta to zoom 10: .* tiles/);
+    expect(c.getByRole("button", { name: "Warm this area" })).toBeInTheDocument();
+  });
+
+  it("a box can be warmed only where on demand applies outside regions", async () => {
+    const { user } = renderApp("/settings");
+    const card = (await screen.findByRole("heading", { name: /On-demand terrain/ })).closest(
+      "section",
+    ) as HTMLElement;
+    const c = within(card);
+    const area = c.getByLabelText("Area");
+    expect(within(area).queryByRole("option", { name: /A box/ })).not.toBeInTheDocument();
+    await user.click(
+      within(c.getByRole("radiogroup", { name: "Terrain outside built regions" })).getByRole(
+        "radio",
+        { name: "On demand" },
+      ),
+    );
+    await user.selectOptions(area, await within(area).findByRole("option", { name: /A box/ }));
+    await user.type(c.getByLabelText("Box, in degrees"), "5, 4, 3");
+    expect(c.getByText(/Give four numbers/)).toBeInTheDocument();
+    await user.clear(c.getByLabelText("Box, in degrees"));
+    await user.type(c.getByLabelText("Box, in degrees"), "-104.2, 31.0, -103.9, 31.3");
+    expect(await c.findByTestId("warm-estimate")).toHaveTextContent(/Fetching the other/);
+    expect(c.getByRole("button", { name: "Warm this area" })).toBeEnabled();
   });
 });

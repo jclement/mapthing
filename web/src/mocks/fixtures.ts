@@ -343,6 +343,16 @@ export function onDemandStatus(
       ),
     ],
     healthy: !(used && failing),
+    warm: {
+      state: "idle",
+      total: 0,
+      done: 0,
+      fetched: 0,
+      cached: 0,
+      empty: 0,
+      failed: 0,
+      bytes: 0,
+    },
   };
 }
 

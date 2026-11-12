@@ -1,6 +1,15 @@
 // On-demand terrain: the logic behind its card on the Overview, its section in Settings and
 // the per-region choice. Kept apart from the components so it can be tested.
-import type { OnDemandHost, OnDemandStatus, Region, TerrainMode } from "../api";
+import type {
+  BBox,
+  OnDemandHost,
+  OnDemandStatus,
+  Region,
+  TerrainMode,
+  WarmEstimate,
+  WarmStatus,
+} from "../api";
+import { bytes, duration } from "./format";
 
 /** The share of terrain tiles answered from the cache since the server started; null before any. */
 export function cacheHitRate(c: OnDemandStatus["counters"]): number | null {
@@ -77,6 +86,45 @@ export function terrainMode(r: Pick<Region, "terrain_mode">): TerrainMode {
  */
 export function onDemandTerrainBytes(prebuiltBytes: number): number {
   return Math.round(prebuiltBytes * 0.01);
+}
+
+/** "west, south, east, north" as typed → a box, or null when it is not one. */
+export function parseBox(text: string): BBox | null {
+  const v = text
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map(Number);
+  if (v.length !== 4 || v.some((x) => !Number.isFinite(x))) return null;
+  const [w, s, e, n] = v;
+  if (!(w < e && s < n) || w < -180 || e > 180 || s < -90 || n > 90) return null;
+  return [w, s, e, n];
+}
+
+/** A warm estimate in a sentence or two. */
+export function estimateSummary(e: WarmEstimate): string {
+  if (!e.applies)
+    return "On-demand terrain does not apply anywhere in this area, or all of it is built: there is nothing to warm.";
+  const head = `${e.tiles.toLocaleString("en-US")} tiles, ${e.cached.toLocaleString("en-US")} already cached.`;
+  if (e.to_fetch === 0) return `${head} Nothing left to fetch: this area already works offline.`;
+  return `${head} Fetching the other ${e.to_fetch.toLocaleString("en-US")} reads about ${bytes(e.download_bytes)} from the sources, takes about ${duration(e.seconds)} and adds about ${bytes(e.cache_bytes)} to the cache.`;
+}
+
+/** A finished or running warm job in a phrase. */
+export function warmSummary(w: WarmStatus): string {
+  const what = `${w.label ?? "an area"} to zoom ${w.max_zoom ?? "?"}`;
+  const n = (x: number) => x.toLocaleString("en-US");
+  switch (w.state) {
+    case "running":
+      return `Warming ${what}: ${n(w.done)} of ${n(w.total)} tiles`;
+    case "done":
+      return `Warmed ${what}: ${n(w.total)} tiles, ${n(w.fetched)} fetched (${bytes(w.bytes)} read)`;
+    case "cancelled":
+      return `Stopped warming ${what} at ${n(w.done)} of ${n(w.total)} tiles; what was fetched is kept`;
+    case "failed":
+      return `Warming ${what} stopped at ${n(w.done)} of ${n(w.total)} tiles`;
+    default:
+      return "";
+  }
 }
 
 /** Megabytes ↔ the gigabytes the cache size field shows (decimal, as sizes are shown). */

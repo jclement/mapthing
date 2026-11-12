@@ -199,6 +199,9 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("tiles: %w", err)
 	}
+	if od != nil {
+		od.SetBuilt(ts.HasTerrain) // a warm job leaves built tiles alone
+	}
 
 	var f *features
 	watcher := &tiles.Watcher{DataDir: cfg.DataDir}

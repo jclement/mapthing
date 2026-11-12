@@ -21,9 +21,21 @@ type OnDemandTerrain interface {
 	Bounds() (elevation.BBox, bool)
 	// Allows reports whether tile z/x/y may be built on demand.
 	Allows(z, x, y int) bool
+	// Has reports whether the tile is in the on-demand cache already.
+	Has(z, x, y int) bool
 	// Tile returns the tile as a Terrarium PNG (nil when no source has data there) and
 	// whether the DEM hosts had to be asked.
 	Tile(ctx context.Context, z, x, y int) (png []byte, cold bool, err error)
+}
+
+// HasTerrain reports whether the live terrain archive holds tile z/x/y (built terrain).
+func (s *Server) HasTerrain(z, x, y int) bool {
+	rd, _, _ := s.tileset("terrain")
+	if rd == nil || z < 0 || z > int(rd.Header.MaxZoom) {
+		return false
+	}
+	data, ok, err := rd.Get(uint8(z), uint32(x), uint32(y))
+	return err == nil && ok && len(data) > 0
 }
 
 // serveOnDemandTerrain answers a terrain tile the live archive does not have, when on demand

@@ -28,6 +28,8 @@ import type {
   StageName,
   Stats,
   UpdateStatus,
+  WarmEstimate,
+  WarmStatus,
 } from "../api";
 import { bboxOf, haversine } from "../lib/geo";
 import { type OwnPolicy, resolvePolicy } from "../lib/refresh";
@@ -76,6 +78,7 @@ interface State {
   ondemand: OnDemandStatus["config"];
   ondemandCleared: boolean;
   ondemandFailing: boolean;
+  warm?: WarmStatus;
   schedule: Schedule;
   tickMs: number;
   latencyMs?: number;
@@ -613,8 +616,98 @@ on("GET", /^\/admin\/api\/regions$/, () => ({ regions: S.regions.map(regionOut) 
 // On-demand terrain: the configuration is kept, the cache and counters are a fixture.
 function ondemandStatus(): OnDemandStatus {
   const regions = S.regions.filter((r) => r.terrain_mode === "on_demand").map((r) => r.id);
-  return fx.onDemandStatus(S.ondemand, regions, S.ondemandCleared, S.ondemandFailing);
+  const st = fx.onDemandStatus(S.ondemand, regions, S.ondemandCleared, S.ondemandFailing);
+  if (S.warm) {
+    // Each look at a running job finds it further along; the third finds it done.
+    if (S.warm.state === "running") {
+      const done = Math.min(S.warm.total, S.warm.done + Math.ceil(S.warm.total / 2));
+      S.warm = { ...S.warm, done, fetched: done, bytes: done * 600_000 };
+      if (done === S.warm.total)
+        S.warm = { ...S.warm, state: "done", finished_at: new Date().toISOString() };
+    }
+    st.warm = S.warm;
+  }
+  return st;
 }
+// A warm request's size: tiles of the box at zooms 9..max, a fifth of them cached already.
+function mockWarm(b: unknown): { est: WarmEstimate; label: string } | Response {
+  const r = b as { region?: string; bbox?: BBox; max_zoom?: number };
+  const maxZoom = r.max_zoom ?? 13;
+  const region = S.regions.find((x) => x.id === r.region);
+  if (r.region && region?.terrain_mode !== "on_demand")
+    return json(400, {
+      error: { code: "bad_request", message: "that region's terrain is not on demand" },
+    });
+  const box = region?.bbox ?? r.bbox;
+  if (!box)
+    return json(400, { error: { code: "bad_request", message: "give a region or a bbox" } });
+  const applies = !!region || S.ondemand.outside === "on_demand";
+  let tiles = 0;
+  for (let z = 9; z <= maxZoom; z++) {
+    const per = 360 / 2 ** z;
+    tiles += Math.ceil((box[2] - box[0]) / per) * Math.ceil((box[3] - box[1]) / (per * 0.7));
+  }
+  if (tiles > 250000)
+    return json(400, {
+      error: {
+        code: "bad_request",
+        message: `that area is too large to warm to zoom ${maxZoom} (${tiles} tiles, at most 250000); choose a smaller area or a lower zoom, or build the region`,
+      },
+    });
+  if (!applies) tiles = 0;
+  const cached = S.ondemandCleared ? 0 : Math.floor(tiles / 5);
+  const max = S.ondemand.cache_mb * 1e6;
+  const whole = tiles * 54000;
+  return {
+    label: region?.name ?? "a drawn box",
+    est: {
+      tiles,
+      cached,
+      to_fetch: tiles - cached,
+      cache_bytes: (tiles - cached) * 45000,
+      download_bytes: (tiles - cached) * 600000,
+      seconds: Math.ceil(((tiles - cached) * 0.45) / 6),
+      cache_max_bytes: max,
+      cache_used_bytes: 1.34e9,
+      fits: whole <= max,
+      need_cache_mb: whole <= max ? undefined : Math.ceil(whole / 1e6),
+      applies: tiles > 0,
+    },
+  };
+}
+on("POST", /^\/admin\/api\/ondemand\/warm\/estimate$/, (_m, b) => {
+  const w = mockWarm(b);
+  return w instanceof Response ? w : w.est;
+});
+on("POST", /^\/admin\/api\/ondemand\/warm$/, (_m, b) => {
+  const w = mockWarm(b);
+  if (w instanceof Response) return w;
+  if (S.warm?.state === "running")
+    return json(409, { error: { code: "busy", message: "a warm job is already running" } });
+  if (!w.est.applies || !w.est.fits)
+    return json(400, {
+      error: { code: "bad_request", message: "the cache cannot hold that area" },
+    });
+  S.warm = {
+    state: "running",
+    label: w.label,
+    max_zoom: (b as { max_zoom?: number }).max_zoom ?? 13,
+    total: w.est.tiles,
+    done: 0,
+    fetched: 0,
+    cached: 0,
+    empty: 0,
+    failed: 0,
+    bytes: 0,
+    started_at: new Date().toISOString(),
+  };
+  return json(202, S.warm);
+});
+on("POST", /^\/admin\/api\/ondemand\/warm\/cancel$/, () => {
+  if (S.warm?.state === "running")
+    S.warm = { ...S.warm, state: "cancelled", finished_at: new Date().toISOString() };
+  return ondemandStatus();
+});
 on("GET", /^\/admin\/api\/ondemand$/, () => ondemandStatus());
 on("PUT", /^\/admin\/api\/ondemand$/, (_m, b) => {
   const c = b as Partial<OnDemandStatus["config"]>;

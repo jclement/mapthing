@@ -68,6 +68,7 @@ export function SettingsPage() {
               regions={regions.data?.regions ?? []}
               freeBytes={sys.data?.disk.free_bytes}
               onChange={(st) => od.setData(() => st)}
+              reload={od.reload}
             />
           )}
 

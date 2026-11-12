@@ -198,6 +198,43 @@ export interface OnDemandStatus {
   upstream: OnDemandHost[]; // hosts contacted since the server started
   sources: (ElevationSource & { host: string })[];
   healthy: boolean;
+  /** The latest "warm this area" job. Absent on a server without it. */
+  warm?: WarmStatus;
+}
+
+/** What to warm: a region whose terrain is on demand, or a box; and how deep. */
+export type WarmRequest = ({ region: string } | { bbox: BBox }) & { max_zoom: number };
+
+/** What a warm job would do (POST /admin/api/ondemand/warm/estimate). Nothing is fetched. */
+export interface WarmEstimate {
+  tiles: number; // tiles of the area that on demand serves
+  cached: number;
+  to_fetch: number;
+  cache_bytes: number; // how much the cache would grow
+  download_bytes: number; // how much would be read from the DEM hosts
+  seconds: number;
+  cache_max_bytes: number;
+  cache_used_bytes: number;
+  fits: boolean; // false: the cache's budget cannot hold the area
+  need_cache_mb?: number; // the budget that would
+  applies: boolean; // false: on demand applies nowhere in the area
+}
+
+export interface WarmStatus {
+  state: "idle" | "running" | "done" | "failed" | "cancelled";
+  label?: string;
+  bbox?: BBox;
+  max_zoom?: number;
+  total: number;
+  done: number;
+  fetched: number;
+  cached: number;
+  empty: number;
+  failed: number;
+  bytes: number; // read from the DEM hosts
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
 }
 
 // Build stages as the pipeline reports them, in order.
@@ -677,6 +714,10 @@ export const api = {
   saveOnDemand: (c: Partial<OnDemandStatus["config"]>) =>
     request<OnDemandStatus>("PUT", "/admin/api/ondemand", c),
   clearOnDemand: () => request<OnDemandStatus>("POST", "/admin/api/ondemand/clear"),
+  warmEstimate: (r: WarmRequest) =>
+    request<WarmEstimate>("POST", "/admin/api/ondemand/warm/estimate", r),
+  warmStart: (r: WarmRequest) => request<WarmStatus>("POST", "/admin/api/ondemand/warm", r),
+  warmCancel: () => request<OnDemandStatus>("POST", "/admin/api/ondemand/warm/cancel"),
 
   build: (refresh_downloads: boolean, rebuild_terrain = false) =>
     request<Job>("POST", "/admin/api/build", { refresh_downloads, rebuild_terrain }),

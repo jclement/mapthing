@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -95,7 +97,7 @@ func newODRig(t *testing.T, withArchive bool) *odRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts, err := tiles.New(tiles.Options{DataDir: data, Assets: fstest.MapFS{}, BasemapOptional: true,
+	ts, err := tiles.New(tiles.Options{DataDir: data, Assets: fstest.MapFS{}, BasemapOptional: true, PackCacheBytes: 64 << 20,
 		OnDemand: r.mgr, OnDemandMinZoom: ondemand.MinZoom, OnDemandMaxZoom: ondemand.MaxZoom})
 	if err != nil {
 		t.Fatal(err)
@@ -244,3 +246,65 @@ func TestOnDemandColdGate(t *testing.T) {
 		t.Fatal("a refused cold request fetched data")
 	}
 }
+
+// A terrain pack over on-demand ground is filled from the cache, fetching what is missing
+// first; built tiles in it stay as built.
+func TestTerrainPackCoversOnDemandAreas(t *testing.T) {
+	r := newODRig(t, true)
+	if err := r.mgr.SetConfig(context.Background(), ondemand.Config{Outside: ondemand.OutsideOnDemand, CacheMB: 64}); err != nil {
+		t.Fatal(err)
+	}
+	// A box around the built z12 tile and its neighbours.
+	w, s, e, n := elevation.TileBounds(12, r.builtX, r.builtY)
+	bbox := "bbox=" + ftoa(w-0.05) + "," + ftoa(s+0.01) + "," + ftoa(e+0.05) + "," + ftoa(n-0.01)
+	rec := r.get("/packs/extract.pmtiles?tileset=terrain&minzoom=12&maxzoom=12&" + bbox)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pack: %d %s", rec.Code, rec.Body.String())
+	}
+	path := filepath.Join(t.TempDir(), "pack.pmtiles")
+	if err := os.WriteFile(path, rec.Body.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pk, err := pmtiles.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pk.Close() }()
+	data, ok, err := pk.Get(12, uint32(r.builtX), uint32(r.builtY))
+	if err != nil || !ok || elevAt(t, data, 0) != 77 {
+		t.Fatalf("the built tile in the pack: ok=%v err=%v", ok, err)
+	}
+	data, ok, err = pk.Get(12, uint32(r.builtX+1), uint32(r.builtY))
+	if err != nil || !ok {
+		t.Fatalf("the on-demand tile in the pack: ok=%v err=%v", ok, err)
+	}
+	lon, lat := elevation.WorldPixelToLonLat(float64((r.builtX+1)*256)+0.5, float64(r.builtY*256)+0.5, 12)
+	if got, want := float64(elevAt(t, data, 0)), ondemandtest.Plane(1000)(lon, lat); !ondemandtest.Near(got, want, 0.5) {
+		t.Fatalf("on-demand tile in the pack = %v, want %v", got, want)
+	}
+	// The same pack again comes from the pack cache: the hosts are not asked.
+	before := r.hosts.Ranges.Load() + r.hosts.Heads.Load()
+	if rec := r.get("/packs/extract.mbtiles?tileset=terrain&minzoom=12&maxzoom=12&" + bbox); rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("mbtiles pack: %d", rec.Code)
+	}
+	if r.hosts.Ranges.Load()+r.hosts.Heads.Load() != before {
+		t.Fatal("a second pack over cached tiles asked the hosts again")
+	}
+	// Too much to fetch inside a download request: refused, with what to do.
+	big := r.get("/packs/extract.pmtiles?tileset=terrain&minzoom=13&maxzoom=13&bbox=-98.95,29.1,-96.1,30.95")
+	if big.Code != http.StatusConflict || !strings.Contains(big.Body.String(), "not_warm") || !strings.Contains(big.Body.String(), "warm the area first") {
+		t.Fatalf("a pack needing thousands of cold tiles: %d %s", big.Code, big.Body.String())
+	}
+	// A source that does not answer fails the pack; nothing half-made is kept.
+	r.hosts.Down.Store(true)
+	down := r.get("/packs/extract.pmtiles?tileset=terrain&minzoom=11&maxzoom=11&bbox=-98.6,30.3,-98.4,30.5")
+	if down.Code != http.StatusGatewayTimeout {
+		t.Fatalf("pack with the hosts down: %d %s", down.Code, down.Body.String())
+	}
+	r.hosts.Down.Store(false)
+	if rec := r.get("/packs/extract.pmtiles?tileset=terrain&minzoom=11&maxzoom=11&bbox=-98.6,30.3,-98.4,30.5"); rec.Code != http.StatusOK {
+		t.Fatalf("the same pack once the hosts are back: %d", rec.Code)
+	}
+}
+
+func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', 6, 64) }

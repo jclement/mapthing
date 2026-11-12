@@ -89,4 +89,16 @@ await shot("09-regions-add", "/regions?add=1", {
   },
 });
 
+const warm = (page) => page.getByText("Warm an area for offline use");
+await shot("10-settings-warm-too-big", "/settings", { target: warm });
+await shot("11-settings-warm-done", "/settings", {
+  target: warm,
+  before: async (page) => {
+    await page.getByLabel("Down to zoom").selectOption("10");
+    await page.waitForTimeout(700);
+    await page.getByRole("button", { name: "Warm this area" }).click();
+    await page.waitForTimeout(4500);
+  },
+});
+
 await browser.close();

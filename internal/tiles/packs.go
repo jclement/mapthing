@@ -51,6 +51,11 @@ func (s *Server) handlePack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rd, gen, _ := s.tileset(tileset)
+	if tileset == "terrain" && s.opt.OnDemand != nil && s.opt.OnDemand.Enabled() {
+		// Part of the box may be terrain that is read on demand: fill it from the cache.
+		s.terrainPack(w, r, rd, gen, bbox, q, format)
+		return
+	}
 	if rd == nil {
 		noGeneration(w, r)
 		return
@@ -159,10 +164,33 @@ func (s *Server) buildMBTiles(ctx context.Context, key string, rd *pmtiles.Reade
 	tmpPath := tmp.Name()
 	_ = tmp.Close()
 	defer func() { _ = os.Remove(tmpPath) }()
-	if err := writeMBTiles(ctx, tmpPath, rd, b, minZ, maxZ); err != nil {
+	meta, _ := rd.Metadata()
+	if err := writeMBTiles(ctx, tmpPath, rd.Get, rd.Header.TileType, meta, b, minZ, maxZ); err != nil {
 		return err
 	}
-	_, err = s.packs.Put(key, func(w io.Writer) error {
+	return s.storeMBTiles(key, tmpPath)
+}
+
+// buildMBTilesFrom is buildMBTiles for tiles that come from a function (on-demand terrain).
+func (s *Server) buildMBTilesFrom(ctx context.Context, key string, get tileGetter, tileType uint8, meta []byte, b pmtiles.BBox, minZ, maxZ uint8) error {
+	tmp, err := os.CreateTemp(s.packs.Dir(), ".tmp-mbtiles-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := writeMBTiles(ctx, tmpPath, get, tileType, meta, b, minZ, maxZ); err != nil {
+		return err
+	}
+	return s.storeMBTiles(key, tmpPath)
+}
+
+// tileGetter returns one tile's bytes, and false when there is none.
+type tileGetter func(z uint8, x, y uint32) ([]byte, bool, error)
+
+func (s *Server) storeMBTiles(key, tmpPath string) error {
+	_, err := s.packs.Put(key, func(w io.Writer) error {
 		f, err := os.Open(tmpPath)
 		if err != nil {
 			return err
@@ -174,7 +202,7 @@ func (s *Server) buildMBTiles(ctx context.Context, key string, rd *pmtiles.Reade
 	return err
 }
 
-func writeMBTiles(ctx context.Context, path string, rd *pmtiles.Reader, b pmtiles.BBox, minZ, maxZ uint8) error {
+func writeMBTiles(ctx context.Context, path string, get tileGetter, tileType uint8, metaJSON []byte, b pmtiles.BBox, minZ, maxZ uint8) error {
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(OFF)&_pragma=synchronous(OFF)")
 	if err != nil {
 		return err
@@ -186,8 +214,7 @@ func writeMBTiles(ctx context.Context, path string, rd *pmtiles.Reader, b pmtile
 		CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row);`); err != nil {
 		return err
 	}
-	h := rd.Header
-	format := map[uint8]string{pmtiles.TypeMVT: "pbf", pmtiles.TypePNG: "png", pmtiles.TypeJPEG: "jpg", pmtiles.TypeWebP: "webp"}[h.TileType]
+	format := map[uint8]string{pmtiles.TypeMVT: "pbf", pmtiles.TypePNG: "png", pmtiles.TypeJPEG: "jpg", pmtiles.TypeWebP: "webp"}[tileType]
 	meta := map[string]string{
 		"name":    "mapthing extract",
 		"format":  format,
@@ -197,9 +224,9 @@ func writeMBTiles(ctx context.Context, path string, rd *pmtiles.Reader, b pmtile
 		"maxzoom": strconv.Itoa(int(maxZ)),
 		"type":    "baselayer",
 	}
-	if m, err := rd.Metadata(); err == nil {
+	if len(metaJSON) > 0 {
 		var mm map[string]any
-		if json.Unmarshal(m, &mm) == nil {
+		if json.Unmarshal(metaJSON, &mm) == nil {
 			if vl, ok := mm["vector_layers"]; ok {
 				j, _ := json.Marshal(map[string]any{"vector_layers": vl})
 				meta["json"] = string(j)
@@ -231,7 +258,7 @@ func writeMBTiles(ctx context.Context, path string, rd *pmtiles.Reader, b pmtile
 				return ctx.Err()
 			}
 			for y := y0; y <= y1; y++ {
-				data, ok, err := rd.Get(z, x, y)
+				data, ok, err := get(z, x, y)
 				if err != nil {
 					return err
 				}

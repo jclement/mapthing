@@ -29,6 +29,7 @@ import {
   Progress,
   Segmented,
 } from "./ui";
+import { WarmArea } from "./WarmArea";
 
 const label = "text-[11px] font-medium tracking-wide text-faint uppercase";
 
@@ -153,11 +154,13 @@ export function OnDemandSettings({
   regions,
   freeBytes,
   onChange,
+  reload,
 }: {
   status: OnDemandStatus;
   regions: Region[];
   freeBytes?: number;
   onChange: (s: OnDemandStatus) => void;
+  reload: () => void;
 }) {
   const [gb, setGb] = useState(String(mbToGb(status.config.cache_mb)));
   const [busy, setBusy] = useState<"outside" | "cache" | "clear" | null>(null);
@@ -312,6 +315,11 @@ export function OnDemandSettings({
               Clear the cache
             </Button>
           </div>
+        </div>
+
+        <div className="border-t border-line pt-4">
+          <div className="mb-2 text-xs font-medium text-muted">Warm an area for offline use</div>
+          <WarmArea status={status} names={names} onChange={onChange} reload={reload} />
         </div>
 
         <div className="border-t border-line pt-4">

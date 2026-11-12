@@ -328,6 +328,43 @@ they are asked for, and the old blocks are deleted. The versions are kept in
 `<data>/ondemand/versions.json`, so after a restart, or with no internet, cached tiles are
 still served.
 
+### Warming an area for offline use
+
+On-demand terrain needs the internet the first time a place is asked for. To take an area
+offline, or simply to have it instant before anyone looks, **warm** it: Settings → On-demand
+terrain → *Warm an area*. Choose a region whose terrain is on demand, or (with "outside built
+regions" on) type a box, and the deepest zoom to fill; zoom 13 is full detail and what elevation
+queries read.
+
+Before anything is fetched you are told how many tiles the area holds, how many are cached
+already, how much will be read from the sources, about how long it takes and how much the cache
+grows. A job the cache cannot hold is refused with the cache size that would hold it: warming
+past the budget would push out the job's own first tiles. One job runs at a time, shallowest
+zoom first, with progress and a Stop button; stopping, a restart or a source that goes away
+loses nothing, and running the same job again fetches only what is missing. Tiles the build
+made are left alone. At most 250,000 tiles per job (about a million square kilometres at zoom
+13); past that, build the region.
+
+Planning figures: about 45 KB of cache and 0.6 MB of download per tile, and about 13 tiles a
+second. A warm job keeps only the finished tiles, not the source blocks they were made from.
+Warmed tiles are ordinary cache entries: they stay for as long as the budget has room, and are
+refreshed like any other when a source publishes a new release.
+
+The same through the API: `POST /admin/api/ondemand/warm/estimate` and
+`POST /admin/api/ondemand/warm`, each with `{"region":"<id>"}` or `{"bbox":[w,s,e,n]}` and
+`"max_zoom"`; `POST /admin/api/ondemand/warm/cancel`; progress is `warm` in
+`GET /admin/api/ondemand`.
+
+### Offline packs
+
+`/packs/extract.pmtiles?tileset=terrain&bbox=…` (and `format=mbtiles`) covers on-demand ground
+too: tiles the build made come from the archive, the rest from the on-demand cache, and what is
+not cached yet is fetched first. One pack request fetches at most 2,000 tiles; a pack that needs
+more is answered `409 not_warm` and says so: warm the area, then ask again. A pack is cut down
+to zoom 13 where on demand applies, whatever the built archive's deepest zoom. If a source does
+not answer while a pack is being filled, the request fails with `504` and no partial pack is
+kept. Basemap packs are not affected.
+
 ### When a source does not answer
 
 A request that needs data a host will not give is answered with an error, and **nothing is
