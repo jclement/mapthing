@@ -6,6 +6,7 @@ import type {
   Generation,
   LimitsConfig,
   LogEntry,
+  OnDemandStatus,
   Region,
   Setting,
   SettingsInfo,
@@ -238,8 +239,10 @@ export function installedRegions(): Region[] {
       catalog_id: "north-america/canada/alberta",
       bbox: [-120, 49, -110, 60],
       status: "installed",
+      // One region of the demo data reads its terrain on demand.
+      terrain_mode: "on_demand",
       extract_bytes: 340 * MB,
-      disk_bytes: 2.4 * GB,
+      disk_bytes: 0.9 * GB,
       data_date: iso(3.4 * day),
       downloaded_at: iso(3.2 * day),
       elevation_sources: ["nrcan-hrdem", "ab-dem", "nrcan-mrdem"],
@@ -257,6 +260,100 @@ export function installedRegions(): Region[] {
       elevation_sources: ["usgs-3dep-1m", "usgs-3dep-10m"],
     },
   ];
+}
+
+/**
+ * On-demand terrain as the server reports it. A server that has used it for a few days: a
+ * part-filled cache, nearly everything answered from it. failing: one source stopped
+ * answering a minute ago.
+ */
+export function onDemandStatus(
+  config: OnDemandStatus["config"],
+  regions: string[],
+  cleared = false,
+  failing = false,
+): OnDemandStatus {
+  const enabled = regions.length > 0 || config.outside === "on_demand";
+  const used = enabled && !cleared;
+  const s3 = "s3.amazonaws.com";
+  const nrcan = "canelevation-dem.s3.ca-central-1.amazonaws.com";
+  const src = (id: string, name: string, resolution_m: number, license: string, host: string) => ({
+    id,
+    name,
+    resolution_m,
+    license,
+    attribution: "",
+    host,
+  });
+  return {
+    config,
+    enabled,
+    regions,
+    minzoom: 9,
+    maxzoom: 13,
+    cache: {
+      bytes: used ? Math.min(1.34 * GB, config.cache_mb * MB) : 0,
+      max_bytes: config.cache_mb * MB,
+      entries: used ? 41872 : 0,
+    },
+    counters: {
+      hits: used ? 268431 : 0,
+      built: used ? 18904 : 0,
+      failed: used ? (failing ? 37 : 3) : 0,
+      limited: used ? 12 : 0,
+      requests: used ? 61250 : 0,
+      bytes: used ? 9.8 * GB : 0,
+    },
+    upstream: used
+      ? [
+          {
+            host: nrcan,
+            requests: 48210,
+            failures: failing ? 41 : 2,
+            bytes: 7.9 * GB,
+            last_ok: iso(failing ? 70_000 : 4_000),
+            ...(failing
+              ? {
+                  last_error: iso(9_000),
+                  error: "answered 503 Service Unavailable",
+                }
+              : {}),
+            healthy: !failing,
+          },
+          {
+            host: `prd-tnm.${s3}`,
+            requests: 13040,
+            failures: 1,
+            bytes: 1.9 * GB,
+            last_ok: iso(310_000),
+            healthy: true,
+          },
+        ]
+      : [],
+    sources: [
+      src("hrdem", "NRCan HRDEM mosaic (LiDAR, 2 m)", 2, "OGL-Canada-2.0", nrcan),
+      src("3dep13", "USGS 3DEP 1/3 arc-second DEM", 10, "Public domain", `prd-tnm.${s3}`),
+      src("mrdem", "NRCan MRDEM-30", 30, "OGL-Canada-2.0", nrcan),
+      src(
+        "glo30",
+        "Copernicus DEM GLO-30",
+        30,
+        "Copernicus DEM licence",
+        `copernicus-dem-30m.${s3}`,
+      ),
+    ],
+    healthy: !(used && failing),
+    warm: {
+      state: "idle",
+      total: 0,
+      done: 0,
+      fetched: 0,
+      cached: 0,
+      empty: 0,
+      failed: 0,
+      bytes: 0,
+    },
+  };
 }
 
 export function generations(): Generation[] {
@@ -369,6 +466,7 @@ export function limitsConfig(): LimitsConfig {
     valhalla: 10,
     elevation: 5,
     pack: 50,
+    ondemand: 20,
   };
   const global = {
     raster: { rps: 100, burst: 200 },
@@ -378,6 +476,7 @@ export function limitsConfig(): LimitsConfig {
     valhalla: { rps: 60, burst: 120 },
     elevation: { rps: 100, burst: 200 },
     pack: { rps: 2, burst: 4 },
+    ondemand: { rps: 20, burst: 40 },
   };
   return {
     weights: { ...weights },

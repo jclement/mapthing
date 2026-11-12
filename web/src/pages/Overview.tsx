@@ -15,6 +15,7 @@ import { Link } from "react-router";
 import { api, defaultStyle, type Overview, type ProcessInfo, styleUrl } from "../api";
 import { Sparkline } from "../components/charts";
 import { blankStyle, MapCanvas } from "../components/MapCanvas";
+import { OnDemandCard } from "../components/OnDemand";
 import {
   Badge,
   Card,
@@ -180,6 +181,12 @@ export function OverviewPage() {
         <TrafficCard o={o} />
         <ResourcesCard o={o} />
         <BuildsCard o={o} />
+        {o.ondemand && (
+          <OnDemandCard
+            s={o.ondemand}
+            names={Object.fromEntries((o.generation?.regions ?? []).map((r) => [r.id, r.name]))}
+          />
+        )}
       </div>
     </Page>
   );

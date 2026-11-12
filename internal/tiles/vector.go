@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/pmtiles"
 )
 
@@ -58,6 +59,10 @@ func (s *Server) handleTile(w http.ResponseWriter, r *http.Request) {
 	}
 	rd, gen, _ := s.tileset(name)
 	if rd == nil {
+		// No built terrain at all: on demand answers where it applies.
+		if s.serveOnDemand(w, r, name, int(z), int(x), int(y)) {
+			return
+		}
 		missingTileset(w, r, gen)
 		return
 	}
@@ -65,6 +70,11 @@ func (s *Server) handleTile(w http.ResponseWriter, r *http.Request) {
 	data, found, err := rd.Get(z, x, y)
 	if err != nil {
 		jsonError(w, r, http.StatusInternalServerError, "read_error", "could not read tile")
+		return
+	}
+	// What was built always wins. Only a terrain or contour tile the archive does not have is
+	// made on demand.
+	if (!found || len(data) == 0) && s.serveOnDemand(w, r, name, int(z), int(x), int(y)) {
 		return
 	}
 	h := w.Header()
@@ -144,6 +154,18 @@ func (s *Server) tileJSON(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	rd, gen, _ := s.tileset(name)
 	if rd == nil {
+		if s.opt.OnDemand != nil && s.opt.OnDemand.Enabled() {
+			switch name {
+			case "terrain":
+				s.onDemandTileJSON(w, r)
+				return
+			case "contours":
+				if s.opt.OnDemandContourMaxZoom > 0 {
+					s.onDemandContoursTileJSON(w, r)
+					return
+				}
+			}
+		}
 		missingTileset(w, r, gen)
 		return
 	}
@@ -183,6 +205,15 @@ func (s *Server) tileJSON(w http.ResponseWriter, r *http.Request, name string) {
 			if v, ok := m["maxzoom"].(float64); ok && v >= 0 && v <= 24 {
 				tj["maxzoom"] = int(v)
 			}
+		}
+	}
+	if od := s.opt.OnDemand; od != nil && (name == "terrain" || (name == "contours" && s.opt.OnDemandContourMaxZoom > 0)) {
+		// Terrain is also served, on demand, beyond what was built: say so, or a client that
+		// honours bounds never asks.
+		if ob, ok := od.Bounds(); ok {
+			b := h.Bounds()
+			tj["bounds"] = []float64{min(b[0], ob[0]), min(b[1], ob[1]), max(b[2], ob[2]), max(b[3], ob[3])}
+			tj["attribution"] = elevation.AttributionAll()
 		}
 	}
 	if _, ok := tj["attribution"]; !ok {

@@ -21,6 +21,7 @@ import (
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/keys"
 	"github.com/jclement/mapthing/internal/logs"
+	"github.com/jclement/mapthing/internal/ondemand"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/stats"
 	"github.com/jclement/mapthing/internal/store"
@@ -46,6 +47,10 @@ type Deps struct {
 	Logs       *logs.Sink // the server's log (nil → the logs endpoints answer 503)
 	Assets     fs.FS      // styles/fonts/sprites (for the style list)
 	UI         fs.FS      // built admin UI (index.html at the root)
+
+	// OnDemand is on-demand terrain (nil → its endpoints answer 503 and regions cannot be set
+	// to it).
+	OnDemand *ondemand.Manager
 
 	// Mounts register feature endpoints (routing, elevation, compatibility APIs).
 	Mounts []Mountable
@@ -154,6 +159,13 @@ func (s *Server) routes() {
 
 	m.Handle("GET /admin/api/schedule", admin(s.getSchedule))
 	m.Handle("PUT /admin/api/schedule", admin(s.putSchedule))
+
+	m.Handle("GET /admin/api/ondemand", admin(s.ondemandStatus))
+	m.Handle("PUT /admin/api/ondemand", admin(s.putOndemand))
+	m.Handle("POST /admin/api/ondemand/clear", admin(s.clearOndemand))
+	m.Handle("POST /admin/api/ondemand/warm/estimate", admin(s.warmEstimate))
+	m.Handle("POST /admin/api/ondemand/warm", admin(s.warmStart))
+	m.Handle("POST /admin/api/ondemand/warm/cancel", admin(s.warmCancel))
 
 	m.Handle("GET /admin/api/catalog", admin(s.catalog))
 	m.Handle("POST /admin/api/catalog/estimate", admin(s.estimateCustom))

@@ -80,8 +80,13 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	for _, n := range disk.Downloads {
 		downloads += n
 	}
+	var onDemandBytes int64
+	if s.d.OnDemand != nil {
+		onDemandBytes = s.d.OnDemand.CacheBytes()
+	}
 	parts := []diskPart{
 		{"Generations", gens}, {"Downloaded extracts", downloads}, {"Elevation cache", disk.Elevation},
+		{"On-demand terrain cache", onDemandBytes},
 		{"Imagery cache", sizes["imagery"]}, {"Raster tile cache", sizes["raster"]}, {"Offline pack cache", sizes["pack"]},
 		{"Build caches and scratch", dirSizeCached(s, "cache") + dirSizeCached(s, "work")},
 		{"Logs", disk.Logs}, {"Database", disk.Database},
@@ -139,7 +144,8 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			"total_bytes": disk.TotalBytes, "free_bytes": disk.FreeBytes, "data_bytes": data, "parts": parts,
 			"guard": guard, "measured_at": disk.MeasuredAt,
 		},
-		"builds": builds,
+		"builds":   builds,
+		"ondemand": s.ondemandOverview(),
 	})
 }
 

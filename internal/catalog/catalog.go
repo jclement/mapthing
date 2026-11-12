@@ -71,6 +71,10 @@ type Region struct {
 	Polygon [][][2]float64 `json:"polygon,omitempty"`
 	// Custom regions only.
 	Custom *Custom `json:"custom,omitempty"`
+	// TerrainOnDemand: the operator set this region's terrain to on demand. The terrain build
+	// then makes only its low zooms; deeper tiles and elevations are read from the DEM hosts
+	// when asked for (internal/ondemand).
+	TerrainOnDemand bool `json:"terrain_on_demand,omitempty"`
 }
 
 // Custom describes a clipped region.

@@ -224,6 +224,146 @@ islands dominate it.
 The terrain build's time is mostly waiting on HTTP range reads (4 workers). More workers would
 probably shorten it, but that was not measured.
 
+### On-demand terrain
+
+A region's terrain, or terrain outside every region, can be read from the public DEM files when
+a place is first asked for instead of being built ([operations.md](operations.md#on-demand-terrain)).
+This section is what that saves and what it costs.
+
+**What it saves.** A built region carries 110–150 KB of terrain per deepest-zoom tile and spends
+most of its build fetching and warping DEMs (the tables above). A region on demand carries only
+zooms 0 to 9, which the build reads from the sources' overviews:
+
+| | Built at z13 | On demand |
+|---|---|---|
+| Texas (its bounding box, 13°×10.7°) | about 85,000 z13 tiles: 9–13 GB and 1.5–4 h (extrapolated from the per-tile figures above) | 469 tiles, **11.9 MB, 66 s**, 155 MB read (measured) |
+| Any region | 110–150 KB and 0.06–0.16 s per z13 tile | about 1/256 of the tiles; the rest is fetched as it is viewed |
+| United States, land only | 99–112 GB, ~27 h | about 0.1 GB and 10 to 15 minutes (extrapolated from Texas: 3,500 tiles) |
+
+What is viewed is then cached: 17 to 60 KB per tile (about 30 KB typical; mountains and desert
+DSM at the top), so the default 5 GB cache holds on the order of 100,000 tiles. A crew that only
+ever looks at a few basins never pays for the rest of the state.
+
+**What a first request costs.** Measured from one server against the live hosts on
+2026-11-11 with `internal/ondemand/cmd/mt-ondemand`; 10 random tiles per row; connections
+already open. "Cold" knows nothing at all: the first request a new server ever makes for that
+place, including asking which files exist and reading their headers. "Headers known" has the
+files' versions and headers but no elevation data: a server that has served the neighbourhood
+before, or was restarted. Elevations were checked against `gdallocationinfo` on the same files
+at nine points (3DEP, HRDEM, MRDEM): within 0.12 m.
+
+| area / zoom / state | n | p50 ms | p95 ms | max ms | mean KB fetched | p95 KB fetched | mean requests | mean PNG KB | sources |
+|---|---|---|---|---|---|---|---|---|---|
+| texas z10 cold | 10 | 801 | 1273 | 1273 | 2885 | 3534 | 7.9 | 30 | 3dep13 100% |
+| texas z10 headers known | 10 | 503 | 681 | 681 | 2802 | 3470 | 4.0 | 30 | 3dep13 100% |
+| texas z12 cold | 10 | 869 | 1218 | 1218 | 2684 | 4042 | 7.2 | 32 | 3dep13 100% |
+| texas z12 headers known | 10 | 505 | 608 | 608 | 2607 | 3914 | 3.6 | 32 | 3dep13 100% |
+| texas z14 cold | 10 | 661 | 1194 | 1194 | 2087 | 3391 | 6.2 | 28 | 3dep13 100% |
+| texas z14 headers known | 10 | 319 | 390 | 390 | 2017 | 3263 | 2.9 | 28 | 3dep13 100% |
+| calgary z10 cold | 10 | 2062 | 2686 | 2686 | 5024 | 7330 | 15.7 | 30 | hrdem 55%, mrdem 45% |
+| calgary z10 headers known | 10 | 991 | 1917 | 1917 | 4231 | 6499 | 8.1 | 30 | hrdem 55%, mrdem 45% |
+| calgary z12 cold | 10 | 1842 | 2310 | 2310 | 3849 | 4695 | 13.4 | 33 | hrdem 71%, mrdem 29% |
+| calgary z12 headers known | 10 | 799 | 1467 | 1467 | 3108 | 3992 | 6.8 | 33 | hrdem 71%, mrdem 29% |
+| calgary z14 cold | 10 | 1735 | 2472 | 2472 | 3312 | 4313 | 12.8 | 27 | hrdem 60%, mrdem 40% |
+| calgary z14 headers known | 10 | 762 | 961 | 961 | 2564 | 3610 | 6.6 | 27 | hrdem 60%, mrdem 40% |
+| alberta-north z10 cold | 10 | 2179 | 2666 | 2666 | 4215 | 5811 | 17.2 | 19 | hrdem 18%, mrdem 82% |
+| alberta-north z10 headers known | 10 | 940 | 1212 | 1212 | 3397 | 4980 | 8.7 | 19 | hrdem 18%, mrdem 82% |
+| alberta-north z12 cold | 10 | 2213 | 2828 | 2828 | 3136 | 5524 | 17.5 | 21 | hrdem 7%, mrdem 93% |
+| alberta-north z12 headers known | 10 | 1108 | 1333 | 1333 | 2324 | 4693 | 10.0 | 21 | hrdem 7%, mrdem 93% |
+| alberta-north z14 cold | 10 | 2094 | 2577 | 2577 | 2835 | 4477 | 15.0 | 17 | hrdem 22%, mrdem 78% |
+| alberta-north z14 headers known | 10 | 831 | 1337 | 1337 | 2036 | 3710 | 7.8 | 17 | hrdem 22%, mrdem 78% |
+| alps z10 cold | 10 | 1657 | 3124 | 3124 | 7013 | 8374 | 8.2 | 60 | glo30 100%, none 0% |
+| alps z10 headers known | 10 | 1138 | 1960 | 1960 | 6859 | 8167 | 3.4 | 60 | glo30 100%, none 0% |
+| alps z12 cold | 10 | 814 | 1651 | 1651 | 3373 | 7407 | 4.0 | 60 | glo30 100% |
+| alps z12 headers known | 10 | 441 | 1442 | 1442 | 3303 | 7343 | 1.7 | 60 | glo30 100% |
+| alps z14 cold | 10 | 810 | 1388 | 1388 | 2424 | 3837 | 3.3 | 44 | glo30 100% |
+| alps z14 headers known | 10 | 474 | 1237 | 1237 | 2354 | 3709 | 1.1 | 44 | glo30 100% |
+| monterrey z10 cold | 10 | 1301 | 3772 | 3772 | 3764 | 6995 | 7.7 | 48 | 3dep13 5%, glo30 95% |
+| monterrey z10 headers known | 10 | 699 | 1204 | 1204 | 3643 | 6739 | 2.0 | 48 | 3dep13 5%, glo30 95% |
+| monterrey z12 cold | 10 | 1238 | 3385 | 3385 | 3791 | 9377 | 5.2 | 53 | 3dep13 5%, glo30 95% |
+| monterrey z12 headers known | 10 | 878 | 8593 | 8593 | 3720 | 9313 | 1.9 | 53 | 3dep13 5%, glo30 95% |
+| monterrey z14 cold | 10 | 1164 | 1295 | 1295 | 2254 | 2605 | 4.0 | 33 | glo30 100% |
+| monterrey z14 headers known | 10 | 744 | 975 | 975 | 2190 | 2541 | 1.0 | 33 | glo30 100% |
+
+z14 is measured for comparison only: on demand serves zooms 9 to 13, like a default build. After
+this run the round trips were made parallel (every source asked at once, headers read together,
+a block's two index pages read together), which helps where two sources meet. z12 again:
+
+| area / zoom / state | n | p50 ms | p95 ms | max ms | mean KB fetched | p95 KB fetched | mean requests | mean PNG KB | sources |
+|---|---|---|---|---|---|---|---|---|---|
+| texas z12 cold | 10 | 952 | 1567 | 1567 | 2761 | 4170 | 8.4 | 32 | 3dep13 100% |
+| texas z12 headers known | 10 | 515 | 730 | 730 | 2607 | 3914 | 3.6 | 32 | 3dep13 100% |
+| calgary z12 cold | 10 | 1584 | 1944 | 1944 | 4002 | 4824 | 15.8 | 33 | hrdem 71%, mrdem 29% |
+| calgary z12 headers known | 10 | 719 | 916 | 916 | 3108 | 3992 | 6.8 | 33 | hrdem 71%, mrdem 29% |
+| alberta-north z12 cold | 10 | 1729 | 2119 | 2119 | 3206 | 5588 | 18.6 | 21 | hrdem 7%, mrdem 93% |
+| alberta-north z12 headers known | 10 | 787 | 1057 | 1057 | 2324 | 4693 | 10.0 | 21 | hrdem 7%, mrdem 93% |
+| alps z12 cold | 10 | 918 | 1286 | 1286 | 3379 | 7407 | 4.1 | 60 | glo30 100% |
+| alps z12 headers known | 10 | 539 | 1166 | 1166 | 3303 | 7343 | 1.7 | 60 | glo30 100% |
+
+A browser asks for a screenful at once, and neighbouring tiles share source blocks:
+
+| viewport of 4×3 tiles, cold | n | p50 s | p95 s | max s | mean MB fetched | mean requests | first tile p50 s |
+|---|---|---|---|---|---|---|---|
+| texas z10 | 3 | 1.65 | 1.94 | 1.94 | 13.4 | 32 | 0.84 |
+| texas z12 | 3 | 1.57 | 1.94 | 1.94 | 13.8 | 22 | 0.86 |
+| texas z14 | 3 | 1.03 | 1.10 | 1.10 | 4.3 | 10 | 0.66 |
+| calgary z10 | 3 | 3.32 | 3.38 | 3.38 | 24.1 | 48 | 2.02 |
+| calgary z12 | 3 | 2.72 | 2.95 | 2.95 | 14.3 | 28 | 1.68 |
+| calgary z14 | 3 | 2.38 | 2.63 | 2.63 | 8.8 | 22 | 1.71 |
+| alps z10 | 3 | 2.50 | 2.62 | 2.62 | 19.6 | 16 | 1.10 |
+| alps z12 | 3 | 1.28 | 3.37 | 3.37 | 7.2 | 5 | 0.75 |
+| alps z14 | 3 | 1.21 | 1.89 | 1.89 | 4.0 | 4 | 0.88 |
+
+Elevation profiles sample zoom-13 tiles, fetched together:
+
+| 100 km profile, 30 m spacing | samples | z13 tiles | seconds | MB fetched | requests | with data |
+|---|---|---|---|---|---|---|
+| texas (3DEP) | 3334 | 30 | 2.73 | 38.3 | 60 | 100% |
+| texas (3DEP) | 3334 | 32 | 2.28 | 41.5 | 64 | 100% |
+| texas (3DEP) | 3334 | 33 | 2.43 | 43.8 | 70 | 100% |
+| calgary west (HRDEM/MRDEM) | 3334 | 36 | 4.82 | 25.0 | 76 | 100% |
+| calgary north (HRDEM/MRDEM) | 3334 | 36 | 3.31 | 31.9 | 81 | 100% |
+| calgary south-east (HRDEM/MRDEM) | 3334 | 44 | 4.09 | 61.0 | 73 | 100% |
+| alps (GLO-30) | 3334 | 39 | 3.10 | 17.7 | 12 | 100% |
+| alps (GLO-30) | 3334 | 40 | 1.86 | 16.2 | 11 | 100% |
+| alps (GLO-30) | 3334 | 40 | 1.99 | 16.4 | 11 | 100% |
+
+Reading these:
+
+- **A first view takes 1 to 3 s to fill, and is instant afterwards.** Canada is the slow end:
+  HRDEM has holes that MRDEM fills, so most tiles read two sources, both in `ca-central-1`, and
+  both are single multi-gigabyte files whose block index is read a page at a time.
+- **The download is the real cost.** The sources store float32 elevation in blocks of 512 px
+  (3DEP, NRCan) or 1024 px (GLO-30), 0.7 to 2.3 MB each compressed, and a 256 px tile straddles
+  one to four of them. A lone cold tile reads 2 to 7 MB; in a screenful it is 0.3 to 2 MB a
+  tile. That is a property of the published files. On a 20 Mbit/s uplink a cold screen (4 to
+  24 MB) takes 2 to 10 s whatever the server does.
+- **4 to 18 requests per cold tile**, capped at 16 in flight (8 per host). Over about 5,000
+  requests and 2 GB read in these runs, no host throttled or failed a request.
+- **Not measured:** how the hosts behave under sustained load from many servers; a slow
+  uplink (the 20 Mbit/s figure is arithmetic); cached-tile serving under load (a cached tile
+  is one small file read: 1 to 2 ms in a single-request check, the same path as the imagery
+  cache).
+
+**Contours on demand** are drawn from on-demand terrain one or two zooms deeper than the
+contour tile (z10 from z12, z11 and z12 from z13; a build uses z13 for all three). A lone
+contour tile with nothing cached, then its eastern neighbour, measured 2026-11-12 in the Texas
+hill country and at Calgary:
+
+| contour tile | terrain tiles it reads | cold: s, MB read, KB | its eastern neighbour after it: s, MB read |
+|---|---|---|---|
+| z10 | 36 at z12 | 3.2 s, 30.7 MB, 16 KB | 1.7 s, 14.1 MB |
+| z11 | 36 at z13 | 3.1 s, 31.5 MB, 8 KB | 1.8 s, 18.2 MB |
+| z12 | 16 at z13 | 1.8 s, 14.8 MB, 14 KB | 0.8 s, 6.1 MB |
+| contour tile | terrain tiles it reads | cold: s, MB read, KB | its eastern neighbour after it: s, MB read |
+|---|---|---|---|
+| z10 | 36 at z12 | 3.6 s, 31.4 MB, 12 KB | 2.2 s, 16.8 MB |
+| z11 | 36 at z13 | 3.0 s, 29.7 MB, 7 KB | 1.6 s, 16.9 MB |
+| z12 | 16 at z13 | 1.7 s, 15.8 MB, 13 KB | 0.9 s, 6.6 MB |
+
+The megabytes are the terrain under the tile, which stays cached for the terrain tiles and
+elevations of the same place. A finished contour tile is 7 to 16 KB.
+
 ### Raster tiles (on-demand cache, not pre-rendered)
 
 Raster tiles are rendered on request from the vector basemap and cached, so their disk use grows

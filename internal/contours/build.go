@@ -278,20 +278,19 @@ type builder struct {
 	span   int
 }
 
-// block contours every tile of one block, for each zoom, from a mosaic of the block's
-// max-zoom terrain tiles plus a one-tile ring (for the borders).
-func (b *builder) block(ctx context.Context, blk [2]int, emit func(z, x, y int, data []byte) error) error {
+// TerrainFunc returns the decoded terrain tile x/y of one zoom, or nil when there is none.
+type TerrainFunc func(x, y int) (*elevation.Tile, error)
+
+// mosaic lays m×m terrain tiles, from tile (ox, oy) of a zoom with n tiles per side, into
+// one raster (NaN = no data). any reports whether a tile other than the outer ring had data.
+func mosaic(get TerrainFunc, ox, oy, m, n int) (mos []float32, any bool, err error) {
 	ts := elevation.TileSize
-	m := b.span + 2
 	size := m * ts
-	mos := make([]float32, size*size)
+	mos = make([]float32, size*size)
 	nan := float32(math.NaN())
 	for i := range mos {
 		mos[i] = nan
 	}
-	ox, oy := blk[0]*b.span-1, blk[1]*b.span-1 // mosaic origin in max-zoom tiles
-	n := 1 << b.maxz
-	any := false
 	for ty := 0; ty < m; ty++ {
 		for tx := 0; tx < m; tx++ {
 			x, y := ox+tx, oy+ty
@@ -299,34 +298,76 @@ func (b *builder) block(ctx context.Context, blk [2]int, emit func(z, x, y int, 
 				continue
 			}
 			x = ((x % n) + n) % n
-			data, ok, err := b.src.Get(uint8(b.maxz), uint32(x), uint32(y))
+			t, err := get(x, y)
 			if err != nil {
-				return err
+				return nil, false, err
 			}
-			if !ok {
+			if t == nil {
 				continue
 			}
-			t, err := elevation.DecodeTile(data)
-			if err != nil {
-				return fmt.Errorf("terrain %d/%d/%d: %w", b.maxz, x, y, err)
-			}
+			elev := t.Elev
 			if t.Src == nil {
-				// No source chunk: a foreign Terrarium archive. 0 m is its nodata.
+				// No source chunk: a tile below the terrain's deepest zoom, or a foreign
+				// Terrarium archive. 0 m is its nodata.
+				elev = make([]float32, len(t.Elev))
 				for i, v := range t.Elev {
 					if v == 0 {
-						t.Elev[i] = nan
+						v = nan
 					}
+					elev[i] = v
 				}
 			}
-			inside := tx >= 1 && tx <= b.span && ty >= 1 && ty <= b.span
 			for j := 0; j < ts; j++ {
 				row := (ty*ts+j)*size + tx*ts
-				copy(mos[row:row+ts], t.Elev[j*ts:(j+1)*ts])
+				copy(mos[row:row+ts], elev[j*ts:(j+1)*ts])
 			}
-			if inside {
+			if tx >= 1 && tx < m-1 && ty >= 1 && ty < m-1 {
 				any = true
 			}
 		}
+	}
+	return mos, any, nil
+}
+
+// Tile contours one tile, z/x/y, from terrain of a deeper zoom read through get: the terrain
+// tiles under it plus a one-tile ring, so its lines meet its neighbours'. It is what
+// on-demand terrain uses, with the same contouring as Build. A nil result means no contour
+// crosses the tile. o's zero values take the defaults.
+func Tile(get TerrainFunc, terrainZoom, z, x, y int, o Options) ([]byte, error) {
+	o.defaults()
+	if terrainZoom < z || terrainZoom-z > 4 {
+		return nil, fmt.Errorf("contours: tile zoom %d from terrain zoom %d", z, terrainZoom)
+	}
+	b := &builder{o: o, maxz: terrainZoom}
+	span := 1 << (terrainZoom - z)
+	m := span + 2
+	ox, oy := x*span-1, y*span-1
+	mos, any, err := mosaic(get, ox, oy, m, 1<<terrainZoom)
+	if err != nil || !any {
+		return nil, err
+	}
+	return b.tile(mos, m*elevation.TileSize, ox, oy, z, x, y)
+}
+
+// block contours every tile of one block, for each zoom, from a mosaic of the block's
+// max-zoom terrain tiles plus a one-tile ring (for the borders).
+func (b *builder) block(ctx context.Context, blk [2]int, emit func(z, x, y int, data []byte) error) error {
+	m := b.span + 2
+	size := m * elevation.TileSize
+	ox, oy := blk[0]*b.span-1, blk[1]*b.span-1 // mosaic origin in max-zoom tiles
+	mos, any, err := mosaic(func(x, y int) (*elevation.Tile, error) {
+		data, ok, err := b.src.Get(uint8(b.maxz), uint32(x), uint32(y))
+		if err != nil || !ok {
+			return nil, err
+		}
+		t, err := elevation.DecodeTile(data)
+		if err != nil {
+			return nil, fmt.Errorf("terrain %d/%d/%d: %w", b.maxz, x, y, err)
+		}
+		return t, nil
+	}, ox, oy, m, 1<<b.maxz)
+	if err != nil {
+		return err
 	}
 	if !any {
 		return nil

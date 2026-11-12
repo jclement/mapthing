@@ -1,8 +1,10 @@
 import {
   ChevronRight,
+  CloudDownload,
   Globe2,
   Hammer,
   Layers,
+  Mountain,
   Plus,
   Search,
   SquareDashed,
@@ -20,7 +22,9 @@ import {
   type ElevationSource,
   type NewRegion,
   type Region,
+  type TerrainMode,
 } from "../api";
+import { TerrainModeDialog } from "../components/OnDemand";
 import {
   Badge,
   Button,
@@ -40,6 +44,7 @@ import {
 import { useEvents } from "../lib/events";
 import * as fmt from "../lib/format";
 import { bboxAreaKm2, bboxContains, estimateDisk } from "../lib/geo";
+import { onDemandTerrainBytes, TERRAIN_CHOICES, terrainMode } from "../lib/ondemand";
 import { nextRefresh, policySummary } from "../lib/refresh";
 import { useApi } from "../lib/useApi";
 
@@ -54,6 +59,9 @@ export function RegionsPage() {
   const regions = useApi(() => api.regions(), [generationTick, active?.status]);
   const catalog = useApi(() => api.catalog(), []);
   const system = useApi(() => api.system(), [generationTick]);
+  // On-demand terrain: absent (an error) on a server that has none; the choice is then hidden.
+  const ondemand = useApi(() => api.ondemand(), []);
+  const [terrainFor, setTerrainFor] = useState<Region | null>(null);
   const [params, setParams] = useSearchParams();
   const adding = params.has("add");
   const [removing, setRemoving] = useState<Region | null>(null);
@@ -163,6 +171,7 @@ export function RegionsPage() {
             regions={list}
             sources={catalog.data?.elevation_sources ?? []}
             onRemove={setRemoving}
+            onTerrain={ondemand.data ? setTerrainFor : undefined}
           />
         )}
       </Card>
@@ -182,10 +191,21 @@ export function RegionsPage() {
         installed={list}
         freeBytes={system.data?.disk.free_bytes}
         hasData={!!system.data?.current_generation}
+        onDemand={!!ondemand.data}
         onAdded={async (build) => {
           setParams({});
           regions.reload();
           if (build && !active) await buildNow();
+        }}
+      />
+
+      <TerrainModeDialog
+        region={terrainFor}
+        onClose={() => setTerrainFor(null)}
+        onSaved={() => {
+          setTerrainFor(null);
+          regions.reload();
+          ondemand.reload();
         }}
       />
 
@@ -208,10 +228,13 @@ function RegionTable({
   regions,
   sources,
   onRemove,
+  onTerrain,
 }: {
   regions: Region[];
   sources: ElevationSource[];
   onRemove: (r: Region) => void;
+  /** Opens the terrain choice for a region; absent when the server has no on-demand terrain. */
+  onTerrain?: (r: Region) => void;
 }) {
   const srcName = (id: string) => sources.find((s) => s.id === id);
   return (
@@ -289,6 +312,24 @@ function RegionTable({
                       );
                     })}
                   </div>
+                  {onTerrain && (
+                    <button
+                      type="button"
+                      onClick={() => onTerrain(r)}
+                      title="Change how this region's terrain is provided"
+                      className="mt-1 inline-flex items-center gap-1 text-xs text-muted hover:text-accent-strong hover:underline"
+                    >
+                      {terrainMode(r) === "on_demand" ? (
+                        <>
+                          <CloudDownload className="size-3.5" /> Terrain read on demand
+                        </>
+                      ) : (
+                        <>
+                          <Mountain className="size-3.5" /> Terrain built
+                        </>
+                      )}
+                    </button>
+                  )}
                 </td>
                 <td className="px-3 py-2.5">
                   <Link
@@ -371,8 +412,11 @@ function AddRegion({
   installed,
   freeBytes,
   hasData,
+  onDemand,
   onAdded,
 }: {
+  /** The server can read terrain on demand, so the choice is offered. */
+  onDemand: boolean;
   open: boolean;
   onClose: () => void;
   catalog: Catalog | undefined;
@@ -388,9 +432,11 @@ function AddRegion({
   const [box, setBox] = useState<BBox | null>(null);
   const [busy, setBusy] = useState<"add" | "build" | null>(null);
   const [error, setError] = useState<string>();
+  const [terrain, setTerrain] = useState<TerrainMode>("prebuilt");
 
   useEffect(() => {
     if (!open) {
+      setTerrain("prebuilt");
       setSel(null);
       setBox(null);
       setBoxName("");
@@ -425,13 +471,18 @@ function AddRegion({
   const coverNow = cover && cover.key === boxKey ? cover : undefined;
 
   const summary = useMemo(() => {
-    const s = sel && catalog ? estimateFor(sel, catalog) : null;
+    let s = sel && catalog ? estimateFor(sel, catalog) : null;
+    if (s && terrain === "on_demand") {
+      // Only the zoomed-out terrain is built; the rest is fetched when asked for.
+      const low = onDemandTerrainBytes(s.est.terrain);
+      s = { ...s, est: { ...s.est, terrain: low, total: s.est.total - s.est.terrain + low } };
+    }
     const est = coverNow?.est;
     if (!s || !est) return s;
     // The download is every parent extract in full; the rest scales with the clipped area.
     const total = s.est.total - s.est.download + est.total_bytes;
     return { ...s, est: { ...s.est, download: est.total_bytes, total } };
-  }, [sel, catalog, coverNow]);
+  }, [sel, catalog, coverNow, terrain]);
   const installedIds = new Set(installed.map((r) => r.id));
   const alreadyInstalled = sel?.kind === "catalog" && installedIds.has(sel.entry.id);
   const canAdd =
@@ -446,7 +497,7 @@ function AddRegion({
     try {
       const body: NewRegion =
         sel.kind === "catalog" ? { id: sel.entry.id } : { name: sel.name.trim(), bbox: sel.bbox };
-      await api.addRegion(body);
+      await api.addRegion(terrain === "on_demand" ? { ...body, terrain_mode: terrain } : body);
       onAdded(build);
     } catch (e) {
       setError((e as Error).message);
@@ -592,6 +643,21 @@ function AddRegion({
                   ))}
                 </div>
               </div>
+              {onDemand && (
+                <div className="mt-3">
+                  <div className="mb-1 text-[11px] text-faint">How its terrain is provided</div>
+                  <Segmented
+                    label="Terrain"
+                    size="sm"
+                    value={terrain}
+                    onChange={setTerrain}
+                    options={TERRAIN_CHOICES.map((c) => ({ value: c.value, label: c.title }))}
+                  />
+                  <p className="mt-1 text-xs text-faint">
+                    {TERRAIN_CHOICES.find((c) => c.value === terrain)?.detail}
+                  </p>
+                </div>
+              )}
               {sel.kind === "box" && (
                 <p className="mt-3 text-xs text-faint" data-testid="parents">
                   {coverNow?.est ? (

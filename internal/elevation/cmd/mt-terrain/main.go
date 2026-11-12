@@ -1,7 +1,7 @@
 // Command mt-terrain builds and queries terrain archives outside the server,
 // for development and verification.
 //
-//	mt-terrain build -bbox w,s,e,n [-id name] -out data/t/terrain.pmtiles [-work dir] [-cache dir] [-maxzoom 13]
+//	mt-terrain build -bbox w,s,e,n [-id name] -out data/t/terrain.pmtiles [-work dir] [-cache dir] [-maxzoom 13] [-ondemand]
 //	mt-terrain sample -in terrain.pmtiles lon,lat [lon,lat…]
 //	mt-terrain contours -in terrain.pmtiles -out contours.pmtiles [-minzoom 10 -maxzoom 12 -grid 256 -gridmax 512 -simplify 1.5 -blur 1]
 //
@@ -55,6 +55,7 @@ func main() {
 		work := fs.String("work", "data/terrain/work", "work dir")
 		cache := fs.String("cache", "", "cache dir (default $MAPTHING_DATA/elevation/cache)")
 		maxzoom := fs.Int("maxzoom", 0, "force max zoom")
+		onDemand := fs.Bool("ondemand", false, "build as a region whose terrain is on demand: low zooms only, no GDAL")
 		_ = fs.Parse(os.Args[2:])
 		b, err := parseFloats(*bbox, 4)
 		if err != nil {
@@ -66,7 +67,7 @@ func main() {
 		if *maxzoom > 0 {
 			_ = os.Setenv("MAPTHING_TERRAIN_MAXZOOM", strconv.Itoa(*maxzoom))
 		}
-		regions := []catalog.Region{{ID: *id, BBox: catalog.BBox{b[0], b[1], b[2], b[3]}}}
+		regions := []catalog.Region{{ID: *id, BBox: catalog.BBox{b[0], b[1], b[2], b[3]}, TerrainOnDemand: *onDemand}}
 		fmt.Fprintf(os.Stderr, "estimate: %.1f MB\n", float64(build.EstimateTerrainBytes(regions))/1e6)
 		start := time.Now()
 		if err := build.BuildTerrain(ctx, &logReporter{}, regions, *work, *out); err != nil {

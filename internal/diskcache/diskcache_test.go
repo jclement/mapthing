@@ -1,4 +1,4 @@
-package tiles
+package diskcache
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 
 func TestDiskCacheLRU(t *testing.T) {
 	dir := t.TempDir()
-	c, err := NewDiskCache(dir, 25)
+	c, err := New(dir, 25)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestDiskCacheLRU(t *testing.T) {
 		t.Fatalf("size %d", c.Size())
 	}
 	// reload from disk
-	c2, err := NewDiskCache(dir, 25)
+	c2, err := New(dir, 25)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestDiskCacheLRU(t *testing.T) {
 }
 
 func TestDiskCacheDoSingleFlight(t *testing.T) {
-	c, err := NewDiskCache(t.TempDir(), 1<<20)
+	c, err := New(t.TempDir(), 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

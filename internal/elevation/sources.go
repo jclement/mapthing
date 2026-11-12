@@ -109,13 +109,16 @@ type Metadata struct {
 	TileSize int    `json:"tile_size"` // pixels, 256
 	// Sources is indexed by the per-pixel source index minus one
 	// (index 0 means no data).
-	Sources     []MetaSource `json:"sources"`
-	MinZoom     int          `json:"minzoom"`
-	MaxZoom     int          `json:"maxzoom"`
-	Bounds      BBox         `json:"bounds"`
-	Regions     []string     `json:"regions,omitempty"`
-	BuiltAt     string       `json:"built_at"`
-	Attribution string       `json:"attribution"`
+	Sources []MetaSource `json:"sources"`
+	MinZoom int          `json:"minzoom"`
+	MaxZoom int          `json:"maxzoom"`
+	Bounds  BBox         `json:"bounds"`
+	Regions []string     `json:"regions,omitempty"`
+	// OnDemand lists the regions whose terrain is on demand: the archive holds only their
+	// low zooms.
+	OnDemand    []string `json:"on_demand,omitempty"`
+	BuiltAt     string   `json:"built_at"`
+	Attribution string   `json:"attribution"`
 }
 
 // MetaSource is a source as recorded in an archive.
@@ -127,4 +130,22 @@ type MetaSource struct {
 	// source contributed data.
 	Footprint []BBox `json:"footprint,omitempty"`
 	Pixels    int64  `json:"pixels"` // max-zoom pixels taken from this source
+}
+
+// AttributionAll is the attribution for terrain that may come from any known
+// source (on-demand terrain with no built archive to say which were used).
+func AttributionAll() string {
+	seen := map[string]bool{}
+	out := ""
+	for _, s := range KnownSources {
+		if seen[s.Attribution] {
+			continue
+		}
+		seen[s.Attribution] = true
+		if out != "" {
+			out += "; "
+		}
+		out += s.Attribution
+	}
+	return out
 }

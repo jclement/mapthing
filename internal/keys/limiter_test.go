@@ -651,3 +651,42 @@ func TestLimiterStateIsReclaimed(t *testing.T) {
 		t.Error("the new client has no bucket")
 	}
 }
+
+// A limits configuration saved before on-demand terrain existed knows nothing of its kind.
+// After an upgrade the kind starts with its default weight and server limit (a cold read
+// from the public DEM hosts must never be free or uncapped by accident), while a limit the
+// operator removed once the kind was known stays removed.
+func TestAKindAddedLaterStartsWithItsDefaults(t *testing.T) {
+	e := newLimEnv(t)
+	ctx := context.Background()
+	def := DefaultConfig()
+	if def.Weights[KindOnDemand] <= def.Weights["elevation"] || def.Global[KindOnDemand].RPS <= 0 {
+		t.Fatalf("defaults: a cold on-demand read must cost more than an elevation request and be capped: %v %v", def.Weights, def.Global)
+	}
+	// As an older version stored it: no "ondemand" anywhere, and routes uncapped on purpose.
+	old := `{"weights":{"tile":1,"raster":10,"route":10,"matrix":20,"isochrone":20,"snap":2,"valhalla":10,"elevation":5,"pack":50},
+		"global":{"raster":{"rps":50,"burst":100}}}`
+	if err := e.st.SetSetting(ctx, configSetting, old); err != nil {
+		t.Fatal(err)
+	}
+	e.restart(false)
+	got := e.s.Config()
+	if got.Weights[KindOnDemand] != def.Weights[KindOnDemand] || got.Global[KindOnDemand] != def.Global[KindOnDemand] {
+		t.Errorf("after an upgrade: weight %d, limit %+v", got.Weights[KindOnDemand], got.Global[KindOnDemand])
+	}
+	if got.Global["raster"].RPS != 50 {
+		t.Errorf("the operator's raster limit was lost: %+v", got.Global["raster"])
+	}
+	if _, ok := got.Global["route"]; ok {
+		t.Error("a limit the operator removed came back")
+	}
+	// Saved again with the kind known and its limit removed: it stays removed.
+	delete(got.Global, KindOnDemand)
+	if err := e.s.SetConfig(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	e.restart(false)
+	if _, ok := e.s.Config().Global[KindOnDemand]; ok {
+		t.Error("the on-demand limit came back after the operator removed it")
+	}
+}

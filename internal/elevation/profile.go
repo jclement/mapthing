@@ -236,6 +236,11 @@ func profileFrom(ctx context.Context, s sampler, finder StructureFinder, path []
 	if len(dist) > 0 {
 		p.LengthM = math.Round(dist[len(dist)-1]*100) / 100
 	}
+	if pr, ok := s.(interface{ prepare([]LonLat) error }); ok {
+		if err := pr.prepare(pts); err != nil {
+			return nil, err
+		}
+	}
 	seen := map[string]bool{}
 	for i, pt := range pts {
 		if i%256 == 0 && ctx.Err() != nil {

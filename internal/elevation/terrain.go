@@ -126,58 +126,15 @@ func (a *Archive) pixel(px, py int) (float32, uint8, error) {
 	return t.Elev[i], s, nil
 }
 
-// Sample returns the bilinearly interpolated elevation at a point. Pixel
-// centres sit at (i+0.5, j+0.5); neighbours without data are dropped and the
-// remaining weights renormalised. The source is the nearest pixel's source.
+// Sample returns the bilinearly interpolated elevation at a point (see
+// grid.sample).
 func (a *Archive) Sample(lon, lat float64) (Sample, error) {
-	s := Sample{Lon: lon, Lat: lat}
-	if math.IsNaN(lon) || math.IsNaN(lat) || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
-		return s, fmt.Errorf("invalid coordinate %v,%v", lon, lat)
-	}
-	if math.Abs(lat) > maxMercLat {
-		return s, nil
-	}
-	px, py := LonLatToWorldPixel(lon, lat, a.maxZoom)
-	fx, fy := px-0.5, py-0.5
-	x0, y0 := int(math.Floor(fx)), int(math.Floor(fy))
-	tx, ty := fx-float64(x0), fy-float64(y0)
-	var sum, wsum float64
-	for _, c := range [4]struct {
-		dx, dy int
-		w      float64
-	}{{0, 0, (1 - tx) * (1 - ty)}, {1, 0, tx * (1 - ty)}, {0, 1, (1 - tx) * ty}, {1, 1, tx * ty}} {
-		e, _, err := a.pixel(x0+c.dx, y0+c.dy)
-		if err != nil {
-			return s, err
+	return grid{zoom: a.maxZoom, pixel: a.pixel, source: func(idx uint8) (SourceInfo, bool) {
+		if int(idx) < 1 || int(idx) > len(a.meta.Sources) {
+			return SourceInfo{}, false
 		}
-		if math.IsNaN(float64(e)) || c.w == 0 {
-			continue
-		}
-		sum += float64(e) * c.w
-		wsum += c.w
-	}
-	if wsum == 0 {
-		return s, nil
-	}
-	v := math.Round(sum/wsum*100) / 100 // centimetres are plenty
-	s.Elevation = &v
-	_, src, err := a.pixel(int(math.Floor(px)), int(math.Floor(py)))
-	if err != nil {
-		return s, err
-	}
-	if src == 0 { // nearest pixel empty but a neighbour has data: take any neighbour's source
-		for _, d := range [4][2]int{{0, 0}, {1, 0}, {0, 1}, {1, 1}} {
-			if _, src, _ = a.pixel(x0+d[0], y0+d[1]); src != 0 {
-				break
-			}
-		}
-	}
-	if int(src) >= 1 && int(src) <= len(a.meta.Sources) {
-		ms := a.meta.Sources[src-1]
-		s.Source = ms.ID
-		s.Resolution = math.Round(math.Max(ms.ResolutionM, GroundResolution(a.maxZoom, lat))*10) / 10
-	}
-	return s, nil
+		return a.meta.Sources[idx-1].SourceInfo, true
+	}}.sample(lon, lat)
 }
 
 func floorDiv(a, b int) int {
@@ -203,6 +160,31 @@ type Terrain struct {
 	modTime   time.Time
 	lastCheck time.Time
 	finder    StructureFinder // for bridges=deck; nil = unavailable
+	fallback  Fallback        // on-demand terrain; nil = none
+}
+
+// SetFallback sets where elevation comes from when the live archive has none
+// for a point (on-demand terrain). nil turns it off.
+func (t *Terrain) SetFallback(f Fallback) {
+	t.mu.Lock()
+	t.fallback = f
+	t.mu.Unlock()
+}
+
+// mixed returns a sampler over the live archive and the fallback. With
+// neither there is nothing to answer from.
+func (t *Terrain) mixed(ctx context.Context) (*mixed, error) {
+	a, err := t.archive()
+	t.mu.Lock()
+	fb := t.fallback
+	t.mu.Unlock()
+	if err != nil {
+		if fb == nil {
+			return nil, err
+		}
+		a = nil
+	}
+	return &mixed{ctx: ctx, arc: a, fb: fb}, nil
 }
 
 // SetStructureFinder enables bridges=deck profiles (normally the routing client).
@@ -268,8 +250,11 @@ func (t *Terrain) archive() (*Archive, error) {
 
 // Points samples each point.
 func (t *Terrain) Points(ctx context.Context, pts []LonLat) ([]Sample, error) {
-	a, err := t.archive()
+	m, err := t.mixed(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.prepare(pts); err != nil {
 		return nil, err
 	}
 	out := make([]Sample, len(pts))
@@ -277,7 +262,7 @@ func (t *Terrain) Points(ctx context.Context, pts []LonLat) ([]Sample, error) {
 		if i%256 == 0 && ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if out[i], err = a.Sample(p[0], p[1]); err != nil {
+		if out[i], err = m.Sample(p[0], p[1]); err != nil {
 			return nil, err
 		}
 	}
@@ -286,32 +271,45 @@ func (t *Terrain) Points(ctx context.Context, pts []LonLat) ([]Sample, error) {
 
 // Profile densifies path and samples it.
 func (t *Terrain) Profile(ctx context.Context, path []LonLat, opt ProfileOptions) (*Profile, error) {
-	a, err := t.archive()
+	m, err := t.mixed(ctx)
 	if err != nil {
 		return nil, err
 	}
 	t.mu.Lock()
 	finder := t.finder
 	t.mu.Unlock()
-	return profileFrom(ctx, a, finder, path, opt)
+	return profileFrom(ctx, m, finder, path, opt)
 }
 
-// Sources lists the sources present in the live archive.
+// Sources lists the sources present in the live archive, followed by the
+// other known sources when on-demand terrain may read them.
 func (t *Terrain) Sources() []SourceInfo {
-	a, err := t.archive()
-	if err != nil {
-		return nil
-	}
-	// List the sources that contributed pixels; archives without pixel
-	// counts (hand-made, tests) list every source.
-	counted := false
-	for _, s := range a.meta.Sources {
-		counted = counted || s.Pixels > 0
-	}
+	t.mu.Lock()
+	fb := t.fallback
+	t.mu.Unlock()
 	var out []SourceInfo
-	for _, s := range a.meta.Sources {
-		if !counted || s.Pixels > 0 {
-			out = append(out, s.SourceInfo)
+	if a, err := t.archive(); err == nil {
+		// List the sources that contributed pixels; archives without pixel
+		// counts (hand-made, tests) list every source.
+		counted := false
+		for _, s := range a.meta.Sources {
+			counted = counted || s.Pixels > 0
+		}
+		for _, s := range a.meta.Sources {
+			if !counted || s.Pixels > 0 {
+				out = append(out, s.SourceInfo)
+			}
+		}
+	}
+	if fb != nil {
+		have := map[string]bool{}
+		for _, s := range out {
+			have[s.ID] = true
+		}
+		for _, s := range KnownSources {
+			if !have[s.ID] {
+				out = append(out, s.SourceInfo)
+			}
 		}
 	}
 	return out

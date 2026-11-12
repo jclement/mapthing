@@ -29,6 +29,7 @@ import (
 	"github.com/jclement/mapthing/internal/jobs"
 	"github.com/jclement/mapthing/internal/keys"
 	"github.com/jclement/mapthing/internal/logs"
+	"github.com/jclement/mapthing/internal/ondemand"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/server"
 	"github.com/jclement/mapthing/internal/stats"
@@ -171,7 +172,12 @@ func serve() error {
 		})
 	}
 
-	ts, err := tiles.New(tiles.Options{
+	// On-demand terrain: off unless a region or "outside built regions" is set to it.
+	od, odAreas, err := newOnDemand(ctx, cfg, st)
+	if err != nil {
+		return err
+	}
+	topt := tiles.Options{
 		DataDir:           cfg.DataDir,
 		Assets:            assets.FS(),
 		PublicURL:         cfg.PublicURL,
@@ -184,9 +190,22 @@ func serve() error {
 		PackCacheBytes:    cfg.PackCacheMB << 20,
 		PackMaxTiles:      cfg.PackMaxTiles,
 		ImageryOverride:   cfg.ImageryURL != "",
-	})
+	}
+	if od != nil {
+		topt.OnDemand, topt.ColdGate = od, coldGate(au)
+		topt.OnDemandMinZoom, topt.OnDemandMaxZoom = ondemand.MinZoom, ondemand.MaxZoom
+		if od.Status().Contours {
+			topt.OnDemandContourMinZoom, topt.OnDemandContourMaxZoom = ondemand.ContourMinZoom, ondemand.ContourMaxZoom
+		}
+	}
+	ts, err := tiles.New(topt)
 	if err != nil {
 		return fmt.Errorf("tiles: %w", err)
+	}
+	if od != nil {
+		// Built terrain wins: a warm job leaves built tiles alone, and a contour tile at a
+		// built region's edge is drawn over the built tiles on that side.
+		od.SetBuiltTerrain(ondemand.BuiltTerrain{Tile: ts.TerrainTile, Generation: ts.Generation})
 	}
 
 	var f *features
@@ -195,6 +214,9 @@ func serve() error {
 		// Zero downtime: tiles reopen at once; valhalla switches blue/green once the new
 		// instance answers; the renderer drops its styles and pools (no restart).
 		ts.Reload()
+		if od != nil {
+			od.Refresh(ctx) // the new generation may have built (or dropped) a region's terrain
+		}
 		f.swap(ctx, newID)
 		runner.Hub().Publish(jobs.Event{Type: "generation", Data: map[string]any{"id": newID, "previous": oldID}})
 	}
@@ -213,7 +235,8 @@ func serve() error {
 		Client: &http.Client{Timeout: 20 * time.Second}}
 	deps.Update = upd.Status
 	go upd.Run(ctx)
-	f = &features{cfg: cfg, store: st, runner: runner, sched: sched, sup: sup, watcher: watcher, tiles: ts}
+	f = &features{cfg: cfg, store: st, runner: runner, sched: sched, sup: sup, watcher: watcher, tiles: ts,
+		auth: au, ondemand: od, ondemandAreas: odAreas}
 	if err := f.wire(ctx, &deps); err != nil {
 		return err
 	}

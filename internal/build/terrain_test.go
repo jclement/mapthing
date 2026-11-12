@@ -53,14 +53,14 @@ func TestCountTilesPolygon(t *testing.T) {
 	if nt >= nb || nt < nb/3 {
 		t.Errorf("polygon tiles %d vs bbox %d", nt, nb)
 	}
-	if !polygonIntersectsBox(tri.polygon, elevation.BBox{-103.9, 31.1, -103.8, 31.2}) {
+	if !elevation.RingsIntersectBox(tri.polygon, elevation.BBox{-103.9, 31.1, -103.8, 31.2}) {
 		t.Errorf("inside box not detected")
 	}
-	if polygonIntersectsBox(tri.polygon, elevation.BBox{-102.2, 32.8, -102.1, 32.9}) {
+	if elevation.RingsIntersectBox(tri.polygon, elevation.BBox{-102.2, 32.8, -102.1, 32.9}) {
 		t.Errorf("outside box detected")
 	}
 	// Polygon entirely inside the box (no box corner inside polygon).
-	if !polygonIntersectsBox([][][2]float64{{{0.4, 0.4}, {0.6, 0.4}, {0.5, 0.6}}}, elevation.BBox{0, 0, 1, 1}) {
+	if !elevation.RingsIntersectBox([][][2]float64{{{0.4, 0.4}, {0.6, 0.4}, {0.5, 0.6}}}, elevation.BBox{0, 0, 1, 1}) {
 		t.Errorf("contained polygon not detected")
 	}
 }

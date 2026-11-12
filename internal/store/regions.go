@@ -34,10 +34,23 @@ type Region struct {
 	CheckedAt   *time.Time `json:"checked_at,omitempty"`
 	CheckResult string     `json:"check_result,omitempty"` // changed | unchanged | error
 	CheckDetail string     `json:"check_detail,omitempty"`
+
+	// TerrainMode (migration 0006) is TerrainPrebuilt or TerrainOnDemand.
+	TerrainMode string `json:"terrain_mode"`
 }
 
+// Terrain modes of a region.
+const (
+	// TerrainPrebuilt: the build makes the region's terrain at every zoom (the default).
+	TerrainPrebuilt = "prebuilt"
+	// TerrainOnDemand: the build makes only the low zooms; deeper tiles and elevations are
+	// read from the public DEM hosts when first asked for, and cached.
+	TerrainOnDemand = "on_demand"
+)
+
 const regionCols = `id, name, kind, parent, bbox, polygon, refresh, added_at, updated_at, meta,
-	refresh_mode, refresh_cron, refresh_window, refresh_only_changed, refresh_handled_at, checked_at, check_result, check_detail`
+	refresh_mode, refresh_cron, refresh_window, refresh_only_changed, refresh_handled_at, checked_at, check_result, check_detail,
+	terrain_mode`
 
 func scanRegion(sc interface{ Scan(...any) error }) (*Region, error) {
 	var r Region
@@ -46,13 +59,17 @@ func scanRegion(sc interface{ Scan(...any) error }) (*Region, error) {
 	var added, updated int64
 	var handled, checked sql.NullInt64
 	if err := sc.Scan(&r.ID, &r.Name, &r.Kind, &r.Parent, &bbox, &poly, &refresh, &added, &updated, &meta,
-		&r.RefreshMode, &r.RefreshCron, &r.RefreshWindow, &onlyChanged, &handled, &checked, &r.CheckResult, &r.CheckDetail); err != nil {
+		&r.RefreshMode, &r.RefreshCron, &r.RefreshWindow, &onlyChanged, &handled, &checked, &r.CheckResult, &r.CheckDetail,
+		&r.TerrainMode); err != nil {
 		return nil, err
 	}
 	r.RefreshOnlyChanged = onlyChanged != 0
 	r.RefreshHandledAt, r.CheckedAt = nullTime(handled), nullTime(checked)
 	if r.RefreshMode == "" {
 		r.RefreshMode = "default"
+	}
+	if r.TerrainMode != TerrainOnDemand {
+		r.TerrainMode = TerrainPrebuilt
 	}
 	if bbox != "" {
 		_ = json.Unmarshal([]byte(bbox), &r.BBox)
@@ -119,18 +136,33 @@ func (s *Store) UpsertRegion(ctx context.Context, r *Region) error {
 		}
 		r.RefreshOnlyChanged = true
 	}
+	if r.TerrainMode != TerrainOnDemand {
+		r.TerrainMode = TerrainPrebuilt
+	}
 	now := time.Now().Unix()
 	// A new region's first refresh is the first schedule time after it was added.
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO regions (id, name, kind, parent, bbox, polygon, refresh, added_at, updated_at, meta,
-			refresh_mode, refresh_cron, refresh_window, refresh_only_changed, refresh_handled_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			refresh_mode, refresh_cron, refresh_window, refresh_only_changed, refresh_handled_at, terrain_mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind, parent = excluded.parent, bbox = excluded.bbox,
 			polygon = excluded.polygon, refresh = excluded.refresh, updated_at = excluded.updated_at, meta = excluded.meta,
 			refresh_mode = excluded.refresh_mode, refresh_cron = excluded.refresh_cron, refresh_window = excluded.refresh_window,
-			refresh_only_changed = excluded.refresh_only_changed`,
+			refresh_only_changed = excluded.refresh_only_changed, terrain_mode = excluded.terrain_mode`,
 		r.ID, r.Name, r.Kind, r.Parent, bbox, string(r.Polygon), boolInt(r.RefreshMode != "never"), now, now, meta,
-		r.RefreshMode, r.RefreshCron, r.RefreshWindow, boolInt(r.RefreshOnlyChanged), now)
+		r.RefreshMode, r.RefreshCron, r.RefreshWindow, boolInt(r.RefreshOnlyChanged), now, r.TerrainMode)
 	return err
+}
+
+// SetRegionTerrain sets how a region's terrain is provided (TerrainPrebuilt or TerrainOnDemand).
+func (s *Store) SetRegionTerrain(ctx context.Context, id, mode string) error {
+	if mode != TerrainPrebuilt && mode != TerrainOnDemand {
+		return errors.New("terrain mode must be prebuilt or on_demand")
+	}
+	res, err := s.DB.ExecContext(ctx, `UPDATE regions SET terrain_mode = ?, updated_at = ? WHERE id = ?`, mode, time.Now().Unix(), id)
+	if err != nil {
+		return err
+	}
+	return affected(res)
 }
 
 // SetRegionRefresh toggles whether a region is refreshed at all: off is mode never, on puts a

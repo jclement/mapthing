@@ -4,11 +4,13 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/jclement/mapthing/internal/auth"
 	"github.com/jclement/mapthing/internal/build"
 	"github.com/jclement/mapthing/internal/catalog"
 	"github.com/jclement/mapthing/internal/config"
 	"github.com/jclement/mapthing/internal/elevation"
 	"github.com/jclement/mapthing/internal/jobs"
+	"github.com/jclement/mapthing/internal/ondemand"
 	"github.com/jclement/mapthing/internal/routing"
 	"github.com/jclement/mapthing/internal/scheduler"
 	"github.com/jclement/mapthing/internal/server"
@@ -28,6 +30,12 @@ type features struct {
 	watcher *tiles.Watcher
 	tiles   *tiles.Server
 
+	auth          *auth.Auth
+	ondemand      *ondemand.Manager // nil when this server serves neither tiles nor elevation
+	ondemandAreas *onDemandAreas
+	// catalogLoaded, if set, is called once the region catalog has loaded.
+	catalogLoaded func(*catalog.Catalog)
+
 	valhalla *supervisor.BlueGreen
 	// valhallaGen is the generation directory of the instance being started, for its test
 	// route (during an adoption that is not yet the live generation).
@@ -43,6 +51,15 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 		return nil
 	}
 	// Pipeline: build job, catalog, region validation (cmd/mapthing/pipeline.go).
+	if f.ondemand != nil {
+		// Region outlines come from the catalog, which the pipeline loads in the background:
+		// once it is in, on demand follows the outlines instead of the regions' boxes.
+		f.catalogLoaded = func(cat *catalog.Catalog) {
+			f.ondemandAreas.setCatalog(cat)
+			f.ondemand.Refresh(ctx)
+		}
+		d.OnDemand = f.ondemand
+	}
 	f.wirePipeline(ctx, d, restart, func(b catalog.BBox) []string { return elevation.CoverageIDs(b) })
 
 	d.ActivateGeneration = f.activateGeneration // adopt.go
@@ -92,7 +109,13 @@ func (f *features) wire(ctx context.Context, d *server.Deps) error {
 		if f.cfg.Serve.Routing {
 			terrain.SetStructureFinder(router) // bridges=deck profiles map-match through Valhalla
 		}
-		d.Mounts = append(d.Mounts, elevation.NewHandler(terrain))
+		h := elevation.NewHandler(terrain)
+		if f.ondemand != nil {
+			// Where no built terrain covers a point, on-demand terrain answers if it applies there.
+			terrain.SetFallback(ondemand.Fallback{S: f.ondemand.Svc})
+			h.Context = coldGate(f.auth)
+		}
+		d.Mounts = append(d.Mounts, h)
 		d.ElevationSources = func() any { return terrain.Sources() }
 	}
 	return nil

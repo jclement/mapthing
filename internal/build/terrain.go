@@ -91,6 +91,8 @@ type TerrainResult struct {
 	Reused      int                    `json:"pieces_reused"`
 	DurationSec float64                `json:"duration_s"`
 	BuiltAt     string                 `json:"built_at"`
+	// OnDemand lists the regions whose terrain is on demand (low zooms only in this archive).
+	OnDemand []string `json:"on_demand,omitempty"`
 	// Fingerprint identifies the areas and settings this archive was built for
 	// (terrain_reuse.go); a later build with the same fingerprint may reuse the archive.
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -150,6 +152,7 @@ func bestResM(a area) float64 {
 // the best source resolution at the area's mid-latitude, capped at
 // DefaultTerrainMaxZoom; then lowers it while the tile count exceeds maxTiles.
 func chooseMaxZoom(areas []area, o terrainOpts) (int, int) {
+	areas = fullAreas(areas) // on-demand regions have no deep tiles to count or to choose a zoom for
 	z := o.maxZoom
 	if z == 0 {
 		for _, a := range areas {
@@ -208,8 +211,10 @@ func EstimateTerrainBytes(regions []catalog.Region) int64 {
 	if len(areas) == 0 {
 		return 0
 	}
-	_, n := chooseMaxZoom(areas, terrainOptsFromEnv())
+	z, n := chooseMaxZoom(areas, terrainOptsFromEnv())
 	archive := int64(float64(n) * estBytesPerTile * 4 / 3)
+	// On-demand regions: only their low zooms, a tile of the chunk level for every 256 deep ones.
+	archive += int64(float64(countTiles(lowAreas(areas), max(0, z-chunkShift))) * estBytesPerTile * 2 * 4 / 3)
 	// Cache: ~1.6 px per tile pixel (0.8 res factor) at ~0.6 B/px with LERC
 	// (measured ~0.45 B/px on 3DEP west Texas at MAX_Z_ERROR 0.05).
 	cache := int64(float64(n) * elevation.TileSize * elevation.TileSize * 1.56 * 0.6)
@@ -285,13 +290,16 @@ func buildTerrain(ctx context.Context, r Reporter, areas []area, workDir, outPat
 	}
 	fingerprint := terrainFingerprint(areas, o)
 	g := newGDALRunner(absPath(workDir), absPath(o.cacheDir))
-	if err := g.available(ctx); err != nil {
-		return nil, err
+	if len(fullAreas(areas)) > 0 { // on-demand regions' low zooms are read without GDAL
+		if err := g.available(ctx); err != nil {
+			return nil, err
+		}
 	}
 	r.Logf("terrain: %d region(s), max zoom %d, %d max-zoom tiles (budget %d), %d workers, cache %s",
 		len(areas), z, n, o.maxTiles, o.workers, o.cacheDir)
 
-	b := &builder{o: o, areas: areas, z: z, minZoom: o.minZoom, srcs: demSources(), gdal: g, workDir: workDir, report: r,
+	low := lowAreas(areas)
+	b := &builder{o: o, areas: fullAreas(areas), z: z, minZoom: o.minZoom, srcs: demSources(), gdal: g, workDir: workDir, report: r,
 		base: map[[2]int]*elevTile{}}
 	b.shift = min(chunkShift, z-b.minZoom)
 	b.pixels = make([]int64, len(b.srcs))
@@ -356,6 +364,12 @@ feed:
 		return nil, err
 	}
 
+	if len(low) > 0 {
+		r.Progress(0.95, "terrain: low zooms of on-demand regions")
+		if err := b.onDemandBase(ctx, low); err != nil {
+			return nil, err
+		}
+	}
 	r.Progress(0.96, "terrain: low zooms")
 	if err := b.lowZooms(); err != nil {
 		return nil, err
@@ -365,13 +379,16 @@ feed:
 	// per-pixel indices written in processChunk are 1-based positions in b.srcs,
 	// so keep every source in the table and mark unused ones with 0 pixels.
 	bounds := areas[0].bbox
-	var ids []string
+	var ids, onDemand []string
 	for _, a := range areas {
 		bounds = elevation.BBox{math.Min(bounds[0], a.bbox[0]), math.Min(bounds[1], a.bbox[1]), math.Max(bounds[2], a.bbox[2]), math.Max(bounds[3], a.bbox[3])}
 		ids = append(ids, a.id)
+		if a.lowOnly {
+			onDemand = append(onDemand, a.id)
+		}
 	}
 	meta := elevation.Metadata{Name: "mapthing terrain", Format: "png", Encoding: "terrarium", TileSize: elevation.TileSize,
-		MinZoom: b.minZoom, MaxZoom: z, Bounds: bounds, Regions: ids, BuiltAt: time.Now().UTC().Format(time.RFC3339)}
+		MinZoom: b.minZoom, MaxZoom: z, Bounds: bounds, Regions: ids, OnDemand: onDemand, BuiltAt: time.Now().UTC().Format(time.RFC3339)}
 	var attrs []string
 	for i, s := range b.srcs {
 		ms := elevation.MetaSource{SourceInfo: s.def.SourceInfo, Datum: s.def.Datum, Kind: s.def.Kind, Pixels: b.pixels[i]}
@@ -405,6 +422,7 @@ feed:
 	if fi != nil {
 		res.Bytes = fi.Size()
 	}
+	res.OnDemand = onDemand
 	js, _ := json.MarshalIndent(res, "", "  ")
 	if err := os.WriteFile(outPath+".json", js, 0o644); err != nil {
 		return nil, err

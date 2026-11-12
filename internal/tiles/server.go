@@ -52,6 +52,17 @@ type Options struct {
 	// ImageryAttribution() in place of their built-in imagery attribution.
 	ImageryOverride bool
 	HTTPClient      *http.Client
+
+	// OnDemand, if set, builds terrain tiles the live archive does not have, where the
+	// operator turned that on. ColdGate returns the context for one request's on-demand work,
+	// carrying the charge a cold fetch costs (rate limits). OnDemandMinZoom and
+	// OnDemandMaxZoom are the zooms on demand serves.
+	OnDemand                         OnDemandTerrain
+	ColdGate                         func(r *http.Request) context.Context
+	OnDemandMinZoom, OnDemandMaxZoom int
+	// OnDemandContourMinZoom and OnDemandContourMaxZoom are the contour zooms on demand
+	// draws; a max of 0 means contours are not drawn on demand.
+	OnDemandContourMinZoom, OnDemandContourMaxZoom int
 }
 
 // Server is the tiles HTTP layer.
