@@ -134,13 +134,33 @@ type mixed struct {
 	fb  Fallback
 }
 
+// built reports whether the archive holds the built tile (at its own deepest
+// zoom) over a longitude and latitude. Built terrain wins a tile at a time:
+// where a built tile exists the archive answers, holes included, exactly as
+// the tile endpoint serves that tile, and the fallback is not asked.
+func (m *mixed) built(lon, lat float64) (bool, error) {
+	if m.arc == nil || math.Abs(lat) > maxMercLat {
+		return false, nil
+	}
+	px, py := LonLatToWorldPixel(lon, lat, m.arc.maxZoom)
+	t, err := m.arc.tile(floorDiv(int(math.Floor(px)), TileSize), floorDiv(int(math.Floor(py)), TileSize))
+	return t != nil, err
+}
+
 func (m *mixed) fallbackGrid() grid {
-	n := 1 << m.fb.Zoom()
-	return grid{zoom: m.fb.Zoom(),
+	z := m.fb.Zoom()
+	n := 1 << z
+	return grid{zoom: z,
 		pixel: func(px, py int) (float32, uint8, error) {
 			ty := floorDiv(py, TileSize)
 			if ty < 0 || ty >= n {
 				return float32(math.NaN()), 0, nil
+			}
+			// A neighbour pixel over built ground is not the fallback's to give:
+			// interpolation near a built tile's edge uses the on-demand side only.
+			lon, lat := WorldPixelToLonLat(float64(px)+0.5, float64(py)+0.5, z)
+			if b, err := m.built(lon, lat); err != nil || b {
+				return float32(math.NaN()), 0, err
 			}
 			t, err := m.fb.Tile(m.ctx, ((floorDiv(px, TileSize)%n)+n)%n, ty)
 			if err != nil || t == nil {
@@ -162,17 +182,30 @@ func (m *mixed) fallbackGrid() grid {
 	}
 }
 
+// arc0 is the archive's deepest zoom (0 without an archive): a fallback tile
+// coarser than the built tiles can straddle built and unbuilt ground.
+func (m *mixed) arc0() int {
+	if m.arc == nil {
+		return 0
+	}
+	return m.arc.maxZoom
+}
+
 // Sample implements sampler.
 func (m *mixed) Sample(lon, lat float64) (Sample, error) {
 	s := Sample{Lon: lon, Lat: lat}
-	if m.arc != nil {
-		var err error
-		if s, err = m.arc.Sample(lon, lat); err != nil || s.Elevation != nil {
-			return s, err
-		}
+	if math.IsNaN(lon) || math.IsNaN(lat) || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return s, fmt.Errorf("invalid coordinate %v,%v", lon, lat)
 	}
-	if m.fb == nil || !m.fb.Covers(lon, lat) {
-		return s, nil
+	b, err := m.built(lon, lat)
+	if err != nil {
+		return s, err
+	}
+	if b || m.fb == nil || !m.fb.Covers(lon, lat) {
+		if m.arc == nil {
+			return s, nil
+		}
+		return m.arc.Sample(lon, lat)
 	}
 	return m.fallbackGrid().sample(lon, lat)
 }
@@ -191,20 +224,30 @@ func (m *mixed) prepare(pts []LonLat) error {
 		if math.IsNaN(p[0]) || math.IsNaN(p[1]) || p[1] < -90 || p[1] > 90 || p[0] < -180 || p[0] > 180 {
 			continue // Sample reports it
 		}
-		if m.arc != nil {
-			if s, err := m.arc.Sample(p[0], p[1]); err != nil || s.Elevation != nil {
-				continue
-			}
-		}
-		if !m.fb.Covers(p[0], p[1]) {
+		if b, err := m.built(p[0], p[1]); err != nil {
+			return err
+		} else if b || !m.fb.Covers(p[0], p[1]) {
 			continue
 		}
-		neighbours(p[0], p[1], m.fb.Zoom(), func(x, y int) {
-			if k := [2]int{x, y}; !seen[k] {
-				seen[k] = true
+		z := m.fb.Zoom()
+		var berr error
+		neighbours(p[0], p[1], z, func(x, y int) {
+			k := [2]int{x, y}
+			if seen[k] {
+				return
+			}
+			seen[k] = true
+			// A neighbouring tile that lies wholly over built ground is never read.
+			lon, lat := WorldPixelToLonLat((float64(x)+0.5)*TileSize, (float64(y)+0.5)*TileSize, z)
+			if b, err := m.built(lon, lat); err != nil {
+				berr = err
+			} else if !b || z < m.arc0() {
 				tiles = append(tiles, k)
 			}
 		})
+		if berr != nil {
+			return berr
+		}
 		if len(tiles) > MaxFallbackTiles {
 			return ErrTooLarge
 		}

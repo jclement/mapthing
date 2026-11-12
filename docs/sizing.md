@@ -345,6 +345,25 @@ Reading these:
   is one small file read: 1 to 2 ms in a single-request check, the same path as the imagery
   cache).
 
+**Contours on demand** are drawn from on-demand terrain one or two zooms deeper than the
+contour tile (z10 from z12, z11 and z12 from z13; a build uses z13 for all three). A lone
+contour tile with nothing cached, then its eastern neighbour, measured 2026-11-12 in the Texas
+hill country and at Calgary:
+
+| contour tile | terrain tiles it reads | cold: s, MB read, KB | its eastern neighbour after it: s, MB read |
+|---|---|---|---|
+| z10 | 36 at z12 | 3.2 s, 30.7 MB, 16 KB | 1.7 s, 14.1 MB |
+| z11 | 36 at z13 | 3.1 s, 31.5 MB, 8 KB | 1.8 s, 18.2 MB |
+| z12 | 16 at z13 | 1.8 s, 14.8 MB, 14 KB | 0.8 s, 6.1 MB |
+| contour tile | terrain tiles it reads | cold: s, MB read, KB | its eastern neighbour after it: s, MB read |
+|---|---|---|---|
+| z10 | 36 at z12 | 3.6 s, 31.4 MB, 12 KB | 2.2 s, 16.8 MB |
+| z11 | 36 at z13 | 3.0 s, 29.7 MB, 7 KB | 1.6 s, 16.9 MB |
+| z12 | 16 at z13 | 1.7 s, 15.8 MB, 13 KB | 0.9 s, 6.6 MB |
+
+The megabytes are the terrain under the tile, which stays cached for the terrain tiles and
+elevations of the same place. A finished contour tile is 7 to 16 KB.
+
 ### Raster tiles (on-demand cache, not pre-rendered)
 
 Raster tiles are rendered on request from the vector basemap and cached, so their disk use grows

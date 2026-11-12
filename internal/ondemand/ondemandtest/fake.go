@@ -32,6 +32,20 @@ type Hosts struct {
 	Delay atomic.Int64
 	// Counts of requests by kind.
 	Heads, Ranges, Index atomic.Int64
+	// IndexBody, if set, is what the HRDEM index answers (a STAC search page).
+	IndexBody atomic.Value // string
+	// RedirectTo, if set, makes /redirect answer a redirect to that URL.
+	RedirectTo atomic.Value // string
+
+	seen sync.Map // path → *atomic.Int64
+}
+
+// Seen is how many requests asked for a path.
+func (h *Hosts) Seen(path string) int64 {
+	if v, ok := h.seen.Load(path); ok {
+		return v.(*atomic.Int64).Load()
+	}
+	return 0
 }
 
 type file struct {
@@ -60,8 +74,20 @@ func (h *Hosts) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "down", http.StatusServiceUnavailable)
 		return
 	}
+	c, _ := h.seen.LoadOrStore(r.URL.Path, new(atomic.Int64))
+	c.(*atomic.Int64).Add(1)
+	if r.URL.Path == "/redirect" {
+		if to, _ := h.RedirectTo.Load().(string); to != "" {
+			http.Redirect(w, r, to, http.StatusFound)
+			return
+		}
+	}
 	if r.URL.Path == "/stac" {
 		h.Index.Add(1)
+		if body, _ := h.IndexBody.Load().(string); body != "" {
+			_, _ = w.Write([]byte(body))
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"features": []any{}, "links": []any{}})
 		return
 	}

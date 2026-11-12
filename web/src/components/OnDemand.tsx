@@ -211,8 +211,9 @@ export function OnDemandSettings({
           is asked for, instead of being built ahead. That saves almost all of a region's terrain
           disk and build time. The price: the first view of a place waits about a second while it is
           fetched, this server needs the internet for places it has not seen yet, and what it
-          fetches takes cache disk. Built terrain is always used first. Map tiles and routing are
-          always built: they cannot be read on demand.
+          fetches takes cache disk. Built terrain is always used first. Contour lines are drawn from
+          the same terrain, slightly smoother than built ones. Map tiles and routing are always
+          built: they cannot be read on demand.
         </p>
 
         <div className="grid gap-x-6 gap-y-4 border-t border-line pt-4 md:grid-cols-2">

@@ -51,9 +51,9 @@ func (s *Server) handlePack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rd, gen, _ := s.tileset(tileset)
-	if tileset == "terrain" && s.opt.OnDemand != nil && s.opt.OnDemand.Enabled() {
-		// Part of the box may be terrain that is read on demand: fill it from the cache.
-		s.terrainPack(w, r, rd, gen, bbox, q, format)
+	if k, ok := s.odKind(tileset); ok && s.opt.OnDemand.Enabled() && k.maxZoom > 0 {
+		// Part of the box may be terrain (or contours) made on demand: fill it from the cache.
+		s.onDemandPack(w, r, k, rd, gen, bbox, q, format)
 		return
 	}
 	if rd == nil {

@@ -27,9 +27,9 @@ live. To put it on the internet under your own hostname, follow
 - **Routing** (Valhalla): car and truck, with sensible handling of gravel and unpaved roads.
 - **Elevation** at points and along paths, from the best open DEM for each area (USGS 3DEP in
   the US, NRCan and provincial data in Canada, Copernicus elsewhere).
-- **On-demand terrain**, as an option: a region's terrain, or terrain for the whole world
-  outside your regions, read from the public DEM files the first time a place is asked for and
-  cached, instead of built ahead. Off unless you turn it on
+- **On-demand terrain**, as an option: a region's terrain and contours, or those of the whole
+  world outside your regions, read from the public DEM files the first time a place is asked
+  for and cached, instead of built ahead. Off unless you turn it on
   ([docs/operations.md](docs/operations.md#on-demand-terrain)).
 - **Compatibility endpoints**, so existing clients can switch by changing a URL: Google
   Elevation API, Google Routes `computeRoutes`, Mapbox Static Tiles URLs, and OpenRouteService

@@ -431,3 +431,135 @@ func TestNeighboursAndRestartsReuseSourceBlocks(t *testing.T) {
 		t.Fatal("the tile was removed from the cache but is reported cached")
 	}
 }
+
+// Asking a host which release of a file is current is upstream work too: a
+// request that may not pay for a cold fetch sends nothing at all, while what
+// is already cached is still answered.
+func TestGateComesBeforeAnyUpstreamRequest(t *testing.T) {
+	r := newRig(t, 64<<20)
+	r.hosts.Put3DEP(-98, 30, ondemandtest.Plane(1000), "v1")
+	refuse := func() context.Context {
+		return ondemand.WithGate(context.Background(), func() error {
+			return &ondemand.ErrLimited{RetryAfter: time.Second, Message: "slow down"}
+		})
+	}
+	var lim *ondemand.ErrLimited
+	x, y := tileAt(-97.5, 30.5, 13)
+	if _, _, err := r.svc.Tile(refuse(), 13, x, y); !errors.As(err, &lim) {
+		t.Fatalf("cold tile with a refusing gate: %v", err)
+	}
+	ox, oy := tileAt(-40, 30, 12) // open ocean: nothing to fetch, but the hosts would have to be asked
+	if _, _, err := r.svc.Tile(refuse(), 12, ox, oy); !errors.As(err, &lim) {
+		t.Fatalf("ocean tile with a refusing gate: %v", err)
+	}
+	if n := r.hosts.Heads.Load() + r.hosts.Ranges.Load() + r.hosts.Index.Load(); n != 0 {
+		t.Fatalf("%d requests reached the hosts for refused requests", n)
+	}
+	if c := r.svc.Counters(); c.Limited != 2 || c.Failed != 0 {
+		t.Fatalf("counters: %+v", c)
+	}
+	// The gate is asked once per request, at the first upstream need, whatever it is.
+	calls := 0
+	ctx := ondemand.WithGate(context.Background(), func() error { calls++; return nil })
+	if _, _, err := r.svc.Tile(ctx, 13, x, y); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.svc.Tile(ctx, 12, ox, oy); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("gate called %d times in one request", calls)
+	}
+	// A cached tile whose version is due a re-check is served from what is known when
+	// the request may not pay, and the host is not asked.
+	r.advance(48 * time.Hour)
+	before := r.hosts.Heads.Load()
+	if png, cold, err := r.svc.Tile(refuse(), 13, x, y); err != nil || cold || len(png) == 0 {
+		t.Fatalf("cached tile with a refusing gate: cold=%v err=%v", cold, err)
+	}
+	if r.hosts.Heads.Load() != before {
+		t.Fatal("a refused request asked the host for a version")
+	}
+	if !r.svc.CachedNow(13, x, y) || r.svc.CachedNow(13, x+3, y) || r.hosts.Heads.Load() != before {
+		t.Fatal("CachedNow must answer from what is known, without asking")
+	}
+}
+
+// Open source files and their pages are held within a byte budget, however
+// many files a server visits; a file dropped from memory is opened again from
+// the store without asking its host.
+func TestOpenFilesStayWithinTheirMemoryBudget(t *testing.T) {
+	hosts := ondemandtest.New()
+	t.Cleanup(hosts.Close)
+	const budget = 200 << 10
+	r := newRig(t, 256<<20)
+	svc := ondemand.New(ondemand.Options{Upstream: ondemand.NewUpstream(ondemand.UpstreamOptions{Attempts: 1}),
+		Store: ondemand.NewDiskStore(r.cache), URLs: hosts.URLs(), MetaMemory: budget})
+	ctx := context.Background()
+	const files = 24
+	for i := 0; i < files; i++ {
+		hosts.PutGLO30(10+i, 45, ondemandtest.Plane(float64(100*i)), "v1")
+	}
+	for i := 0; i < files; i++ {
+		x, y := tileAt(10.5+float64(i), 45.5, 12)
+		if _, _, err := svc.Tile(ctx, 12, x, y); err != nil {
+			t.Fatal(err)
+		}
+		if m := svc.MemStats(); m.FileBytes > budget+70<<10 {
+			t.Fatalf("after %d files: %d bytes of open files, budget %d", i+1, m.FileBytes, budget)
+		}
+	}
+	m := svc.MemStats()
+	if m.OpenFiles >= files || m.OpenFiles < 1 {
+		t.Fatalf("%d of %d files still open: nothing was dropped (or everything was)", m.OpenFiles, files)
+	}
+	// The first file was dropped long ago: a new tile in it reopens it from the store.
+	before := hosts.Heads.Load()
+	x, y := tileAt(10.2, 45.2, 12)
+	png, _, err := svc.Tile(ctx, 12, x, y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPlane(t, decode(t, png), 12, x, y, ondemandtest.Plane(0), 0.5)
+	if hosts.Heads.Load() != before {
+		t.Fatal("reopening a dropped file asked its host again")
+	}
+}
+
+// What the hosts answer cannot send this server elsewhere: redirects and the
+// URLs named in the HRDEM index are followed only to the known hosts.
+func TestUpstreamStaysOnItsHosts(t *testing.T) {
+	r := newRig(t, 64<<20)
+	other := ondemandtest.New()
+	t.Cleanup(other.Close)
+	other.Put3DEP(-98, 30, ondemandtest.Plane(1), "evil")
+	up := r.svc.Upstream()
+	// A redirect to another host is refused.
+	r.hosts.RedirectTo.Store(other.Server.URL + ondemandtest.PathOf3DEP(-98, 30))
+	if _, err := up.Range(context.Background(), r.hosts.Server.URL+"/redirect", 0, 16); err == nil {
+		t.Fatal("followed a redirect to a host that is not a source")
+	}
+	if _, err := up.Head(context.Background(), other.Server.URL+ondemandtest.PathOf3DEP(-98, 30)); err == nil {
+		t.Fatal("asked a host that is not a source")
+	}
+	if n := other.Heads.Load() + other.Ranges.Load(); n != 0 {
+		t.Fatalf("%d requests reached the other host", n)
+	}
+	// An index that names a mosaic elsewhere, and a next page elsewhere: both ignored.
+	good := r.hosts.Server.URL + "/hrdem/1.tif"
+	r.hosts.IndexBody.Store(`{"features":[
+		{"id":"a","bbox":[-115,50,-113,52],"assets":{"dtm":{"href":"` + good + `"}}},
+		{"id":"b","bbox":[-115,50,-113,52],"assets":{"dtm":{"href":"` + other.Server.URL + `/x.tif"}}},
+		{"id":"c","bbox":[-115,50,-113,52],"assets":{"dtm":{"href":"file:///etc/passwd"}}}],
+		"links":[{"rel":"next","href":"` + other.Server.URL + `/stac?page=2"}]}`)
+	x, y := tileAt(-114.05, 51.05, 12)
+	if _, _, err := r.svc.Tile(context.Background(), 12, x, y); err != nil {
+		t.Fatal(err)
+	}
+	if r.hosts.Seen("/hrdem/1.tif") == 0 {
+		t.Fatal("the mosaic on the right host was not asked about")
+	}
+	if n := other.Heads.Load() + other.Ranges.Load() + other.Index.Load(); n != 0 {
+		t.Fatalf("%d requests followed the index to another host", n)
+	}
+}

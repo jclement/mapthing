@@ -282,10 +282,14 @@ nothing is fetched at request time.
   style, in the browser and in rendered raster tiles.
 - **Elevation**: `/api/v1/elevation`, `/api/v1/elevation/profile` and the Google-compatible
   `/maps/api/elevation/json`. They sample the same zoom-13 tiles built terrain is sampled from,
-  so an on-demand elevation is the same kind of answer as a built one.
+  so an on-demand elevation is the same kind of answer as a built one. Built terrain wins a
+  tile at a time here too: a point inside a built tile is answered from that tile, a hole in
+  it included, exactly as the tile is served.
 - **Not map tiles and not routing.** They are always built: the basemap comes from an OSM
   extract and Valhalla needs a graph, and neither can be fetched a piece at a time.
-- **Not contours** (yet): contour lines exist only where terrain was built.
+- **Contour lines** (`/tiles/contours/{z}/{x}/{y}.mvt`, zooms 10 to 12), drawn from on-demand
+  terrain wherever it applies. They are slightly smoother than built contours at zooms 10 and
+  11: see [Contours](#contours) below.
 - **Below zoom 9**, terrain is always built. A region set to on demand still gets zooms 0 to 9
   made by the build (from the sources' overviews, without GDAL), so a zoomed-out map never
   waits. Outside every region there is nothing below zoom 9: zoomed out that far, terrain shows
@@ -295,6 +299,26 @@ The sources and their order are those of the build ([elevation-sources.md](eleva
 NRCan HRDEM, USGS 3DEP 1/3″, NRCan MRDEM-30, Copernicus GLO-30. Where the best one has no data
 for a pixel, the next one fills it. **Built terrain always wins**: a tile the live archive has is
 served from it and the sources are never asked.
+
+### Contours
+
+Where contours were not built, a contour tile is drawn the first time it is asked for, from
+on-demand terrain, with the same contouring as the build, and cached beside the terrain. Built
+contours always win, as built terrain does.
+
+One thing differs from built contours, by choice. The build draws every contour zoom from its
+deepest terrain (zoom 13). On demand, a tile is drawn from terrain one or two zooms deeper than
+itself: zoom 10 from zoom 12, zooms 11 and 12 from zoom 13. A zoom-10 tile then reads 36 terrain
+tiles instead of 100, so a first view takes seconds instead of most of a minute. The price:
+**on-demand contours at zoom 10 are slightly smoother than built ones** (zoom 11 and 12 are
+drawn from the same zoom-13 terrain a build uses). At the edge of a built region the on-demand
+tile is drawn over the built terrain on that side, so the lines meet; looked at across such an
+edge in the Texas hill country, the lines join at zooms 10 and 12 with no visible step.
+
+A first contour tile costs more than a first terrain tile, because it reads a block of deeper
+terrain: 1.7 to 3.6 s and 15 to 31 MB for a lone tile with nothing cached, about half that for
+its neighbours, nothing once drawn. The terrain it fetched is cached too. `MAPTHING_CONTOURS_MAXZOOM=0`
+turns contours off on demand as it does in the build.
 
 ### Turning it on
 
@@ -342,7 +366,9 @@ grows. A job the cache cannot hold is refused with the cache size that would hol
 past the budget would push out the job's own first tiles. One job runs at a time, shallowest
 zoom first, with progress and a Stop button; stopping, a restart or a source that goes away
 loses nothing, and running the same job again fetches only what is missing. Tiles the build
-made are left alone. At most 250,000 tiles per job (about a million square kilometres at zoom
+made are left alone. Contours are warmed with the terrain they are drawn from: zoom 10 when you
+warm to zoom 12, all three contour zooms when you warm to 13. Stopping a job stops its fetching:
+nothing it started is left running. At most 250,000 tiles per job (about a million square kilometres at zoom
 13); past that, build the region.
 
 Planning figures: about 45 KB of cache and 0.6 MB of download per tile, and about 13 tiles a
@@ -357,20 +383,27 @@ The same through the API: `POST /admin/api/ondemand/warm/estimate` and
 
 ### Offline packs
 
-`/packs/extract.pmtiles?tileset=terrain&bbox=…` (and `format=mbtiles`) covers on-demand ground
-too: tiles the build made come from the archive, the rest from the on-demand cache, and what is
-not cached yet is fetched first. One pack request fetches at most 2,000 tiles; a pack that needs
-more is answered `409 not_warm` and says so: warm the area, then ask again. A pack is cut down
-to zoom 13 where on demand applies, whatever the built archive's deepest zoom. If a source does
-not answer while a pack is being filled, the request fails with `504` and no partial pack is
-kept. Basemap packs are not affected.
+`/packs/extract.pmtiles?tileset=terrain&bbox=…` and `tileset=contours` (and `format=mbtiles`)
+cover on-demand ground too: tiles the build made come from the archive, the rest from the
+on-demand cache, and what is not cached yet is made first. One pack request makes at most 2,000
+tiles from the sources, counted where each tile is actually built (a tile that went stale since
+it was cached counts like one never seen); a pack that needs more is answered `409 not_warm`
+and says so: warm the area, then ask again. A terrain pack is cut down to zoom 13 where on
+demand applies, whatever the built archive's deepest zoom. If a source does not answer while a
+pack is being filled, the request fails with `504` and no partial pack is kept.
+
+A pack is a pack of what on demand serves at that moment: its cache key and `ETag` include the
+release of every source file under its box and where on demand applies, so a new release
+upstream or a change to a region's terrain setting gives a new pack, not yesterday's. For that,
+a pack over on-demand ground may span at most 150 square degrees (`413` beyond). Basemap packs
+are not affected.
 
 ### When a source does not answer
 
 A request that needs data a host will not give is answered with an error, and **nothing is
 cached**, so the next request tries again:
 
-- terrain tile: `504` with `{"error":{"code":"terrain_source_unavailable",…}}`,
+- terrain or contour tile: `504` with `{"error":{"code":"terrain_source_unavailable",…}}`,
   `Cache-Control: no-store` and `Retry-After: 30`;
 - `/api/v1/elevation…`: `504` with `{"error":"…"}`;
 - `/maps/api/elevation/json`: `504` with `{"status":"UNKNOWN_ERROR","error_message":"…","results":[]}`
@@ -388,6 +421,10 @@ mapthing reads other people's servers here, so it is careful by design:
   after 20 s; a failed request is retried twice, with a growing pause;
 - requests for the same tile, block or header that arrive together share one fetch;
 - every request carries `User-Agent: mapthing (+https://github.com/jclement/mapthing)`;
+- requests go only to the four hosts the sources live on. A redirect to anywhere else is
+  refused, and so is a file or a next page that NRCan's index names on another host;
+- a file that is not what it claims to be (a damaged or hostile GeoTIFF) is an error for that
+  request, like a host that is down; it cannot take the server down;
 - only public, anonymous files are read (USGS and NRCan publish theirs as public data, the
   Copernicus DEM under its own free licence): the attribution is the same as for built terrain
   and is in every style and in the terrain TileJSON.
@@ -396,7 +433,9 @@ A request that has to read from the hosts also **costs its API key more**: on to
 kind it is charged one `ondemand` request (20 units by default, against 1 for a tile and 5 for an
 elevation request), and the server caps such requests across all keys (20 per second by
 default). Both figures are with the other limits on the Keys page. A cached answer pays nothing
-extra. A key that cannot pay is answered `429` with `Retry-After` before anything is fetched.
+extra. A key that cannot pay is answered `429` with `Retry-After` before anything is asked of
+the hosts, including which release of a file is current; a tile already in the cache is still
+served to it.
 One elevation request may need at most 600 on-demand tiles (about 2,000 km of profile); a
 larger one is refused with `413` and nothing is fetched.
 

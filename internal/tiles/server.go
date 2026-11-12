@@ -60,6 +60,9 @@ type Options struct {
 	OnDemand                         OnDemandTerrain
 	ColdGate                         func(r *http.Request) context.Context
 	OnDemandMinZoom, OnDemandMaxZoom int
+	// OnDemandContourMinZoom and OnDemandContourMaxZoom are the contour zooms on demand
+	// draws; a max of 0 means contours are not drawn on demand.
+	OnDemandContourMinZoom, OnDemandContourMaxZoom int
 }
 
 // Server is the tiles HTTP layer.

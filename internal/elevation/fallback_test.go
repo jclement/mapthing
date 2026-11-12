@@ -69,13 +69,17 @@ func liveTerrain(t *testing.T, archive string) (*http.ServeMux, *Terrain) {
 	return newMuxFor(t, data)
 }
 
-// Built terrain wins: the fallback is asked only about points the archive
-// cannot answer, and only where it applies.
+// Built terrain wins, a tile at a time: where a built tile exists the archive
+// answers, holes included (as the tile endpoint serves that tile), and the
+// fallback is neither asked nor fetched. Only ground with no built tile is the
+// fallback's.
 func TestBuiltTerrainWinsOverFallback(t *testing.T) {
-	// The archive has data east of -104.1 only.
+	// The archive's tiles cover testBox; they have data east of -104.1 only.
 	mux, terrain := liveTerrain(t, writeTestArchive(t, testBox, -104.1, 99))
 	fb := &fakeFallback{covers: func(lon, _ float64) bool { return lon > -110 }}
 	terrain.SetFallback(fb)
+	x0, _, _, _ := TileRange(testZ, testBox[0], testBox[1], testBox[2], testBox[3])
+	builtWest, _ := WorldPixelToLonLat(float64(x0*TileSize), 0, testZ) // west edge of the built tiles
 
 	res, err := terrain.Points(context.Background(), []LonLat{{-104.0, 32.0}, {-104.15, 32.0}, {-105.0, 32.0}, {-120, 32}})
 	if err != nil {
@@ -84,48 +88,63 @@ func TestBuiltTerrainWinsOverFallback(t *testing.T) {
 	if res[0].Elevation == nil || *res[0].Elevation > 8000 || res[0].Source != "3dep13" {
 		t.Errorf("built point: %+v", res[0])
 	}
-	for i, want := range []bool{true, true} {
-		r := res[1+i]
-		if (r.Elevation != nil && *r.Elevation == 9000 && r.Source == "glo30") != want {
-			t.Errorf("point %d outside built data: %+v", 1+i, r)
-		}
+	if res[1].Elevation != nil {
+		t.Errorf("a hole inside a built tile was filled on demand: %+v", res[1])
+	}
+	if r := res[2]; r.Elevation == nil || *r.Elevation != 9000 || r.Source != "glo30" {
+		t.Errorf("a point with no built tile: %+v", r)
 	}
 	if res[3].Elevation != nil {
 		t.Errorf("where nothing applies: %+v", res[3])
 	}
-	// Nothing was fetched for the built point: every fallback tile is west of its data.
-	bx, _ := LonLatToWorldPixel(-104.1, 32, 13)
-	for k := range fb.tiles {
-		if float64(k[0]*TileSize) > bx {
-			t.Errorf("fallback tile %v read for ground the archive covers", k)
-		}
-	}
 	if len(fb.prepared) == 0 {
 		t.Error("fallback tiles were not fetched together first")
 	}
-	// A profile crossing the edge takes each sample from the right place.
-	p, err := terrain.Profile(context.Background(), []LonLat{{-104.16, 32.0}, {-104.0, 32.0}}, ProfileOptions{IntervalM: 500})
+	// A profile from unbuilt ground into the built tiles: on demand up to their edge,
+	// then the archive, hole and all. Samples right at the edge interpolate on their own side.
+	p, err := terrain.Profile(context.Background(), []LonLat{{builtWest - 0.1, 32.0}, {-104.0, 32.0}}, ProfileOptions{IntervalM: 250})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var built, demand int
+	var built, demand, holes int
 	for _, s := range p.Samples {
 		switch {
 		case s.Elevation == nil:
-			t.Fatalf("hole in the profile at %v", s.Lon)
+			holes++
+			if s.Lon < builtWest || s.Lon > -104.09 {
+				t.Fatalf("hole at %v, outside the built tiles' own hole", s.Lon)
+			}
 		case *s.Elevation == 9000:
 			demand++
+			if s.Lon >= builtWest {
+				t.Fatalf("on-demand elevation at %v, inside a built tile", s.Lon)
+			}
 		default:
 			built++
 		}
 	}
-	if built == 0 || demand == 0 {
-		t.Errorf("profile: %d built, %d on demand samples", built, demand)
+	if built == 0 || demand == 0 || holes == 0 {
+		t.Errorf("profile: %d built, %d on demand, %d holes", built, demand, holes)
+	}
+	// No fallback tile over built ground was read or fetched.
+	edge, _ := LonLatToWorldPixel(builtWest, 32, 13)
+	for _, k := range append(fb.prepared, keysOf(fb.tiles)...) {
+		if float64(k[0]*TileSize) >= edge {
+			t.Errorf("fallback tile %v is over built ground", k)
+		}
 	}
 	// The source list names what on demand may read.
 	if _, body := get(t, mux, "/api/v1/elevation/sources"); !strings.Contains(toJSON(body), "hrdem") {
 		t.Errorf("sources: %v", body)
 	}
+}
+
+func keysOf(m map[[2]int]int) [][2]int {
+	var out [][2]int
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestFallbackWithoutAnyBuiltTerrain(t *testing.T) {

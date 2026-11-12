@@ -52,6 +52,8 @@ type Upstream struct {
 
 	mu    sync.Mutex
 	hosts map[string]*hostState
+	// allow, when not empty, is the set of hosts requests and redirects may go to.
+	allow map[string]bool
 
 	requests atomic.Int64
 	bytes    atomic.Int64
@@ -98,7 +100,7 @@ func NewUpstream(opt UpstreamOptions) *Upstream {
 	}
 	u := &Upstream{opt: opt, client: opt.Client, global: make(chan struct{}, opt.MaxConcurrent), hosts: map[string]*hostState{}}
 	if u.client == nil {
-		u.client = &http.Client{Transport: &http.Transport{
+		u.client = &http.Client{CheckRedirect: u.checkRedirect, Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 			MaxIdleConns:          64,
@@ -110,6 +112,40 @@ func NewUpstream(opt UpstreamOptions) *Upstream {
 		}}
 	}
 	return u
+}
+
+// Restrict limits requests, and the redirects they follow, to the given
+// hosts (added to any given before). The DEM sources live on a handful of
+// known hosts; nothing a host answers can send this server anywhere else.
+func (u *Upstream) Restrict(hosts ...string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.allow == nil {
+		u.allow = map[string]bool{}
+	}
+	for _, h := range hosts {
+		if h != "" {
+			u.allow[h] = true
+		}
+	}
+}
+
+func (u *Upstream) allowed(host string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return len(u.allow) == 0 || u.allow[host]
+}
+
+// checkRedirect follows a redirect only to an allowed host, over the same
+// scheme, and only a few times.
+func (u *Upstream) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 3 {
+		return errors.New("too many redirects")
+	}
+	if req.URL.Scheme != via[0].URL.Scheme || !u.allowed(req.URL.Host) {
+		return fmt.Errorf("redirect to %s refused: not a host the elevation sources are read from", req.URL.Host)
+	}
+	return nil
 }
 
 func (u *Upstream) host(name string) *hostState {
@@ -151,6 +187,9 @@ func (u *Upstream) do(ctx context.Context, method, rawURL string, hdr map[string
 	pu, err := url.Parse(rawURL)
 	if err != nil {
 		return err
+	}
+	if !u.allowed(pu.Host) {
+		return fmt.Errorf("%w: %s is not a host the elevation sources are read from", ErrUpstream, pu.Host)
 	}
 	hs := u.host(pu.Host)
 	var last error

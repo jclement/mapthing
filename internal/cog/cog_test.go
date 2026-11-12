@@ -153,3 +153,103 @@ func TestRejectsWhatItCannotRead(t *testing.T) {
 		}
 	}
 }
+
+// exercise opens a file and touches every code path a server would: it must
+// return errors for anything malformed, never panic.
+func exercise(b []byte) {
+	ctx := context.Background()
+	src := &memReader{b: b}
+	f, err := cog.Open(ctx, src)
+	if err != nil {
+		return
+	}
+	for li, lv := range f.Levels {
+		for _, rc := range [][2]int{{0, 0}, {lv.Across - 1, lv.Down - 1}, {lv.Across, lv.Down}, {-1, 0}} {
+			ref, err := f.Locate(ctx, li, rc[0], rc[1])
+			if err != nil || ref.Size == 0 || ref.Size > 1<<20 {
+				continue
+			}
+			raw, _ := src.ReadRange(ctx, ref.Offset, ref.Size)
+			_, _ = f.Decode(li, raw)
+		}
+	}
+	_, _ = f.Locate(ctx, len(f.Levels), 0, 0)
+	_, _ = f.Decode(-1, nil)
+	_ = f.MemBytes()
+}
+
+func le16(b []byte, off int, v uint16) { b[off], b[off+1] = byte(v), byte(v>>8) }
+func le64(b []byte, off int, v uint64) {
+	for i := 0; i < 8; i++ {
+		b[off+i] = byte(v >> (8 * i))
+	}
+}
+
+// Files that lie about themselves are refused, not obeyed: each of these
+// used to be able to panic the reader (and with it the server).
+func TestMalformedFilesAreRefusedNotObeyed(t *testing.T) {
+	data := surface(64, 64)
+	classic := cogtest.Write(cogtest.Options{Width: 64, Height: 64, Tile: 32, Data: data, PixelW: 1, PixelH: 1, Compression: 5, Predictor: 3, EPSG: 4326, Geographic: true, Overviews: 1})
+	big := cogtest.Write(cogtest.Options{Width: 64, Height: 64, Tile: 32, Data: data, PixelW: 1, PixelH: 1, BigTIFF: true, Compression: 8, EPSG: 3979})
+	if _, err := cog.Open(context.Background(), &memReader{b: classic}); err != nil {
+		t.Fatal(err)
+	}
+	// Classic TIFF entries are 12 bytes from offset 10: tag(2) type(2) count(4) value(4).
+	// BigTIFF entries are 20 bytes from offset 24: tag(2) type(2) count(8) value(8).
+	type mut func(b []byte)
+	cases := map[string]struct {
+		base []byte
+		m    mut
+	}{
+		"classic: ImageWidth typed DOUBLE":  {classic, func(b []byte) { le16(b, 10+2, 12) }},
+		"classic: ImageWidth typed LONG8":   {classic, func(b []byte) { le16(b, 10+2, 16) }},
+		"classic: ImageWidth with 2 values": {classic, func(b []byte) { b[10+4] = 2 }},
+		"classic: unknown type":             {classic, func(b []byte) { le16(b, 10+2, 99) }},
+		"big: count that overflows":         {big, func(b []byte) { le64(b, 24+8*20+4, 1<<61+1) }},
+		"big: offsets beyond the file":      {big, func(b []byte) { le64(b, 24+8*20+12, 1<<62) }},
+		"big: huge image":                   {big, func(b []byte) { le64(b, 24+12, 1<<31-1); le64(b, 24+20+12, 1<<31-1) }},
+		"big: first directory out of range": {big, func(b []byte) { le64(b, 8, 1<<63+5) }},
+		"big: directory with 2^60 entries":  {big, func(b []byte) { le64(b, 16, 1<<60) }},
+	}
+	for name, c := range cases {
+		b := append([]byte(nil), c.base...)
+		c.m(b)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: panic: %v", name, r)
+				}
+			}()
+			if _, err := cog.Open(context.Background(), &memReader{b: b}); err == nil {
+				t.Errorf("%s: opened", name)
+			}
+			exercise(b)
+		}()
+	}
+	// Truncation anywhere, and any single corrupted byte in the header area, must not panic.
+	for _, base := range [][]byte{classic, big} {
+		for n := 0; n < len(base); n += 7 {
+			exercise(base[:n])
+		}
+		for i := 0; i < 600 && i < len(base); i++ {
+			for _, v := range []byte{0, 0xff, 0x80, base[i] + 1} {
+				b := append([]byte(nil), base...)
+				b[i] = v
+				exercise(b)
+			}
+		}
+	}
+}
+
+// FuzzOpen feeds arbitrary bytes to the reader; the seeds are real layouts.
+func FuzzOpen(f *testing.F) {
+	data := surface(48, 40)
+	for _, o := range []cogtest.Options{
+		{Compression: 1}, {Compression: 5, Predictor: 3, Overviews: 1}, {Compression: 8, Predictor: 3},
+		{Compression: 5, BigTIFF: true, Sparse: true, Overviews: 2}, {Compression: 8, BigTIFF: true},
+	} {
+		o.Width, o.Height, o.Tile, o.Data, o.PixelW, o.PixelH, o.EPSG = 48, 40, 16, data, 0.5, 0.5, 4326
+		f.Add(cogtest.Write(o))
+	}
+	f.Fuzz(func(_ *testing.T, b []byte) { exercise(b) })
+}

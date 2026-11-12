@@ -60,7 +60,7 @@ func (s *Server) handleTile(w http.ResponseWriter, r *http.Request) {
 	rd, gen, _ := s.tileset(name)
 	if rd == nil {
 		// No built terrain at all: on demand answers where it applies.
-		if name == "terrain" && s.serveOnDemandTerrain(w, r, int(z), int(x), int(y)) {
+		if s.serveOnDemand(w, r, name, int(z), int(x), int(y)) {
 			return
 		}
 		missingTileset(w, r, gen)
@@ -72,8 +72,9 @@ func (s *Server) handleTile(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, r, http.StatusInternalServerError, "read_error", "could not read tile")
 		return
 	}
-	// Built terrain always wins. Only a tile the archive does not have is read on demand.
-	if (!found || len(data) == 0) && name == "terrain" && s.serveOnDemandTerrain(w, r, int(z), int(x), int(y)) {
+	// What was built always wins. Only a terrain or contour tile the archive does not have is
+	// made on demand.
+	if (!found || len(data) == 0) && s.serveOnDemand(w, r, name, int(z), int(x), int(y)) {
 		return
 	}
 	h := w.Header()
@@ -153,9 +154,17 @@ func (s *Server) tileJSON(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	rd, gen, _ := s.tileset(name)
 	if rd == nil {
-		if name == "terrain" && s.opt.OnDemand != nil && s.opt.OnDemand.Enabled() {
-			s.onDemandTileJSON(w, r)
-			return
+		if s.opt.OnDemand != nil && s.opt.OnDemand.Enabled() {
+			switch name {
+			case "terrain":
+				s.onDemandTileJSON(w, r)
+				return
+			case "contours":
+				if s.opt.OnDemandContourMaxZoom > 0 {
+					s.onDemandContoursTileJSON(w, r)
+					return
+				}
+			}
 		}
 		missingTileset(w, r, gen)
 		return
@@ -198,7 +207,7 @@ func (s *Server) tileJSON(w http.ResponseWriter, r *http.Request, name string) {
 			}
 		}
 	}
-	if od := s.opt.OnDemand; name == "terrain" && od != nil {
+	if od := s.opt.OnDemand; od != nil && (name == "terrain" || (name == "contours" && s.opt.OnDemandContourMaxZoom > 0)) {
 		// Terrain is also served, on demand, beyond what was built: say so, or a client that
 		// honours bounds never asks.
 		if ob, ok := od.Bounds(); ok {

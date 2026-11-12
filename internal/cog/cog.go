@@ -77,34 +77,78 @@ type File struct {
 	headerRead int64 // bytes of header parsed (for diagnostics)
 }
 
-// pager reads the file's metadata in aligned pages and keeps them, so the
-// tile-index lookups of neighbouring blocks cost no further requests.
+// pager reads the file's metadata in aligned pages and keeps the most recently
+// used of them, so the tile-index lookups of neighbouring blocks cost no
+// further requests while a file's memory stays bounded. A page dropped here
+// is read again through src, which is expected to cache it.
 type pager struct {
-	src   RangeReader
+	src RangeReader
+	max int // pages kept
+
 	mu    sync.Mutex
 	pages map[int64][]byte
+	order []int64 // least recently used first
 }
+
+// maxPages is how many metadata pages one open file keeps (2 MB).
+const maxPages = 32
 
 func (p *pager) page(ctx context.Context, pn int64) ([]byte, error) {
 	p.mu.Lock()
-	pg, ok := p.pages[pn]
-	p.mu.Unlock()
-	if ok {
+	if pg, ok := p.pages[pn]; ok {
+		p.touch(pn)
+		p.mu.Unlock()
 		return pg, nil
 	}
+	p.mu.Unlock()
 	pg, err := p.src.ReadRange(ctx, pn*PageSize, PageSize)
 	if err != nil {
 		return nil, err
 	}
+	if len(pg) > PageSize {
+		return nil, fmt.Errorf("%w: a read returned more than was asked for", ErrFormat)
+	}
 	p.mu.Lock()
-	p.pages[pn] = pg
+	if _, ok := p.pages[pn]; !ok {
+		p.pages[pn] = pg
+		p.order = append(p.order, pn)
+		for len(p.order) > p.max {
+			delete(p.pages, p.order[0])
+			p.order = p.order[1:]
+		}
+	}
 	p.mu.Unlock()
 	return pg, nil
 }
 
+// touch marks a page as just used. Caller holds mu.
+func (p *pager) touch(pn int64) {
+	for i, v := range p.order {
+		if v == pn {
+			copy(p.order[i:], p.order[i+1:])
+			p.order[len(p.order)-1] = pn
+			return
+		}
+	}
+}
+
+// bytes is the memory the kept pages take.
+func (p *pager) bytes() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var n int64
+	for _, pg := range p.pages {
+		n += int64(len(pg))
+	}
+	return n
+}
+
+// maxMetaRead bounds one metadata read: no tag this reader uses is larger.
+const maxMetaRead = 1 << 20
+
 func (p *pager) read(ctx context.Context, off, n int64) ([]byte, error) {
-	if n < 0 || off < 0 {
-		return nil, ErrFormat
+	if n < 0 || n > maxMetaRead || off < 0 || off > math.MaxInt64-n {
+		return nil, fmt.Errorf("%w: metadata read out of range", ErrFormat)
 	}
 	out := make([]byte, 0, n)
 	for n > 0 {
@@ -161,7 +205,7 @@ var typeSize = map[int]int{1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4,
 // Open parses the header and every image directory of the file behind src.
 // It reads only metadata pages (usually one).
 func Open(ctx context.Context, src RangeReader) (*File, error) {
-	f := &File{meta: &pager{src: src, pages: map[int64][]byte{}}}
+	f := &File{meta: &pager{src: src, max: maxPages, pages: map[int64][]byte{}}}
 	h, err := f.meta.read(ctx, 0, 16)
 	if err != nil {
 		return nil, err
@@ -180,7 +224,12 @@ func Open(ctx context.Context, src RangeReader) (*File, error) {
 		next = int64(f.order.Uint32(h[4:]))
 	case 43:
 		f.big = true
-		next = int64(f.order.Uint64(h[8:]))
+		if f.order.Uint16(h[4:]) != 8 || f.order.Uint16(h[6:]) != 0 {
+			return nil, fmt.Errorf("%w: BigTIFF with offsets that are not 8 bytes", ErrFormat)
+		}
+		if next, err = offsetOf(f.order.Uint64(h[8:])); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("%w: not a TIFF", ErrFormat)
 	}
@@ -198,6 +247,9 @@ func Open(ctx context.Context, src RangeReader) (*File, error) {
 		}
 		if sub&4 != 0 { // a transparency mask, not elevation
 			continue
+		}
+		if len(f.Levels) >= maxLevels {
+			return nil, fmt.Errorf("%w: too many images", ErrFormat)
 		}
 		if len(f.Levels) == 0 {
 			if err := f.georef(ctx, ents, &scaleX, &scaleY); err != nil {
@@ -221,6 +273,24 @@ func Open(ctx context.Context, src RangeReader) (*File, error) {
 	return f, nil
 }
 
+// Bounds on what a file may claim, far above anything a DEM publisher ships:
+// they exist so that a malformed or hostile file is refused, not obeyed.
+const (
+	maxLevels    = 32
+	maxDimension = 1 << 26 // pixels per side
+	maxEntries   = 4096    // tags in one directory
+	maxBlocks    = 1 << 28 // blocks in one level
+	maxBlockSize = 256 << 20
+)
+
+// offsetOf checks a file offset read as an unsigned 64-bit number.
+func offsetOf(v uint64) (int64, error) {
+	if v > math.MaxInt64/2 {
+		return 0, fmt.Errorf("%w: offset out of range", ErrFormat)
+	}
+	return int64(v), nil
+}
+
 func (f *File) readIFD(ctx context.Context, off int64) ([]entry, int64, error) {
 	cntSize, entSize, valSize, nextSize := int64(2), int64(12), 4, int64(4)
 	if f.big {
@@ -230,37 +300,50 @@ func (f *File) readIFD(ctx context.Context, off int64) ([]entry, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	var n int64
+	var n uint64
 	if f.big {
-		n = int64(f.order.Uint64(b))
+		n = f.order.Uint64(b)
 	} else {
-		n = int64(f.order.Uint16(b))
+		n = uint64(f.order.Uint16(b))
 	}
-	if n <= 0 || n > 4096 {
+	if n == 0 || n > maxEntries {
 		return nil, 0, fmt.Errorf("%w: bad directory", ErrFormat)
 	}
-	b, err = f.meta.read(ctx, off+cntSize, n*entSize+nextSize)
+	size := int64(n)*entSize + nextSize
+	b, err = f.meta.read(ctx, off+cntSize, size)
 	if err != nil {
 		return nil, 0, err
 	}
-	f.headerRead = off + cntSize + n*entSize + nextSize
+	if int64(len(b)) < size {
+		return nil, 0, fmt.Errorf("%w: short directory", ErrFormat)
+	}
+	f.headerRead = off + cntSize + size
 	ents := make([]entry, n)
 	for i := range ents {
 		e := b[int64(i)*entSize:]
 		ents[i].tag = int(f.order.Uint16(e))
 		ents[i].typ = int(f.order.Uint16(e[2:]))
+		var count uint64
 		if f.big {
-			ents[i].count = int(f.order.Uint64(e[4:]))
+			count = f.order.Uint64(e[4:])
 			ents[i].val = e[12 : 12+valSize]
 		} else {
-			ents[i].count = int(f.order.Uint32(e[4:]))
+			count = uint64(f.order.Uint32(e[4:]))
 			ents[i].val = e[8 : 8+valSize]
 		}
+		if count > maxBlocks {
+			// Larger than any array this reader would use: remember it as too big
+			// rather than as a number that could overflow later arithmetic.
+			count = maxBlocks + 1
+		}
+		ents[i].count = int(count)
 	}
-	tail := b[n*entSize:]
+	tail := b[int64(n)*entSize:]
 	var next int64
 	if f.big {
-		next = int64(f.order.Uint64(tail))
+		if next, err = offsetOf(f.order.Uint64(tail)); err != nil {
+			return nil, 0, err
+		}
 	} else {
 		next = int64(f.order.Uint32(tail))
 	}
@@ -270,20 +353,21 @@ func (f *File) readIFD(ctx context.Context, off int64) ([]entry, int64, error) {
 // arrayOf describes an entry's values without reading them.
 func (f *File) arrayOf(e entry) (array, error) {
 	sz, ok := typeSize[e.typ]
-	if !ok || e.count < 0 {
-		return array{}, fmt.Errorf("%w: tag %d has type %d", ErrFormat, e.tag, e.typ)
+	if !ok || e.count < 0 || e.count > maxBlocks {
+		return array{}, fmt.Errorf("%w: tag %d has type %d and %d values", ErrFormat, e.tag, e.typ, e.count)
 	}
 	a := array{size: sz, count: e.count}
-	if sz*e.count <= len(e.val) {
+	if int64(sz)*int64(e.count) <= int64(len(e.val)) {
 		a.inline = e.val[:sz*e.count]
 		return a, nil
 	}
+	var err error
 	if f.big {
-		a.off = int64(f.order.Uint64(e.val))
+		a.off, err = offsetOf(f.order.Uint64(e.val))
 	} else {
 		a.off = int64(f.order.Uint32(e.val))
 	}
-	return a, nil
+	return a, err
 }
 
 // bytesOf reads all of an entry's values (for small tags only).
@@ -295,53 +379,61 @@ func (f *File) bytesOf(ctx context.Context, e entry) ([]byte, int, error) {
 	if a.inline != nil {
 		return a.inline, a.size, nil
 	}
-	if int64(a.size)*int64(a.count) > 1<<20 {
+	n := int64(a.size) * int64(a.count)
+	if n > maxMetaRead {
 		return nil, 0, fmt.Errorf("%w: tag %d is too large", ErrFormat, e.tag)
 	}
-	b, err := f.meta.read(ctx, a.off, int64(a.size*a.count))
+	b, err := f.meta.read(ctx, a.off, n)
+	if err == nil && int64(len(b)) < n {
+		err = fmt.Errorf("%w: tag %d is cut short", ErrFormat, e.tag)
+	}
 	return b, a.size, err
 }
 
-func (f *File) uintOf(e entry) int {
-	switch typeSize[e.typ] {
-	case 1:
-		return int(e.val[0])
-	case 2:
-		return int(f.order.Uint16(e.val))
-	case 4:
-		return int(f.order.Uint32(e.val))
-	case 8:
-		return int(f.order.Uint64(e.val))
+// uintOf reads a tag that holds one unsigned integer: a BYTE, SHORT, LONG or
+// (in BigTIFF) LONG8, stored in the entry itself. Anything else is refused: a
+// scalar typed as a DOUBLE or an eight-byte integer in a classic TIFF has no
+// business here and would not fit the entry's four value bytes.
+func (f *File) uintOf(e entry) (int, error) {
+	if e.count != 1 {
+		return 0, fmt.Errorf("%w: tag %d has %d values, want 1", ErrFormat, e.tag, e.count)
 	}
-	return 0
+	var v uint64
+	switch {
+	case e.typ == 1 && len(e.val) >= 1:
+		v = uint64(e.val[0])
+	case e.typ == 3 && len(e.val) >= 2:
+		v = uint64(f.order.Uint16(e.val))
+	case e.typ == 4 && len(e.val) >= 4:
+		v = uint64(f.order.Uint32(e.val))
+	case e.typ == 16 && f.big && len(e.val) >= 8:
+		v = f.order.Uint64(e.val)
+	default:
+		return 0, fmt.Errorf("%w: tag %d has type %d", ErrFormat, e.tag, e.typ)
+	}
+	if v > math.MaxInt32 {
+		return 0, fmt.Errorf("%w: tag %d is out of range", ErrFormat, e.tag)
+	}
+	return int(v), nil
 }
 
 func (f *File) level(_ context.Context, ents []entry) (Level, int, error) {
 	lv := Level{compression: 1, predictor: 1}
 	sub, spp := 0, 1
 	bits, sfmt := 0, 1
+	scalars := map[int]*int{tagNewSubfileType: &sub, tagWidth: &lv.Width, tagHeight: &lv.Height, tagBits: &bits,
+		tagCompression: &lv.compression, tagSamplesPerPix: &spp, tagPredictor: &lv.predictor,
+		tagTileWidth: &lv.TileW, tagTileHeight: &lv.TileH, tagSampleFormat: &sfmt}
 	for _, e := range ents {
+		if dst, ok := scalars[e.tag]; ok {
+			v, err := f.uintOf(e)
+			if err != nil {
+				return lv, 0, err
+			}
+			*dst = v
+			continue
+		}
 		switch e.tag {
-		case tagNewSubfileType:
-			sub = f.uintOf(e)
-		case tagWidth:
-			lv.Width = f.uintOf(e)
-		case tagHeight:
-			lv.Height = f.uintOf(e)
-		case tagBits:
-			bits = f.uintOf(e)
-		case tagCompression:
-			lv.compression = f.uintOf(e)
-		case tagSamplesPerPix:
-			spp = f.uintOf(e)
-		case tagPredictor:
-			lv.predictor = f.uintOf(e)
-		case tagTileWidth:
-			lv.TileW = f.uintOf(e)
-		case tagTileHeight:
-			lv.TileH = f.uintOf(e)
-		case tagSampleFormat:
-			sfmt = f.uintOf(e)
 		case tagTileOffsets, tagTileByteCounts:
 			a, err := f.arrayOf(e)
 			if err != nil {
@@ -357,10 +449,10 @@ func (f *File) level(_ context.Context, ents []entry) (Level, int, error) {
 	if sub&4 != 0 {
 		return lv, sub, nil
 	}
-	if lv.Width <= 0 || lv.Height <= 0 {
+	if lv.Width <= 0 || lv.Height <= 0 || lv.Width > maxDimension || lv.Height > maxDimension {
 		return lv, 0, fmt.Errorf("%w: no image size", ErrFormat)
 	}
-	if lv.TileW <= 0 || lv.TileH <= 0 || lv.TileW > 4096 || lv.TileH > 4096 {
+	if lv.TileW < 16 || lv.TileH < 16 || lv.TileW > 2048 || lv.TileH > 2048 {
 		return lv, 0, fmt.Errorf("%w: not tiled", ErrFormat)
 	}
 	if spp != 1 {
@@ -386,7 +478,7 @@ func (f *File) level(_ context.Context, ents []entry) (Level, int, error) {
 	}
 	lv.Across = (lv.Width + lv.TileW - 1) / lv.TileW
 	lv.Down = (lv.Height + lv.TileH - 1) / lv.TileH
-	if lv.offsets.count != lv.Across*lv.Down || lv.counts.count != lv.offsets.count {
+	if blocks := int64(lv.Across) * int64(lv.Down); blocks > maxBlocks || int64(lv.offsets.count) != blocks || lv.counts.count != lv.offsets.count {
 		return lv, 0, fmt.Errorf("%w: tile index does not match the image size", ErrFormat)
 	}
 	return lv, sub, nil
@@ -394,6 +486,7 @@ func (f *File) level(_ context.Context, ents []entry) (Level, int, error) {
 
 func (f *File) georef(ctx context.Context, ents []entry, sx, sy *float64) error {
 	var haveScale, haveTie bool
+	var tieI, tieJ float64
 	for _, e := range ents {
 		switch e.tag {
 		case tagPixelScale:
@@ -420,13 +513,8 @@ func (f *File) georef(ctx context.Context, ents []entry, sx, sy *float64) error 
 				v[i] = math.Float64frombits(f.order.Uint64(b[i*8:]))
 			}
 			f.OriginX, f.OriginY = v[3], v[4]
+			tieI, tieJ = v[0], v[1]
 			haveTie = true
-			// A tiepoint at another raster position than (0,0) is shifted
-			// below once the scale is known.
-			defer func(i, j float64) {
-				f.OriginX -= i * *sx
-				f.OriginY += j * *sy
-			}(v[0], v[1])
 		case tagGeoKeys:
 			b, sz, err := f.bytesOf(ctx, e)
 			if err != nil {
@@ -454,6 +542,17 @@ func (f *File) georef(ctx context.Context, ents []entry, sx, sy *float64) error 
 	}
 	if !haveScale || !haveTie {
 		return fmt.Errorf("%w: no georeferencing", ErrFormat)
+	}
+	// A tiepoint at another raster position than (0,0) moves the origin.
+	f.OriginX -= tieI * *sx
+	f.OriginY += tieJ * *sy
+	for _, v := range []float64{*sx, *sy, f.OriginX, f.OriginY} {
+		if math.IsNaN(v) || math.IsInf(v, 0) || math.Abs(v) > 1e12 {
+			return fmt.Errorf("%w: georeferencing out of range", ErrFormat)
+		}
+	}
+	if *sx < 1e-9 || *sy < 1e-9 {
+		return fmt.Errorf("%w: pixel size out of range", ErrFormat)
 	}
 	return nil
 }
@@ -500,15 +599,21 @@ func (f *File) Locate(ctx context.Context, level, col, row int) (BlockRef, error
 	if ref.Offset == 0 {
 		ref.Size = 0
 	}
-	if ref.Size < 0 || ref.Size > 256<<20 {
+	if ref.Offset < 0 || ref.Offset > math.MaxInt64/2 || ref.Size < 0 || ref.Size > maxBlockSize {
 		return ref, fmt.Errorf("%w: block of %d bytes", ErrFormat, ref.Size)
 	}
 	return ref, nil
 }
 
 func (f *File) element(ctx context.Context, a array, i int) (int64, error) {
+	if i < 0 || i >= a.count {
+		return 0, fmt.Errorf("%w: block index out of range", ErrFormat)
+	}
 	var b []byte
 	if a.inline != nil {
+		if (i+1)*a.size > len(a.inline) {
+			return 0, fmt.Errorf("%w: block index out of range", ErrFormat)
+		}
 		b = a.inline[i*a.size:]
 	} else {
 		var err error
@@ -516,21 +621,33 @@ func (f *File) element(ctx context.Context, a array, i int) (int64, error) {
 			return 0, err
 		}
 	}
+	if len(b) < a.size {
+		return 0, fmt.Errorf("%w: block index cut short", ErrFormat)
+	}
+	var v uint64
 	switch a.size {
 	case 2:
-		return int64(f.order.Uint16(b)), nil
+		v = uint64(f.order.Uint16(b))
 	case 4:
-		return int64(f.order.Uint32(b)), nil
+		v = uint64(f.order.Uint32(b))
 	case 8:
-		return int64(f.order.Uint64(b)), nil
+		v = f.order.Uint64(b)
+	default:
+		return 0, ErrFormat
 	}
-	return 0, ErrFormat
+	if v > math.MaxInt64/2 {
+		return 0, fmt.Errorf("%w: block index value out of range", ErrFormat)
+	}
+	return int64(v), nil
 }
 
 // Decode expands one block's raw bytes (as located by Locate) into
 // TileW×TileH elevations, row-major, with nodata as NaN. raw may be nil for an
 // absent block.
 func (f *File) Decode(level int, raw []byte) ([]float32, error) {
+	if level < 0 || level >= len(f.Levels) {
+		return nil, fmt.Errorf("cog: no level %d", level)
+	}
 	lv := &f.Levels[level]
 	n := lv.TileW * lv.TileH
 	out := make([]float32, n)
@@ -631,3 +748,7 @@ func (f *File) MetaPages() int {
 	defer f.meta.mu.Unlock()
 	return len(f.meta.pages)
 }
+
+// MemBytes is about how much memory the open file holds: its kept metadata
+// pages and its parsed directories.
+func (f *File) MemBytes() int64 { return f.meta.bytes() + 4096 }

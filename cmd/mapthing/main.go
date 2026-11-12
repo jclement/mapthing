@@ -194,13 +194,18 @@ func serve() error {
 	if od != nil {
 		topt.OnDemand, topt.ColdGate = od, coldGate(au)
 		topt.OnDemandMinZoom, topt.OnDemandMaxZoom = ondemand.MinZoom, ondemand.MaxZoom
+		if od.Status().Contours {
+			topt.OnDemandContourMinZoom, topt.OnDemandContourMaxZoom = ondemand.ContourMinZoom, ondemand.ContourMaxZoom
+		}
 	}
 	ts, err := tiles.New(topt)
 	if err != nil {
 		return fmt.Errorf("tiles: %w", err)
 	}
 	if od != nil {
-		od.SetBuilt(ts.HasTerrain) // a warm job leaves built tiles alone
+		// Built terrain wins: a warm job leaves built tiles alone, and a contour tile at a
+		// built region's edge is drawn over the built tiles on that side.
+		od.SetBuiltTerrain(ondemand.BuiltTerrain{Tile: ts.TerrainTile, Generation: ts.Generation})
 	}
 
 	var f *features

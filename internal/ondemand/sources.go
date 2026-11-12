@@ -122,6 +122,11 @@ func buildSources(u URLs) []*source {
 	return out
 }
 
+// allowedHosts lists the only hosts the sources are ever read from.
+func allowedHosts(u URLs) []string {
+	return []string{hostOf(u.ThreeDEP), hostOf(u.GLO30), hostOf(u.MRDEM), hostOf(u.HRDEMIndex)}
+}
+
 // hostOf returns the host of a URL template (which url.Parse would refuse for its %s).
 func hostOf(raw string) string {
 	if _, rest, ok := strings.Cut(raw, "://"); ok {
@@ -164,7 +169,16 @@ type indexItem struct {
 }
 
 // fetchHRDEMIndex lists the HRDEM mosaics from NRCan's STAC API (a few dozen items).
-func fetchHRDEMIndex(ctx context.Context, up *Upstream, base string) ([]indexItem, error) {
+//
+// The index is somebody else's document, and it names URLs: only mosaics on
+// assetHost (where NRCan publishes them, beside MRDEM) are accepted, and a
+// "next" link is followed only on the index's own host. Anything else in it
+// is ignored, so a tampered index cannot point this server somewhere else.
+func fetchHRDEMIndex(ctx context.Context, up *Upstream, base, assetHost string) ([]indexItem, error) {
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return nil, err
+	}
 	next := base + "?collections=" + url.QueryEscape("hrdem-mosaic-2m") + "&limit=100"
 	var items []indexItem
 	for page := 0; next != "" && page < 50; page++ {
@@ -193,11 +207,17 @@ func fetchHRDEMIndex(ctx context.Context, up *Upstream, base string) ([]indexIte
 			if !ok || len(ft.BBox) < 4 {
 				continue
 			}
+			if au, err := url.Parse(a.Href); err != nil || au.Scheme != baseURL.Scheme || au.Host != assetHost || au.RawQuery != "" {
+				continue
+			}
 			items = append(items, indexItem{ID: ft.ID, BBox: elevation.BBox{ft.BBox[0], ft.BBox[1], ft.BBox[2], ft.BBox[3]}, URL: a.Href})
 		}
 		next = ""
 		for _, l := range body.Links {
-			if l.Rel == "next" {
+			if l.Rel != "next" {
+				continue
+			}
+			if nu, err := url.Parse(l.Href); err == nil && nu.Scheme == baseURL.Scheme && nu.Host == baseURL.Host {
 				next = l.Href
 			}
 		}

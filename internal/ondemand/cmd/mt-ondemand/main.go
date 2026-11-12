@@ -6,6 +6,8 @@
 //	mt-ondemand profile [-runs 3]
 //	mt-ondemand viewport [-zooms 10,12,14] [-areas …]   a screenful of tiles, as a browser asks
 //	mt-ondemand tile z/x/y [-out tile.png]
+//	mt-ondemand contours lon,lat DIR            what a cold contour tile costs at each zoom
+//	mt-ondemand seam lon,lat DIR out            contours across a built/on-demand edge, to look at
 //	mt-ondemand share DIR                       what the shared source-block cache saves (DIR: scratch)
 //	mt-ondemand shade z/x/y NXxNY out.png      a block of tiles as one hillshade, to look for seams
 //
@@ -82,6 +84,28 @@ func main() {
 			fatal(err)
 		}
 		if err := shade(ctx, z, x, y, nx, ny, os.Args[4]); err != nil {
+			fatal(err)
+		}
+	case "contours":
+		if len(os.Args) < 4 {
+			fatal(fmt.Errorf("usage: mt-ondemand contours lon,lat SCRATCHDIR"))
+		}
+		var lon, lat float64
+		if _, err := fmt.Sscanf(os.Args[2], "%f,%f", &lon, &lat); err != nil {
+			fatal(err)
+		}
+		if err := contourCost(ctx, lon, lat, os.Args[3]); err != nil {
+			fatal(err)
+		}
+	case "seam":
+		if len(os.Args) < 5 {
+			fatal(fmt.Errorf("usage: mt-ondemand seam lon,lat SCRATCHDIR out-prefix"))
+		}
+		var lon, lat float64
+		if _, err := fmt.Sscanf(os.Args[2], "%f,%f", &lon, &lat); err != nil {
+			fatal(err)
+		}
+		if err := seam(ctx, lon, lat, os.Args[3], os.Args[4]); err != nil {
 			fatal(err)
 		}
 	case "share":

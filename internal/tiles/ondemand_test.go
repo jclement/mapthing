@@ -1,14 +1,18 @@
 package tiles_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -53,6 +57,7 @@ func tileXY(lon, lat float64, z int) (int, int) {
 // rig: a live generation whose terrain archive holds one z12 tile (built), a
 // tile server, and on-demand terrain for the world against fake DEM hosts.
 type odRig struct {
+	now    atomic.Int64 // the on-demand service's clock, unix seconds
 	hosts  *ondemandtest.Hosts
 	mgr    *ondemand.Manager
 	mux    *http.ServeMux
@@ -63,6 +68,7 @@ type odRig struct {
 func newODRig(t *testing.T, withArchive bool) *odRig {
 	t.Helper()
 	r := &odRig{hosts: ondemandtest.New()}
+	r.now.Store(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix())
 	t.Cleanup(r.hosts.Close)
 	for lon := -99; lon <= -97; lon++ {
 		r.hosts.Put3DEP(lon, 30, ondemandtest.Plane(1000), "v1")
@@ -87,21 +93,42 @@ func newODRig(t *testing.T, withArchive bool) *odRig {
 			t.Fatal(err)
 		}
 	}
+	if withArchive {
+		// One built contour tile, recognisable by its bytes.
+		w, err := pmtiles.Create(filepath.Join(gen, "contours.pmtiles"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cx, cy := tileXY(-97.5, 30.5, 11)
+		var gz bytes.Buffer
+		zw := gzip.NewWriter(&gz)
+		_, _ = zw.Write([]byte("built contours"))
+		_ = zw.Close()
+		if err := w.AddTile(11, uint32(cx), uint32(cy), gz.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Commit(pmtiles.Header{TileType: pmtiles.TypeMVT, TileCompression: pmtiles.CompressionGzip, MinZoom: 10, MaxZoom: 12,
+			MinLonE7: -980000000, MinLatE7: 300000000, MaxLonE7: -970000000, MaxLatE7: 310000000}, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.Symlink(gen, filepath.Join(data, "current")); err != nil {
 		t.Fatal(err)
 	}
 	var err error
 	r.mgr, err = ondemand.NewManager(context.Background(), ondemand.ManagerOptions{DataDir: data, Settings: memSettings{},
-		Service: ondemand.Options{URLs: r.hosts.URLs(),
+		Service: ondemand.Options{URLs: r.hosts.URLs(), Now: func() time.Time { return time.Unix(r.now.Load(), 0) },
 			Upstream: ondemand.NewUpstream(ondemand.UpstreamOptions{Attempts: 1, Timeout: 5 * time.Second})}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ts, err := tiles.New(tiles.Options{DataDir: data, Assets: fstest.MapFS{}, BasemapOptional: true, PackCacheBytes: 64 << 20,
-		OnDemand: r.mgr, OnDemandMinZoom: ondemand.MinZoom, OnDemandMaxZoom: ondemand.MaxZoom})
+		OnDemand: r.mgr, OnDemandMinZoom: ondemand.MinZoom, OnDemandMaxZoom: ondemand.MaxZoom,
+		OnDemandContourMinZoom: ondemand.ContourMinZoom, OnDemandContourMaxZoom: ondemand.ContourMaxZoom})
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.mgr.SetBuiltTerrain(ondemand.BuiltTerrain{Tile: ts.TerrainTile, Generation: ts.Generation})
 	r.mux = http.NewServeMux()
 	ts.Mount(r.mux, func(_ string, h http.Handler) http.Handler { return h })
 	return r
@@ -291,10 +318,13 @@ func TestTerrainPackCoversOnDemandAreas(t *testing.T) {
 		t.Fatal("a second pack over cached tiles asked the hosts again")
 	}
 	// Too much to fetch inside a download request: refused, with what to do.
-	big := r.get("/packs/extract.pmtiles?tileset=terrain&minzoom=13&maxzoom=13&bbox=-98.95,29.1,-96.1,30.95")
+	defer func(n int) { tiles.MaxPackFetch = n }(tiles.MaxPackFetch)
+	tiles.MaxPackFetch = 50
+	big := r.get("/packs/extract.pmtiles?tileset=terrain&minzoom=13&maxzoom=13&bbox=-98.9,30.1,-98.1,30.9")
 	if big.Code != http.StatusConflict || !strings.Contains(big.Body.String(), "not_warm") || !strings.Contains(big.Body.String(), "warm the area first") {
-		t.Fatalf("a pack needing thousands of cold tiles: %d %s", big.Code, big.Body.String())
+		t.Fatalf("a pack needing hundreds of cold tiles with a limit of 50: %d %.200s", big.Code, big.Body.String())
 	}
+	tiles.MaxPackFetch = 2000
 	// A source that does not answer fails the pack; nothing half-made is kept.
 	r.hosts.Down.Store(true)
 	down := r.get("/packs/extract.pmtiles?tileset=terrain&minzoom=11&maxzoom=11&bbox=-98.6,30.3,-98.4,30.5")
@@ -308,3 +338,127 @@ func TestTerrainPackCoversOnDemandAreas(t *testing.T) {
 }
 
 func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', 6, 64) }
+
+// A pack cut from on-demand terrain is a pack of what on demand serves now: a new release
+// of a source file or a change to where on demand applies makes a new pack, and the limit on
+// what one pack may fetch holds for tiles that went stale as much as for tiles never seen.
+func TestOnDemandPacksFollowSourcesAndPolicy(t *testing.T) {
+	r := newODRig(t, false)
+	ctx := context.Background()
+	r.mgr.Svc.SetPolicy(ondemand.Policy{Outside: true})
+	url := "/packs/extract.pmtiles?tileset=terrain&minzoom=12&maxzoom=12&bbox=-98.40,30.40,-98.10,30.60"
+	first := r.get(url)
+	if first.Code != http.StatusOK {
+		t.Fatalf("pack: %d %s", first.Code, first.Body.String())
+	}
+	again := r.get(url)
+	if again.Header().Get("ETag") != first.Header().Get("ETag") || again.Body.Len() != first.Body.Len() {
+		t.Fatal("the same pack twice differs")
+	}
+	// Where on demand applies changes, inside the same overall bounds: a different pack.
+	r.mgr.Svc.SetPolicy(ondemand.Policy{Outside: true, Areas: []ondemand.Area{{ID: "custom/x", BBox: elevation.BBox{-98.3, 30.45, -98.2, 30.55}}}})
+	if p := r.get(url); p.Code != http.StatusOK || p.Header().Get("ETag") == first.Header().Get("ETag") {
+		t.Fatalf("after a policy change: %d, ETag unchanged = %v", p.Code, p.Header().Get("ETag") == first.Header().Get("ETag"))
+	}
+	r.mgr.Svc.SetPolicy(ondemand.Policy{Outside: true})
+	// The source publishes a new release; a day later the pack is made of it.
+	for lon := -99; lon <= -97; lon++ {
+		r.hosts.Put3DEP(lon, 30, ondemandtest.Plane(2000), "v2")
+	}
+	r.now.Add(25 * 3600)
+	second := r.get(url)
+	if second.Code != http.StatusOK || second.Header().Get("ETag") == first.Header().Get("ETag") {
+		t.Fatalf("after a new source release: %d, same ETag = %v", second.Code, second.Header().Get("ETag") == first.Header().Get("ETag"))
+	}
+	if second.Body.String() == first.Body.String() {
+		t.Fatal("the pack after a new source release has the old bytes")
+	}
+	// Another release. Every tile's cache file is still there, and every one is stale: the
+	// limit must count them where they are rebuilt, not by what the cache directory holds.
+	for lon := -99; lon <= -97; lon++ {
+		r.hosts.Put3DEP(lon, 30, ondemandtest.Plane(3000), "v3")
+	}
+	r.now.Add(25 * 3600)
+	defer func(n int) { tiles.MaxPackFetch = n }(tiles.MaxPackFetch)
+	tiles.MaxPackFetch = 2
+	before := r.mgr.Status().Counters.Built
+	stale := r.get(url)
+	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "not_warm") {
+		t.Fatalf("a pack whose tiles all went stale, with a limit of 2: %d %.200s", stale.Code, stale.Body.String())
+	}
+	if built := r.mgr.Status().Counters.Built - before; built > 2 {
+		t.Fatalf("%d tiles were rebuilt for a pack limited to 2", built)
+	}
+	_ = ctx
+}
+
+// Contour tiles follow the same rules as terrain: what was built is served as built, the
+// rest is drawn on demand where it applies, a source that is down is a 504 that is not
+// cached, and packs cover them.
+func TestOnDemandContoursThroughTheTileServer(t *testing.T) {
+	r := newODRig(t, true)
+	hill := func(_, lat float64) float64 { return 500 + 2000*(lat-30) }
+	for lon := -99; lon <= -97; lon++ {
+		r.hosts.Put3DEP(lon, 30, hill, "h1")
+	}
+	if err := r.mgr.SetConfig(context.Background(), ondemand.Config{Outside: ondemand.OutsideOnDemand, CacheMB: 64}); err != nil {
+		t.Fatal(err)
+	}
+	get := func(path string, gz bool) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		if gz {
+			req.Header.Set("Accept-Encoding", "gzip")
+		}
+		r.mux.ServeHTTP(rec, req)
+		return rec
+	}
+	// The built tile, as built, with nothing asked of the hosts.
+	bx, by := tileXY(-97.5, 30.5, 11)
+	rec := get("/tiles/contours/11/"+itoa(bx)+"/"+itoa(by)+".mvt", false)
+	if rec.Code != http.StatusOK || rec.Body.String() != "built contours" {
+		t.Fatalf("built contour tile: %d %q", rec.Code, rec.Body.String())
+	}
+	if n := r.hosts.Heads.Load() + r.hosts.Ranges.Load(); n != 0 {
+		t.Fatalf("%d requests went to the hosts for a built contour tile", n)
+	}
+	// A tile the archive does not have: drawn on demand, gzipped for a client that takes it.
+	x, y := tileXY(-98.5, 30.5, 11)
+	path := "/tiles/contours/11/" + itoa(x) + "/" + itoa(y) + ".mvt"
+	rec = get(path, true)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Content-Type") != "application/vnd.mapbox-vector-tile" {
+		t.Fatalf("on-demand contour tile: %d %v", rec.Code, rec.Header())
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := io.ReadAll(zr)
+	if rec2 := get(path, false); rec2.Code != http.StatusOK || rec2.Header().Get("Content-Encoding") != "" || !bytes.Equal(rec2.Body.Bytes(), plain) || len(plain) < 100 {
+		t.Fatalf("the same tile for a client without gzip: %d, %d bytes against %d", rec2.Code, rec2.Body.Len(), len(plain))
+	}
+	// TileJSON reaches beyond the archive.
+	var tj struct {
+		Bounds []float64 `json:"bounds"`
+	}
+	if err := json.Unmarshal(r.get("/tiles/contours.json").Body.Bytes(), &tj); err != nil || len(tj.Bounds) != 4 || tj.Bounds[0] != -180 {
+		t.Fatalf("contours tilejson: %+v %v", tj, err)
+	}
+	// A pack of contours over on-demand ground.
+	if p := r.get("/packs/extract.pmtiles?tileset=contours&minzoom=11&maxzoom=11&bbox=-98.6,30.4,-98.4,30.6"); p.Code != http.StatusOK || p.Body.Len() < 500 {
+		t.Fatalf("contours pack: %d, %d bytes", p.Code, p.Body.Len())
+	}
+	// The source goes away: a tile not drawn yet is a 504, and stays undrawn.
+	r.hosts.Down.Store(true)
+	x2, y2 := tileXY(-98.5, 30.9, 12)
+	down := get("/tiles/contours/12/"+itoa(x2)+"/"+itoa(y2)+".mvt", true)
+	if down.Code != http.StatusGatewayTimeout || down.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("hosts down: %d %q", down.Code, down.Header().Get("Cache-Control"))
+	}
+	if r.mgr.HasContour(12, x2, y2) {
+		t.Fatal("a failed contour tile was cached")
+	}
+	if rec := get(path, true); rec.Code != http.StatusOK {
+		t.Fatalf("a cached contour tile with the hosts down: %d", rec.Code)
+	}
+}

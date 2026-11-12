@@ -82,6 +82,14 @@ func (s *Service) version(ctx context.Context, url string) (Version, error) {
 	if ok && now.Sub(e.Checked) < s.opt.VersionTTL {
 		return e.Version, nil
 	}
+	// Asking the host is upstream work like any other: the request pays for it
+	// first. A request that may not, still gets what is already known.
+	if err := passGate(ctx); err != nil {
+		if ok {
+			return e.Version, nil
+		}
+		return Version{}, err
+	}
 	v, err := s.flight.do(ctx, "head:"+url, func(ctx context.Context) (any, error) {
 		v, err := s.up.Head(ctx, url)
 		if err != nil {
@@ -109,9 +117,7 @@ func (s *Service) version(ctx context.Context, url string) (Version, error) {
 // forget drops everything cached from a superseded release of a file.
 func (s *Service) forget(url, tag string) {
 	fid := fileID(url, tag)
-	s.mu.Lock()
-	delete(s.files, fid)
-	s.mu.Unlock()
+	s.files.remove(fid)
 	if s.opt.Store != nil {
 		s.opt.Store.RemovePrefix("src/" + fid + "/")
 	}
@@ -126,8 +132,14 @@ func (s *Service) hrdemIndex(ctx context.Context, base string) ([]indexItem, err
 	if len(items) > 0 && now.Sub(at) < s.opt.VersionTTL {
 		return items, nil
 	}
+	if err := passGate(ctx); err != nil {
+		if len(items) > 0 {
+			return items, nil
+		}
+		return nil, err
+	}
 	v, err := s.flight.do(ctx, "hrdem-index", func(ctx context.Context) (any, error) {
-		got, err := fetchHRDEMIndex(ctx, s.up, base)
+		got, err := fetchHRDEMIndex(ctx, s.up, base, hostOf(s.opt.URLs.MRDEM))
 		if err != nil {
 			return nil, err
 		}

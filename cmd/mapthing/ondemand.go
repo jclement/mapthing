@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/jclement/mapthing/internal/auth"
@@ -93,7 +94,9 @@ func newOnDemand(ctx context.Context, cfg config.Config, st *store.Store) (*onde
 		return nil, nil, nil
 	}
 	areas := &onDemandAreas{st: st, dataDir: cfg.DataDir}
-	m, err := ondemand.NewManager(ctx, ondemand.ManagerOptions{DataDir: cfg.DataDir, Settings: st, Areas: areas.list})
+	m, err := ondemand.NewManager(ctx, ondemand.ManagerOptions{DataDir: cfg.DataDir, Settings: st, Areas: areas.list,
+		// Contours follow the build's own switch: turned off there, none are drawn on demand.
+		ContoursOff: strings.TrimSpace(os.Getenv("MAPTHING_CONTOURS_MAXZOOM")) == "0"})
 	return m, areas, err
 }
 

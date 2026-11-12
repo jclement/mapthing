@@ -194,7 +194,11 @@ export interface OnDemandStatus {
     limited: number; // cold requests a rate limit refused
     requests: number; // requests sent to the DEM hosts
     bytes: number;
+    contour_hits?: number; // contour tiles answered from the cache
+    contours_built?: number; // contour tiles drawn from on-demand terrain
   };
+  /** Contour lines are drawn on demand too (zooms 10 to 12). */
+  contours?: boolean;
   upstream: OnDemandHost[]; // hosts contacted since the server started
   sources: (ElevationSource & { host: string })[];
   healthy: boolean;

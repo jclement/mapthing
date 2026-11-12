@@ -395,8 +395,23 @@ quantised and encoded exactly as the build encodes a tile. Contracts:
   host), a 20 s timeout per attempt, 3 attempts with backoff, a `User-Agent` naming mapthing and
   its repository, and per-host health for the Overview. Any failure fails the request
   (`elevation.ErrSourceUnavailable` → 504) and stores nothing.
-- Cost: the first cold fetch of a keyed request calls `auth.Surcharge(ctx, "ondemand")`
-  (`ondemand.WithGate`); a refusal is `elevation.LimitedError` → 429.
+- Cost: the first upstream need of a keyed request, be it a HEAD for a file's release, the
+  HRDEM index or a block, calls `auth.Surcharge(ctx, "ondemand")` (`ondemand.WithGate`), once
+  per request; a refusal is `elevation.LimitedError` → 429, except that a tile already cached
+  is served from the last known releases. `ondemand.WithBudget` bounds how many tiles one
+  request may build, counted at the build itself (packs: 2,000).
+- Contours (`internal/ondemand/contours.go`, `contours.Tile`): a contour tile the archive does
+  not have is drawn from terrain at `ContourTerrainZoom(z)` (z+2, at most 13), built tiles
+  first and on-demand tiles otherwise, with a one-tile ring; cached as `contour/z/x/y` under a
+  version made of the mosaic's source releases and the live generation.
+- Shared work (`flight`): concurrent requests for one tile, block, header or release share one
+  fetch, which lives for as long as someone waits for it and is cancelled when the last waiter
+  leaves. Panics while reading a source file become that request's error.
+- Memory: decoded blocks (96 MB), decoded sample tiles (256), and open files with their index
+  pages (32 MB, least recently used first out, at most 32 pages a file); a dropped file is
+  reopened from the pages in the disk cache.
+- Elevation: built terrain wins per tile (`mixed.built`): the fallback answers only points whose
+  built tile is absent, and never reads a tile wholly over built ground.
 
 ## Contours
 
@@ -857,7 +872,7 @@ strings. Fields marked *extra* are additions the UI ignores. JSON bodies ignore 
   `POST` `{label, ...limits}` → 201 `{key,secret}` (the secret only here); `GET`/`PATCH` `/admin/api/keys/{id}` → key (a field left out is unchanged; null or 0 removes that limit; 400 for a negative, fractional-where-whole or non-numeric value); `DELETE` → 204 (revoked at once).
 - `GET`/`PUT /admin/api/limits` → `{weights,global,kinds,defaults}` (see Rate limits; 400 `bad_limits`).
 - On-demand terrain (`docs/operations.md`, "On-demand terrain"; 503 `unavailable` on a server that serves neither tiles nor elevation):
-  `GET /admin/api/ondemand` → `{config:{outside:"off"|"on_demand",cache_mb},enabled,regions:[id…],minzoom,maxzoom,cache:{bytes,max_bytes,entries},counters:{hits,built,failed,limited,requests,bytes},upstream:[{host,requests,failures,bytes,last_ok?,last_error?,error?,healthy}],sources:[source+{host}],healthy,warm}`;
+  `GET /admin/api/ondemand` → `{config:{outside:"off"|"on_demand",cache_mb},enabled,regions:[id…],minzoom,maxzoom,cache:{bytes,max_bytes,entries},contours,counters:{hits,built,failed,limited,requests,bytes,contour_hits,contours_built},upstream:[{host,requests,failures,bytes,last_ok?,last_error?,error?,healthy}],sources:[source+{host}],healthy,warm}`;
   `PUT /admin/api/ondemand` `{outside?,cache_mb?}` → the same (400 `bad_request`); `POST /admin/api/ondemand/clear` → the same, cache emptied.
   Warm an area: `POST /admin/api/ondemand/warm/estimate` `{region|bbox:[w,s,e,n], max_zoom}` → `{tiles,cached,to_fetch,cache_bytes,download_bytes,seconds,cache_max_bytes,cache_used_bytes,fits,need_cache_mb?,applies}` (nothing fetched); `POST /admin/api/ondemand/warm` (same body) → 202 `warm` = `{state:"idle"|"running"|"done"|"failed"|"cancelled",label,bbox,max_zoom,total,done,fetched,cached,empty,failed,bytes,started_at?,finished_at?,error?}` (400 when on demand applies nowhere there or the cache cannot hold it, 409 `busy`); `POST /admin/api/ondemand/warm/cancel` → status. The job runs inside the on-demand manager, not the build job runner, so the Builds page and the build schedule are unaffected.
   A region carries `terrain_mode:"prebuilt"|"on_demand"`; `POST /admin/api/regions` and `PATCH /admin/api/regions/{id}` take it (400 `bad_terrain_mode`).

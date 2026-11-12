@@ -67,6 +67,9 @@ type ManagerOptions struct {
 	Areas func(ctx context.Context) ([]Area, error)
 	// Service overrides the service options (tests); Store and StatePath are filled in.
 	Service Options
+	// ContoursOff: contours are turned off on this server (MAPTHING_CONTOURS_MAXZOOM=0), so
+	// none are drawn on demand either.
+	ContoursOff bool
 	// Logf, if set, receives a line when a warm job ends.
 	Logf func(format string, args ...any)
 }
@@ -84,7 +87,8 @@ type Manager struct {
 
 	// built reports whether the live terrain archive has a tile (built terrain
 	// wins, so a warm job leaves those alone). nil = nothing is built.
-	built atomic.Pointer[func(z, x, y int) bool]
+	built        atomic.Pointer[func(z, x, y int) bool]
+	builtTerrain atomic.Pointer[BuiltTerrain]
 
 	warmMu     sync.Mutex
 	warm       WarmStatus
@@ -169,9 +173,13 @@ func (m *Manager) Tile(ctx context.Context, z, x, y int) ([]byte, bool, error) {
 }
 
 // Has implements the tile server's on-demand hook: the tile is in the cache.
-func (m *Manager) Has(z, x, y int) bool {
-	_, ok := m.cache.Get(tileKey(z, x, y))
-	return ok
+// It is true only for a tile made from the last known release of its sources,
+// and it asks the hosts nothing.
+func (m *Manager) Has(z, x, y int) bool { return m.Svc.CachedNow(z, x, y) }
+
+// Revision implements the tile server's on-demand hook (Service.Revision).
+func (m *Manager) Revision(ctx context.Context, box elevation.BBox) (string, error) {
+	return m.Svc.Revision(ctx, box)
 }
 
 // Bounds returns the box on demand applies to (the world, or the union of
@@ -214,7 +222,10 @@ type Status struct {
 	Regions []string `json:"regions"`
 	MinZoom int      `json:"minzoom"`
 	MaxZoom int      `json:"maxzoom"`
-	Cache   struct {
+	// Contours says whether contour lines are drawn on demand too (zooms
+	// ContourMinZoom to ContourMaxZoom), wherever terrain is.
+	Contours bool `json:"contours"`
+	Cache    struct {
 		Bytes    int64 `json:"bytes"`
 		MaxBytes int64 `json:"max_bytes"`
 		Entries  int   `json:"entries"`
@@ -232,7 +243,7 @@ type Status struct {
 func (m *Manager) Status() Status {
 	p := m.Svc.Policy()
 	st := Status{Config: m.Config(), Enabled: p.Enabled(), Regions: []string{}, MinZoom: MinZoom, MaxZoom: MaxZoom,
-		Counters: m.Svc.Counters(), Upstream: m.Svc.up.Health(), Healthy: true, Warm: m.WarmStatus()}
+		Counters: m.Svc.Counters(), Upstream: m.Svc.up.Health(), Healthy: true, Warm: m.WarmStatus(), Contours: !m.opt.ContoursOff}
 	for _, a := range p.Areas {
 		st.Regions = append(st.Regions, a.ID)
 	}

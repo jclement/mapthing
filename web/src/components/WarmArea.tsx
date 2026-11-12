@@ -106,9 +106,9 @@ export function WarmArea({
     <div className="space-y-3">
       <p className="max-w-3xl text-xs text-muted">
         Fetches every on-demand tile of an area now, down to the zoom you choose, so the area keeps
-        working with no internet: terrain, elevation, and offline packs cut from it. Built terrain
-        is left alone. Warmed tiles are ordinary cache: they stay as long as the cache has room for
-        them.
+        working with no internet: terrain, contours, elevation, and offline packs cut from it. Built
+        terrain is left alone. Warmed tiles are ordinary cache: they stay as long as the cache has
+        room for them.
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1.5">

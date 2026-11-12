@@ -60,7 +60,13 @@ func (r WarmRequest) validate() error {
 	return nil
 }
 
-type warmTile struct{ z, x, y int }
+type warmTile struct {
+	z, x, y int
+	contour bool // a contour tile, drawn from the terrain tiles warmed before it
+}
+
+// warmContourBytes is the planning figure for a contour tile in the cache.
+const warmContourBytes = 12_000
 
 // tiles lists the tiles of the request that on demand would serve: inside the
 // area, where the policy applies, and not already built.
@@ -89,7 +95,30 @@ func (m *Manager) warmTiles(r WarmRequest) ([]warmTile, error) {
 				if built != nil && (*built)(z, x, y) {
 					continue
 				}
-				out = append(out, warmTile{z, x, y})
+				out = append(out, warmTile{z: z, x: x, y: y})
+			}
+		}
+	}
+	// Contours go with terrain: an area taken offline without its contour lines would be a
+	// trap. Each contour zoom is warmed when the terrain it is drawn from is.
+	for z := ContourMinZoom; z <= ContourMaxZoom; z++ {
+		tz := ContourTerrainZoom(z)
+		if tz > r.MaxZoom {
+			continue
+		}
+		span := 1 << (tz - z)
+		x0, y0, x1, y1 := elevation.TileRange(z, r.BBox[0], r.BBox[1], r.BBox[2], r.BBox[3])
+		for y := y0; y <= y1; y++ {
+			for x := x0; x <= x1; x++ {
+				w, s, e, n := elevation.TileBounds(z, x, y)
+				if len(r.Rings) > 0 && !elevation.RingsIntersectBox(r.Rings, elevation.BBox{w, s, e, n}) {
+					continue
+				}
+				// Where terrain was built, so were its contours.
+				if !m.AllowsContour(z, x, y) || (built != nil && (*built)(tz, x*span, y*span)) {
+					continue
+				}
+				out = append(out, warmTile{z, x, y, true})
 			}
 		}
 	}
@@ -131,18 +160,31 @@ func (m *Manager) EstimateWarm(r WarmRequest) (WarmEstimate, error) {
 		return WarmEstimate{}, err
 	}
 	e := WarmEstimate{Tiles: len(tiles), CacheMaxBytes: m.cache.Max(), CacheUsedBytes: m.cache.Size(), Applies: len(tiles) > 0}
+	var terrain, terrainCold, contourCold int64
 	for _, t := range tiles {
-		if _, ok := m.cache.Get(tileKey(t.z, t.x, t.y)); ok {
-			e.Cached++
+		switch {
+		case t.contour:
+			if m.HasContour(t.z, t.x, t.y) {
+				e.Cached++
+			} else {
+				contourCold++
+			}
+		default:
+			terrain++
+			if m.Svc.CachedNow(t.z, t.x, t.y) {
+				e.Cached++
+			} else {
+				terrainCold++
+			}
 		}
 	}
 	e.ToFetch = e.Tiles - e.Cached
-	e.CacheBytes = int64(e.ToFetch) * warmTileBytes
-	e.DownloadBytes = int64(e.ToFetch) * warmDownloadBytes
-	e.Seconds = math.Ceil(float64(e.ToFetch) * warmTileSeconds / warmWorkers)
+	e.CacheBytes = terrainCold*warmTileBytes + contourCold*warmContourBytes
+	e.DownloadBytes = terrainCold * warmDownloadBytes
+	e.Seconds = math.Ceil((float64(terrainCold)*warmTileSeconds + float64(contourCold)*0.05) / warmWorkers)
 	// The whole area has to fit at once, beside nothing else: everything else
 	// in the cache is older and would go first.
-	whole := int64(e.Tiles) * warmTileBytes * 12 / 10
+	whole := (terrain*warmTileBytes + (int64(e.Tiles)-terrain)*warmContourBytes) * 12 / 10
 	e.Fits = whole <= e.CacheMaxBytes
 	if !e.Fits {
 		e.NeedCacheMB = (whole + 999_999) / 1_000_000
@@ -203,7 +245,14 @@ func (m *Manager) Warm(ctx context.Context, r WarmRequest, progress func(WarmPro
 		go func() {
 			defer wg.Done()
 			for t := range jobs {
-				png, cold, err := m.Svc.Tile(wctx, t.z, t.x, t.y)
+				var png []byte
+				var cold bool
+				var err error
+				if t.contour {
+					png, cold, err = m.Contour(wctx, t.z, t.x, t.y)
+				} else {
+					png, cold, err = m.Svc.Tile(wctx, t.z, t.x, t.y)
+				}
 				switch {
 				case err != nil && wctx.Err() != nil:
 					return
@@ -246,6 +295,11 @@ feed:
 	}
 	close(jobs)
 	wg.Wait()
+	// A stopped job's workers have left; the shared work they were waiting on is being
+	// cancelled. The job is not over until that work is: only then may another start.
+	for end := time.Now().Add(30 * time.Second); m.Svc.flight.warmActive() > 0 && time.Now().Before(end); {
+		time.Sleep(5 * time.Millisecond)
+	}
 	_, bytes1, _ := m.Svc.up.Counters()
 	res := WarmResult{WarmProgress: snapshot(), Bytes: bytes1 - bytes0, Duration: time.Since(start)}
 	mu.Lock()
