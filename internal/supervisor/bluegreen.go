@@ -28,6 +28,10 @@ type BlueGreen struct {
 	ReadyTimeout time.Duration
 	// PollEvery is the readiness poll interval (default 500 ms).
 	PollEvery time.Duration
+	// Drain is how long the previous instance keeps running after clients were switched,
+	// so requests that picked up its address just before the switch still get an answer
+	// (default 10 s: longer than a slow route).
+	Drain time.Duration
 
 	// op serialises changes: it is held from Prepare until the Standby is committed or
 	// aborted, so a second activation waits for the first to settle.
@@ -135,9 +139,14 @@ func (s *Standby) Commit() {
 		b.active, b.slot, b.gen = s.name, s.slot, s.gen
 		b.mu.Unlock()
 		if old != "" {
+			drain := b.Drain
+			if drain <= 0 {
+				drain = 10 * time.Second
+			}
 			b.stopping.Add(1)
 			go func() {
 				defer b.stopping.Done()
+				time.Sleep(drain) // requests already on their way to the old instance finish
 				b.Sup.Remove(old)
 			}()
 		}

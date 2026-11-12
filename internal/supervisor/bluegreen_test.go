@@ -84,6 +84,7 @@ func newBG(t *testing.T, sup *Supervisor, cfgs map[string]fakeCfg, switched *ato
 		Switch:       func(base string) { switched.Store(base) },
 		ReadyTimeout: 5 * time.Second,
 		PollEvery:    50 * time.Millisecond,
+		Drain:        300 * time.Millisecond,
 	}
 }
 
@@ -169,8 +170,9 @@ func TestBlueGreenSwapWithoutDowntime(t *testing.T) {
 	if g, err := get(now, "/gen"); err != nil || g != "g2" {
 		t.Fatalf("after swap: %q %v", g, err)
 	}
+	bg.stopping.Wait() // the old instance is stopped once its drain is over
 	if _, err := get(first, "/status"); err == nil {
-		t.Fatal("old instance still running")
+		t.Fatal("old instance still running after the drain")
 	}
 	sts := sup.Statuses()
 	if len(sts) != 1 || sts[0].Standby || !sts[0].Healthy {
