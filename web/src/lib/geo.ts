@@ -34,9 +34,14 @@ export function along(coords: LonLat[], dist: number): LonLat {
 }
 
 export function bboxAreaKm2([w, s, e, n]: BBox): number {
-  const width = haversine([w, (s + n) / 2], [e, (s + n) / 2]);
-  const height = haversine([w, s], [w, n]);
-  return (width * height) / 1e6;
+  // Exact area of a longitude/latitude rectangle on a sphere: R² · Δλ · |sin φn − sin φs|.
+  // Measured by longitude span, not by the distance between the edges: a box spanning
+  // −180…180 (Geofabrik's North America, US and Alaska) has both edges on one meridian.
+  const R = 6371.0088;
+  let span = e - w;
+  if (span < 0) span += 360; // crosses the antimeridian
+  const rad = Math.PI / 180;
+  return R * R * Math.min(span, 360) * rad * Math.abs(Math.sin(n * rad) - Math.sin(s * rad));
 }
 
 export function bboxPolygon([w, s, e, n]: BBox): LonLat[] {

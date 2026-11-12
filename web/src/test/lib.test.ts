@@ -45,6 +45,25 @@ describe("geo", () => {
     );
     expect(p[1]).toBeCloseTo(0.5, 5);
   });
+  it("bboxAreaKm2 measures boxes spanning the whole globe in longitude", () => {
+    // Geofabrik's North America extract: −180…180. The old edge-to-edge width made this ~0.
+    const na = bboxAreaKm2([-180, 5.57228, 180, 85.04177]);
+    expect(na).toBeGreaterThan(2e8);
+    expect(na).toBeLessThan(2.6e8);
+    // Delaware-sized box: 0.74° × 1.39° at 39°N, about 64 × 155 km.
+    const de = bboxAreaKm2([-75.79, 38.45, -75.05, 39.84]);
+    expect(de).toBeGreaterThan(9500);
+    expect(de).toBeLessThan(10200);
+    // A box crossing the antimeridian equals its unwrapped twin.
+    expect(bboxAreaKm2([170, 50, -170, 60])).toBeCloseTo(bboxAreaKm2([-10, 50, 10, 60]), 3);
+  });
+  it("a custom box inside a −180…180 parent gets a sane estimate", () => {
+    const parentArea = bboxAreaKm2([-180, 5.57228, 180, 85.04177]);
+    const density = 19546581701 / parentArea; // North America extract, bytes per km²
+    const est = estimateDisk({ areaKm2: 868, extractBytes: density * 868, bestResM: 10 });
+    expect(est.basemap).toBeLessThan(1e9);
+    expect(est.routing).toBeLessThan(1e9);
+  });
   it("estimateDisk adds up and grows with resolution", () => {
     const area = bboxAreaKm2([-75.79, 38.45, -75.05, 39.84]);
     const coarse = estimateDisk({ areaKm2: area, extractBytes: 25e6, bestResM: 30 });
